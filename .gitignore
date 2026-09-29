@@ -1,0 +1,40 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Node / frontend
+node_modules/
+dist/
+.vite/
+
+# Runtime and temporary files
+tmp/
+*.log
+*.sqlite-shm
+*.sqlite-wal
+
+# Large or unrelated local datasets
+data/cadsy-cad-technical-drawings/
+*.rar
+/9 赛题九*.pdf
+/公众号.png
+/关于第三届 “中国电子杯” 高校 ICT 产教融合创新大赛报名/
+/关于第三届 “中国电子杯” 高校 ICT 产教融合创新大赛报名(2).rar
+
+# Exploratory scripts kept outside the project modules
+/*.py
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+/关于第三届 “中国电子杯” 高校 ICT 产教融合创新大赛报名的通知/
