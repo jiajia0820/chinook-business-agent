@@ -1,33 +1,40 @@
-# 经营分析智能体接口契约
+# 数据问答智能体接口契约
 
-> 版本：v0.1；A（队长）维护，B、C 按本契约实现。
+版本：v0.3
 
-这是 Chinook 结构化经营数据与自建经营知识文档之间的统一接口约定。网页不直接访问数据库或文档索引，只调用统一提问接口；Agent 再决定调用 SQL、RAG、文档处理工具，或先向用户澄清。
+本文只规定前端、Agent、SQL 查询模块和文档检索模块之间的接口格式。具体数据集、表名、字段名、指标口径和文档内容由 `profile_id` 对应的配置提供，不写死在通用接口中。
+
+## 1. 整体流程
 
 ```text
-网页端 -> POST /api/v1/ask -> Agent 路由 -> SQL / RAG / 文档工具 -> 统一回答对象
+网页端 -> POST /api/v1/ask -> Agent -> SQL / RAG / 联合处理 -> 统一返回
 ```
 
-## 一、三人责任边界
+支持三种数据能力：
 
-| 模块 | 负责人 | 交付内容 |
-|---|---|---|
-| 产品与口径 | A（队长） | 用户问题、指标口径、实体别名、文档元数据、评测标准、接口变更 |
-| 网页与 Agent | B | 页面、对外 API、路由、主动澄清、结果展示、会话状态、RAG 接入 |
-| 数据库与 NL2SQL | C | Chinook Schema、候选表字段、SQL 生成、只读执行、查询校验 |
+- `sql_only`：只有结构化数据；
+- `rag_only`：只有非结构化文档；
+- `hybrid`：结构化数据和非结构化文档同时存在。
 
-接口先固定字段，内部实现可以变化。B 不依赖 C 的文件结构，C 不依赖 B 的页面代码，A 负责解释字段含义和验收标准。
+每个 profile 至少提供 `profile_id`、`mode` 和对应的数据能力。`mode` 只决定当前 profile 可调用的能力，不改变请求和返回格式。
 
-## 二、对外提问接口
+| `mode` | 允许的主要 `route` |
+|---|---|
+| `sql_only` | `sql`、`clarification`、`unsupported` |
+| `rag_only` | `rag`、`clarification`、`unsupported` |
+| `hybrid` | `sql`、`rag`、`cross_source`、`clarification`、`unsupported` |
 
-### 1. 请求
+## 2. 提问接口
+
+### 请求
 
 接口：`POST /api/v1/ask`
 
 ```json
 {
-  "question": "2025年 Rock 音乐销售额是多少？",
-  "session_id": "demo-session-001",
+  "question": "用户的问题",
+  "profile_id": "example-profile",
+  "session_id": "session-001",
   "user_role": "operator",
   "options": {
     "show_trace": true,
@@ -39,252 +46,194 @@
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `question` | string | 是 | 用户当前问题，不能为空 |
-| `session_id` | string | 否 | 多轮会话标识；没有时服务端生成 |
-| `user_role` | string | 否 | `operator` 或 `manager`，默认 `operator` |
-| `options.show_trace` | boolean | 否 | 是否返回工具执行记录，默认 `true` |
-| `options.max_rows` | integer | 否 | 表格最多返回 50 行，上限 200 |
-| `options.top_k` | integer | 否 | RAG 候选片段数，默认 5，上限 10 |
+| `question` | string | 是 | 用户问题，不能为空 |
+| `profile_id` | string | 是 | 当前数据配置标识 |
+| `session_id` | string | 否 | 多轮会话标识；没有时由服务端生成 |
+| `user_role` | string | 否 | 用户角色，默认由应用配置决定 |
+| `options.show_trace` | boolean | 否 | 是否返回执行记录，默认 `true` |
+| `options.max_rows` | integer | 否 | SQL 结果最大行数，默认 50，上限 200 |
+| `options.top_k` | integer | 否 | 文档检索片段数，默认 5，上限 10 |
 
-第一版前端不传 SQL、文件路径或任意过滤表达式。查询计划由 Agent 根据字段字典、指标配置和安全规则生成。
+前端不传 SQL、数据库连接、文件路径或任意过滤表达式。
 
-### 2. 返回
+### 返回
 
 ```json
 {
-  "request_id": "req-20260929-000001",
-  "session_id": "demo-session-001",
-  "status": "answered",
-  "answer": "2025年 Rock 音乐销售额为……。",
-  "normalized_question": "查询2025-01-01至2026-01-01期间音乐范围内Rock分类的销售额。",
-  "route": "sql",
-  "intent": {"name": "metric_query", "confidence": 0.96},
-  "entities": [
-    {"type": "genre", "text": "Rock", "normalized_value": "Rock", "entity_id": 1, "confidence": 0.99, "source": "entity_aliases"}
-  ],
-  "time_range": {"start": "2025-01-01", "end": "2026-01-01", "end_inclusive": false, "label": "2025年"},
-  "data_scope": "music",
+  "request_id": "req-001",
+  "session_id": "session-001",
+  "profile_id": "example-profile",
+  "status": "clarification_required",
+  "answer": null,
+  "route": "clarification",
+  "intent": {"name": "query", "confidence": null},
+  "entities": [],
+  "time_range": null,
   "sql_results": [],
   "documents": [],
   "calculations": [],
   "metric_definitions": [],
-  "trace": [],
   "limitations": [],
-  "clarification": null,
+  "clarification": {
+    "question": "请补充必要查询条件。",
+    "missing_slots": [{"name": "required_context", "description": "由 profile 定义"}],
+    "options": []
+  },
+  "trace": [],
   "error": null
 }
 ```
 
-业务状态：
+### 返回字段
 
-| `status` | 含义 | 页面处理 |
-|---|---|---|
-| `answered` | 数据和证据足够 | 展示答案、结果和来源 |
-| `clarification_required` | 缺少时间、指标、范围或对比周期 | 展示 `clarification.question`，等待补充 |
-| `insufficient_evidence` | 当前数据没有支撑答案的证据 | 明确展示数据缺口，不编造 |
-| `error` | 工具或接口异常 | 展示错误和是否可重试 |
+| 字段 | 说明 |
+|---|---|
+| `status` | `answered`、`clarification_required`、`insufficient_evidence`、`unsupported`、`error` |
+| `route` | `sql`、`rag`、`cross_source`、`clarification`、`unsupported` |
+| `intent` | `{ "name": string, "confidence": number|null }` |
+| `entities` | 实体识别结果数组；具体实体类型和标准值由 profile 配置解释 |
+| `time_range` | `{ "start": string, "end": string, "end_inclusive": boolean, "label": string }`；无法确定时为 `null` |
+| `sql_results` | SQL 输出对象数组；不使用时返回空数组 |
+| `documents` | 文档证据片段数组；不使用时返回空数组 |
+| `calculations` | `{ "calculation_id", "formula", "inputs", "result", "unit" }` 数组 |
+| `metric_definitions` | `{ "metric_id", "name", "definition", "unit", "source_refs" }` 数组 |
+| `limitations` | 数据缺口、范围限制或不确定性 |
+| `clarification` | `{ "question": string, "missing_slots": [], "options": string[] }`；不需要时为 `null` |
+| `trace` | 工具执行状态；不返回模型隐性思维链 |
+| `error` | 结构化错误；没有错误时为 `null` |
 
-字段约定：
+未使用的结果字段返回空数组或 `null`，不伪造内容。
 
-- `route`：`sql`、`rag`、`cross_source`、`clarification`、`unsupported`。
-- `data_scope`：`music`、`video`、`all`。
-- `time_range.end` 默认不包含，使用左闭右开区间。
-- `trace` 只记录可核验的工具和执行状态，不展示模型隐性思维链。
+`answer` 在 `answered` 时为字符串；在澄清、不支持、证据不足或错误状态下可以为 `null`。
 
-## 三、Agent 内部查询计划
+HTTP 约定：请求格式正确但业务状态为 `answered`、`clarification_required`、`insufficient_evidence` 或 `unsupported` 时返回 HTTP 200；请求格式错误返回 4xx；服务内部异常返回 5xx。业务状态仍以响应体中的 `status` 为准。
 
-Agent 先把用户原话转换为结构化计划，再交给 SQL 或 RAG 工具。
+当 `status=unsupported` 时，`route` 必须为 `unsupported`，并在 `limitations` 中说明当前 profile 不具备的能力。
 
-```json
-{
-  "intent": "metric_query",
-  "route": "sql",
-  "entities": [{"type": "genre", "value": "Rock", "entity_id": 1, "confidence": 0.99}],
-  "metrics": [{"metric_id": "sales_amount", "aggregation": "sum"}],
-  "time_range": {"start": "2025-01-01", "end": "2026-01-01", "end_inclusive": false},
-  "data_scope": "music",
-  "filters": [],
-  "group_by": [],
-  "sort": [],
-  "missing_slots": [],
-  "needs_document": false
-}
-```
+## 3. SQL 查询接口
 
-固定规则：
-
-- 销售额：`SUM(InvoiceLine.UnitPrice * InvoiceLine.Quantity)`。
-- 音乐范围必须筛选音频媒体类型；不能把含视频订单的整张 `Invoice.Total` 当作音乐销售额。
-- 缺少必要时间或比较周期时，`missing_slots` 不为空，路由必须为 `clarification`。
-- 无法映射到字段字典的要素不能静默丢弃，应进入澄清或 `limitations`。
-
-## 四、SQL 工具接口：C 提供
-
-第一版可以先实现为 Python 函数，后续再封装为内部 HTTP 接口；B 和 Agent 只依赖下面的输入输出。
-
-输入：
+### 输入
 
 ```json
 {
   "query_id": "sql-001",
-  "sql": "SELECT COUNT(*) AS customer_count FROM Customer",
+  "profile_id": "example-profile",
+  "sql": "SELECT ...",
   "params": {},
-  "purpose": "统计客户数量",
   "max_rows": 50,
   "timeout_ms": 5000
 }
 ```
 
-输出：
+### 输出
 
 ```json
 {
   "query_id": "sql-001",
+  "profile_id": "example-profile",
   "status": "success",
-  "sql": "SELECT COUNT(*) AS customer_count FROM Customer",
-  "columns": ["customer_count"],
-  "rows": [{"customer_count": 59}],
+  "columns": ["column_a"],
+  "rows": [{"column_a": 123.45}],
   "row_count": 1,
   "truncated": false,
   "execution_ms": 8,
+  "source": {"type": "database", "name": "profile-defined", "tables": []},
   "error": null
 }
 ```
 
-`status`：`success`、`rejected`、`failed`。
+约定：
 
-C 必须保证：只允许单条 `SELECT` 或 `WITH ... SELECT`；拒绝 `INSERT`、`UPDATE`、`DELETE`、`DROP`、`ALTER`、`ATTACH`；使用只读连接；超出行数上限要标记 `truncated=true`；错误返回结构化 `error`，不把堆栈返回给用户。
+- `status` 为 `success`、`rejected` 或 `failed`；
+- 只允许单条只读查询；
+- 禁止写入、删除、建表、改表、外部连接等操作；
+- 超出行数上限时返回 `truncated: true`；
+- 错误返回结构化 `error`，不返回堆栈。
 
-## 五、RAG 检索接口：B 提供
+## 4. 文档检索接口
 
-输入：
+### 输入
 
 ```json
 {
   "retrieval_id": "rag-001",
-  "query": "Rock 2025年第三季度经营目标和达成标准",
-  "filters": {"doc_ids": ["D06"], "entity_ids": ["Genre:1"], "period_start": "2025-07-01", "period_end": "2025-10-01"},
+  "profile_id": "example-profile",
+  "query": "检索问题",
+  "filters": {},
   "top_k": 5
 }
 ```
 
-输出：
+### 输出
 
 ```json
 {
   "retrieval_id": "rag-001",
+  "profile_id": "example-profile",
   "status": "success",
   "chunks": [
     {
-      "chunk_id": "D06-p1-c2",
-      "doc_id": "D06",
-      "title": "2025年第三季度经营目标表",
+      "chunk_id": "doc-001-c002",
+      "doc_id": "doc-001",
+      "title": "文档标题",
       "doc_type": "pdf",
       "page": 1,
-      "section": "音乐分类目标",
-      "text": "Rock：第三季度销售目标为……",
+      "section": "章节或段落位置",
+      "text": "证据片段",
       "score": 0.91,
-      "entity_refs": ["Genre:1"],
-      "period_start": "2025-07-01",
-      "period_end": "2025-10-01",
-      "source_uri": "data/knowledge/D06_2025Q3经营目标表.pdf"
+      "source_uri": "profile-defined"
     }
   ],
   "error": null
 }
 ```
 
-文档片段必须保留文档 ID、页码或段落位置；图片或扫描件在可行时保留 `bbox`，供页面高亮来源区域。
+检索片段应尽量保留文档标题、页码、章节、段落或表格位置；扫描件或图片可增加 `bbox`。主返回中的 `documents` 使用这些片段字段，并可附带 `retrieval_id`。
 
-## 六、文档处理接口：B 负责
-
-第一版可先实现质量检测和 OCR，公式计算只支持已定义的经营公式。
-
-输入：
-
-```json
-{"document_id": "D06", "operations": ["quality_check", "ocr", "extract_formula"]}
-```
-
-输出：
+## 5. 来源和计算记录
 
 ```json
 {
-  "document_id": "D06",
+  "calculation_id": "calc-001",
+  "formula": "profile-defined",
+  "inputs": ["sql-001", "doc-001"],
+  "result": 123.45,
+  "unit": "profile-defined"
+}
+```
+
+```json
+{
+  "step": 1,
+  "tool": "sql.query",
   "status": "success",
-  "quality": {"score": 0.86, "issues": [{"type": "low_ocr_confidence", "page": 1, "confidence": 0.72, "message": "第1页表格部分文字识别置信度较低"}]},
-  "ocr_text": [],
-  "formulas": [],
-  "error": null
+  "source_refs": ["sql-001"],
+  "duration_ms": 8
 }
 ```
 
-公式必须来自文档证据，参数必须能回指数据库结果或文档片段，并记录单位、输入来源和计算结果；不能直接执行模型任意生成的表达式。
+所有回答中的数字、规则和结论，应能通过 `sql_results`、`documents` 或 `calculations` 回溯。
 
-## 七、来源、计算和执行记录
-
-SQL 结果示例：
+## 6. 错误格式
 
 ```json
 {
-  "query_id": "sql-001",
-  "purpose": "计算2025年Rock音乐销售额",
-  "sql": "SELECT ...",
-  "columns": ["sales_amount"],
-  "rows": [{"sales_amount": 123.45}],
-  "row_count": 1,
-  "execution_ms": 12,
-  "source": {"type": "database", "name": "Chinook.db", "tables": ["Invoice", "InvoiceLine", "Track", "Genre"]}
+  "code": "MISSING_REQUIRED_SLOT",
+  "message": "缺少必要查询条件",
+  "retryable": false,
+  "details": null
 }
 ```
 
-文档证据示例：
+建议错误码：
 
-```json
-{
-  "doc_id": "D06",
-  "title": "2025年第三季度经营目标表",
-  "page": 1,
-  "section": "音乐分类目标",
-  "quote": "Rock：第三季度销售目标为……",
-  "source_uri": "data/knowledge/D06_2025Q3经营目标表.pdf"
-}
-```
+`INVALID_REQUEST`、`PROFILE_NOT_FOUND`、`PROFILE_UNAVAILABLE`、`MISSING_REQUIRED_SLOT`、`SCHEMA_LINKING_FAILED`、`SQL_READ_ONLY_VIOLATION`、`SQL_EXECUTION_FAILED`、`RAG_NO_EVIDENCE`、`DOCUMENT_PROCESSING_FAILED`、`UNSUPPORTED_CAPABILITY`、`INTERNAL_ERROR`。
 
-工具调用记录：
+## 7. 协作约定
 
-```json
-{"step": 2, "tool": "sql.query", "status": "success", "summary": "查询2025年Rock音乐销售额", "source_refs": ["sql-001"], "duration_ms": 12}
-```
-
-## 八、三个核心问题的路由
-
-1. “2025年 Rock 音乐销售额是多少？”：`route=sql`，调用 C 的 SQL 工具，返回销售额、SQL、指标口径和表来源。
-2. “Rock 达到第三季度经营目标了吗？”：`route=cross_source`，C 查实际销售额，B 检索 D06，系统计算实际值、目标值、差额和达成率，并返回 SQL、D06 页码、公式和结论。
-3. “销售增长率是多少？”：`route=clarification`，返回“请指定比较周期，并说明统计全部音乐还是某个品类”，用户补充后沿用 `session_id` 继续执行。
-
-## 九、错误格式和协作规则
-
-统一错误对象：
-
-```json
-{"code": "SQL_READ_ONLY_VIOLATION", "message": "查询被拒绝：只允许执行只读查询。", "retryable": false, "details": null}
-```
-
-建议错误码：`INVALID_REQUEST`、`MISSING_REQUIRED_SLOT`、`SCHEMA_LINKING_FAILED`、`SQL_READ_ONLY_VIOLATION`、`SQL_EXECUTION_FAILED`、`RAG_NO_EVIDENCE`、`DOCUMENT_PROCESSING_FAILED`、`UNSUPPORTED_METRIC`、`INTERNAL_ERROR`。
-
-- A 负责维护本文件；新增或修改字段先更新文档，再写代码。
-- B 和 C 不依赖对方的内部文件，通过契约传递数据。
-- 新增字段优先保持兼容；删除字段、修改含义或状态值时升级为 `/api/v2/ask`。
-- 每次合并前用三个核心问题跑一遍；修改 SQL 或口径后由 A 复核标准答案。
-- 示例中的 `123.45` 只是格式示例，不能写入评测答案。
-
-## 十、第一轮落地顺序
-
-1. A 确认本文的请求、返回、查询计划和业务口径。
-2. C 按 SQL 工具契约实现 `sql.query`，先验证客户数量和 2025 年 Rock 销售额。
-3. B 按提问接口用模拟响应搭页面，再接 C 的真实返回。
-4. B 接入 D01、D06、D09 的 RAG 返回。
-5. 三人共同联调三个核心问题。
-
-第一轮只要求接口可跑通，不要求立刻实现全部 12 份文档、所有中级任务或复杂视觉效果。
+- A 负责维护本文件和字段含义；
+- B 负责网页、Agent 路由、RAG 和结果展示；
+- C 负责各 profile 的数据接入、Schema 和只读 SQL；
+- 代码不得依赖其他成员的内部文件，通过本契约传递数据；
+- 新增字段保持兼容；删除字段或修改字段含义时先更新契约；
+- 具体数据集、业务字段、指标口径和文档路径放在 profile 配置中，不写入通用接口。
