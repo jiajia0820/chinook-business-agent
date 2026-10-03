@@ -1,0 +1,62 @@
+{
+  "files": {
+    "eval_basic_nl2sql.jsonl": {
+      "count": 10,
+      "duplicate_ids": []
+    },
+    "eval_basic_rag.jsonl": {
+      "count": 10,
+      "duplicate_ids": []
+    },
+    "eval_special_clarification.jsonl": {
+      "count": 8,
+      "duplicate_ids": []
+    },
+    "eval_special_alias_robustness.jsonl": {
+      "count": 8,
+      "duplicate_ids": []
+    },
+    "eval_special_multitable.jsonl": {
+      "count": 8,
+      "duplicate_ids": []
+    },
+    "eval_special_formula.jsonl": {
+      "count": 6,
+      "duplicate_ids": []
+    },
+    "eval_special_multimodal.jsonl": {
+      "count": 5,
+      "duplicate_ids": []
+    },
+    "eval_special_negative.jsonl": {
+      "count": 5,
+      "duplicate_ids": []
+    },
+    "eval_cross_source.jsonl": {
+      "count": 10,
+      "duplicate_ids": []
+    },
+    "eval_multidoc.jsonl": {
+      "count": 5,
+      "duplicate_ids": []
+    },
+    "eval_multiturn.jsonl": {
+      "count": 5,
+      "duplicate_ids": []
+    }
+  },
+  "errors": [],
+  "sql_checks": 22,
+  "global_duplicate_ids": [],
+  "interface_errors": [],
+  "result_mismatches": [],
+  "known_conflicts": [
+    {
+      "id": "cross-009",
+      "conflicts": [
+        "D08二 月度节奏的8月销售额36.63与数据库37.62冲突",
+        "D08月度三项相加不等于季度112.86"
+      ]
+    }
+  ]
+}

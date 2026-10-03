@@ -1,0 +1,15 @@
+{
+  "profile_id": "chinook-music",
+  "mode": "hybrid",
+  "description": "Chinook数字音乐商店经营分析评测配置",
+  "database": "data/chinook/Chinook.db",
+  "documents": "data/knowledge",
+  "capabilities": [
+    "sql",
+    "rag",
+    "cross_source",
+    "clarification",
+    "unsupported"
+  ],
+  "notes": "评测用profile标识；实际部署时由应用配置映射到同名profile。"
+}

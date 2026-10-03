@@ -1,0 +1,32 @@
+{
+  "generated_at": "2026-10-03T10:52:03",
+  "database": "data/chinook/Chinook.db",
+  "source_directory": "data/knowledge",
+  "database_sha256": "adb73b5b0ea57598926fa8a72ffb2848c64f7f17a4e57b5e0c04a182e24f565c",
+  "profile_fixture": "eval/agent/interface_profile_fixture.json",
+  "files": {
+    "eval_basic_nl2sql.jsonl": 10,
+    "eval_basic_rag.jsonl": 10,
+    "eval_special_clarification.jsonl": 8,
+    "eval_special_alias_robustness.jsonl": 8,
+    "eval_special_multitable.jsonl": 8,
+    "eval_special_formula.jsonl": 6,
+    "eval_special_multimodal.jsonl": 5,
+    "eval_special_negative.jsonl": 5,
+    "eval_cross_source.jsonl": 10,
+    "eval_multidoc.jsonl": 5,
+    "eval_multiturn.jsonl": 5
+  },
+  "single_turn_total": 75,
+  "multiturn_sessions": 5,
+  "official_mapping": {
+    "basic_nl2sql": "eval/agent/eval_basic_nl2sql.jsonl",
+    "basic_rag": "eval/agent/eval_basic_rag.jsonl",
+    "clarification": "eval/agent/eval_special_clarification.jsonl",
+    "multitable": "eval/agent/eval_special_multitable.jsonl",
+    "formula": "eval/agent/eval_special_formula.jsonl",
+    "multimodal": "eval/agent/eval_special_multimodal.jsonl",
+    "cross_source": "eval/agent/eval_cross_source.jsonl",
+    "robustness_negative": "eval/agent/eval_special_negative.jsonl"
+  }
+}
