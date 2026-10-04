@@ -1,0 +1,5 @@
+{
+  "query_id":"manual-sql-001", "profile_id":"chinook",
+  "sql":"SELECT COUNT(*) AS customer_count FROM main.Customer",
+  "params":{}, "max_rows":50, "timeout_ms":5000
+}
