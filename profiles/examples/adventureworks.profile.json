@@ -1,0 +1,8 @@
+{
+  "profile_id": "adventureworks", "mode": "sql_only", "config_version": "1",
+  "database": {
+    "dialect": "postgresql", "url_env": "ADVENTUREWORKS_DATABASE_URL",
+    "display_name": "AdventureWorks 样例库", "allowed_schemas": ["sales", "production"],
+    "allowed_tables": ["sales.salesorderheader", "sales.salesorderdetail", "production.product"]
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "profile_id": "chinook", "mode": "sql_only", "config_version": "1",
+  "database": {
+    "dialect": "sqlite", "sqlite_path": "../../data/chinook/Chinook.db",
+    "display_name": "Chinook 样例库", "allowed_schemas": ["main"],
+    "allowed_tables": ["main.Album", "main.Artist", "main.Customer", "main.Employee", "main.Genre", "main.Invoice", "main.InvoiceLine", "main.MediaType", "main.Playlist", "main.PlaylistTrack", "main.Track"]
+  },
+  "catalog_files":{"metrics":"metrics.json"}
+}

@@ -1,0 +1,106 @@
+"""Injectable JSON model protocol and optional server-configured HTTP client."""
+import json
+import os
+import socket
+import time
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
+from urllib.request import Request, build_opener, HTTPRedirectHandler
+from .errors import ModuleError, unavailable
+from .profiles import obj
+from .validation import validate_params
+
+OUTPUT_SCHEMA = {'type':'object','additionalProperties':False,'required':['sql','params'],
+                 'properties':{'sql':{'type':'string'},'params':{'type':'object'}}}
+
+
+def model_error(reason, message, retryable=False):
+    return ModuleError('SQL_EXECUTION_FAILED',message,reason,retryable)
+
+
+def decode_generated(payload):
+    """Reject prose, fenced code, duplicate keys, extras and unsupported values."""
+    def pairs(items):
+        result={}
+        for k,v in items:
+            if k in result: raise ValueError()
+            result[k]=v
+        return result
+    try:
+        if not isinstance(payload,str) or len(payload)>40000:
+            raise ValueError()
+        value=json.loads(payload,object_pairs_hook=pairs,
+                         parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
+        obj(value,['sql','params'],['sql','params'],'model output')
+        if not isinstance(value['sql'],str) or not value['sql'].strip() or len(value['sql'])>20000:
+            raise ValueError()
+        validate_params(value['params'])
+        return value
+    except (ValueError,TypeError,ModuleError):
+        raise model_error('MODEL_OUTPUT_INVALID','模型未返回合法 sql/params JSON') from None
+
+
+class NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+class HTTPJSONModel:
+    """Chat-completions-compatible wire adapter. No provider account is created."""
+    def __init__(self, endpoint, model, api_key, opener=None):
+        self._endpoint, self._model, self._key=endpoint,model,api_key
+        self._opener=opener or build_opener(NoRedirect())
+
+    @classmethod
+    def from_env(cls):
+        endpoint=os.environ.get('C_SQL_MODEL_ENDPOINT')
+        model=os.environ.get('C_SQL_MODEL_NAME')
+        key=os.environ.get('C_SQL_MODEL_API_KEY')
+        if not endpoint or not model or not key:
+            raise unavailable('CONFIG_MISSING','模型未配置；需服务端 C_SQL_MODEL_ENDPOINT/NAME/API_KEY，或显式离线演示')
+        parts=urlsplit(endpoint)
+        if parts.scheme!='https' or not parts.hostname or parts.username or parts.password or parts.query or parts.fragment:
+            raise unavailable('MODEL_CONFIG_INVALID','模型端点必须为无凭据/查询参数的 HTTPS 完整 URL')
+        return cls(endpoint,model,key)
+
+    def generate_json(self, messages, output_schema, deadline):
+        timeout=min(20,deadline-time.monotonic())
+        if timeout<=0: raise model_error('MODEL_TIMEOUT','模型调用预算已耗尽')
+        body=json.dumps(dict(model=self._model,messages=messages,temperature=0,
+                             response_format={'type':'json_object'},max_tokens=2048)).encode('utf-8')
+        request=Request(self._endpoint,data=body,headers={'Content-Type':'application/json',
+                                                       'Authorization':'Bearer '+self._key},method='POST')
+        try:
+            with self._opener.open(request,timeout=timeout) as response:
+                raw=response.read(200001)
+                if len(raw)>200000: raise ValueError()
+                result=json.loads(raw)
+                content=result['choices'][0]['message']['content']
+                if not isinstance(content,str): raise ValueError()
+            if time.monotonic()>=deadline: raise model_error('MODEL_TIMEOUT','模型响应超过调用预算')
+            return content
+        except ModuleError: raise
+        except HTTPError as exc:
+            raise model_error('MODEL_HTTP_FAILED','模型服务返回 HTTP '+str(exc.code),exc.code==429 or exc.code>=500) from None
+        except (TimeoutError,socket.timeout):
+            raise model_error('MODEL_TIMEOUT','模型调用超时') from None
+        except URLError:
+            raise model_error('MODEL_NETWORK_FAILED','模型服务连接失败',True) from None
+        except (ValueError,KeyError,IndexError,TypeError,UnicodeError):
+            raise model_error('MODEL_RESPONSE_INVALID','模型服务响应格式错误') from None
+
+
+class DemoJSONModel:
+    """Fixed offline examples only; never presented as a real model or free-form NL2SQL."""
+    is_demo=True
+    def generate_json(self,messages,output_schema,deadline):
+        context=json.loads(messages[-1]['content'])
+        question=context['question'].strip().rstrip('？?')
+        examples={
+            '客户数量是多少':{'sql':'SELECT COUNT(*) AS customer_count FROM main.Customer','params':{}},
+            '有哪些音乐类型':{'sql':'SELECT GenreId, Name FROM main.Genre ORDER BY GenreId','params':{}},
+            '美国客户数量是多少':{'sql':'SELECT COUNT(*) AS customer_count FROM main.Customer WHERE Country=:country','params':{'country':'USA'}}
+        }
+        if question not in examples:
+            raise ModuleError('UNSUPPORTED_CAPABILITY','离线演示仅支持文档列出的固定问法')
+        return json.dumps(examples[question],ensure_ascii=False)

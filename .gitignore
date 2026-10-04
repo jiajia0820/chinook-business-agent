@@ -9,6 +9,7 @@ __pycache__/
 .pytest_cache/
 .venv/
 venv/
+competition_env_py3.10/
 
 # Node / frontend
 node_modules/

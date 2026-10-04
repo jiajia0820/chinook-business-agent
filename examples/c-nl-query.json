@@ -1,0 +1,5 @@
+{
+  "request_id":"manual-nl-001", "profile_id":"chinook", "question":"客户数量是多少？",
+  "context":{"metric_ids":["customer_count"],"resolved_slots":{},"business_context":[]},
+  "options":{"max_rows":50,"show_trace":true}
+}
