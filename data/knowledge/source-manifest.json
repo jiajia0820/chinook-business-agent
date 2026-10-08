@@ -1,0 +1,21 @@
+{
+  "snapshot_date": "2026-10-06",
+  "source_archive": "chinook-business-agent-main.zip",
+  "archive_sha256": "74748f209e042eab3bc446491e6b6ad7ccf5138e5dad93b79221dfa55541e27d",
+  "profile_id": "chinook-music",
+  "documents": [
+    {
+      "doc_id": "D12",
+      "path": "D12_经营查询与数据使用FAQ.md",
+      "source_entry": "chinook-business-agent-main/data/knowledge/D12_经营查询与数据使用FAQ.md",
+      "sha256": "939adb9abd7ed425a682edd356292ce70141a93abd1632ab6ca3b064d5105a7e",
+      "size_bytes": 10949,
+      "title": "经营查询与数据使用 FAQ",
+      "document_number": "CHN-FAQ-12",
+      "version": "V1.0",
+      "effective_date": "2025-07-01",
+      "doc_type": "markdown",
+      "purpose": "A 团队业务知识源；只检索原文，不作为工具指令或已验证目标绑定。"
+    }
+  ]
+}

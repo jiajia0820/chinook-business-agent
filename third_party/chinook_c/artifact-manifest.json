@@ -1,0 +1,103 @@
+{
+  "snapshot_date": "2026-10-05",
+  "source_archive": "chinook-business-agent-main.zip",
+  "archive_sha256": "74748f209e042eab3bc446491e6b6ad7ccf5138e5dad93b79221dfa55541e27d",
+  "selection": "C SQL module, Chinook profile/metric catalog, sample database/license and original requirements only; no A documents or evaluation answers.",
+  "files": [
+    {
+      "path": "backend/__init__.py",
+      "sha256": "bc3e11b99f160566b6442fa4c7a0345469ea22787253b516a5de02bab56cd366",
+      "size_bytes": 28
+    },
+    {
+      "path": "backend/sql_module/__init__.py",
+      "sha256": "c47510b3d97f7538728287ba796a6562afc1ac17ffade8e490697b3945202cd3",
+      "size_bytes": 218
+    },
+    {
+      "path": "backend/sql_module/__main__.py",
+      "sha256": "09c6c439e12ecf531dce32f8b0b8770e7ebfead84ca4ef4089a6027ead73d35e",
+      "size_bytes": 5052
+    },
+    {
+      "path": "backend/sql_module/adapters/__init__.py",
+      "sha256": "dc27e6eb4702383e7c652f2eb8693094e4d4abc89c7b81a4744a220ffe47e6d4",
+      "size_bytes": 1579
+    },
+    {
+      "path": "backend/sql_module/adapters/postgresql.py",
+      "sha256": "fbc6dfcce24a175dbb4a2b794a66935de92a947c3af1a7877528f5f623724ddc",
+      "size_bytes": 294
+    },
+    {
+      "path": "backend/sql_module/adapters/sqlite.py",
+      "sha256": "171be379fc16cb77b0a32297b7888e54dc05ae7bde19119a91af747df23a6dc3",
+      "size_bytes": 482
+    },
+    {
+      "path": "backend/sql_module/catalog.py",
+      "sha256": "2d74cf9acc2d6d4165bd09e5381e6ff9c34be3be2615794e743ec87616486996",
+      "size_bytes": 3896
+    },
+    {
+      "path": "backend/sql_module/errors.py",
+      "sha256": "253426bc82b2193592ab203b45ae4032fc25f0b4c9e780e7b4c552d99e947120",
+      "size_bytes": 1575
+    },
+    {
+      "path": "backend/sql_module/execution.py",
+      "sha256": "4fd6ed15959258fdecde65f18b7ba4a4afa4f3081778a533247437425a65dfc8",
+      "size_bytes": 6606
+    },
+    {
+      "path": "backend/sql_module/generation.py",
+      "sha256": "bd0e70b6012cd6cf027cfc8721503c7ae1a66fdf9f5399f92961c2a12c42decb",
+      "size_bytes": 5368
+    },
+    {
+      "path": "backend/sql_module/profiles.py",
+      "sha256": "61ff453cc9b8c70aaaf7eb189a142cdd1f358dafb46b7394623304e1a94643c7",
+      "size_bytes": 8585
+    },
+    {
+      "path": "backend/sql_module/schema.py",
+      "sha256": "7cf3dd9ff6d37515158538cc4493b6761484b3e52d0ceef6ec821fe5c8e4dd97",
+      "size_bytes": 5001
+    },
+    {
+      "path": "backend/sql_module/service.py",
+      "sha256": "04f4369b3e7432d8d77624e0f41683545fc7aea93afca9b5f5c06eedd58768b2",
+      "size_bytes": 9928
+    },
+    {
+      "path": "backend/sql_module/validation.py",
+      "sha256": "4b918c8615d975e3a5409218f501eee95f59e14832f6e520eb6b1afc665c80d1",
+      "size_bytes": 7247
+    },
+    {
+      "path": "data/chinook/Chinook.db",
+      "sha256": "adb73b5b0ea57598926fa8a72ffb2848c64f7f17a4e57b5e0c04a182e24f565c",
+      "size_bytes": 1007616
+    },
+    {
+      "path": "data/chinook/LICENSE.md",
+      "sha256": "5064d720db431474b0a0b0cef9d2b5e362b6c6f80602b35c6443b07cbc979f77",
+      "size_bytes": 1117
+    },
+    {
+      "path": "profiles/chinook/metrics.json",
+      "sha256": "8ea0228be3c061e50fde1064d727ab75fb4f1d92a464bbbbb83b6bb0f67c8cef",
+      "size_bytes": 413
+    },
+    {
+      "path": "profiles/chinook/profile.json",
+      "sha256": "ea27e7f817ecf882653e365610db09149ba06cde0b632516c0a5e890572f33f6",
+      "size_bytes": 490
+    },
+    {
+      "path": "requirements-c.txt",
+      "sha256": "e05199b9506c6c8eb181732b39758259bc3917750b4df1ac1dce39608b103380",
+      "size_bytes": 60
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "version":"demo-1",
+  "metrics":[{
+    "metric_id":"customer_count", "name":"客户记录数",
+    "definition":"Customer 表记录数，不等于购买客户数；演示口径，尚未由 A 正式确认。",
+    "unit":"条", "grain":"customer", "required_columns":["main.Customer.CustomerId"],
+    "aggregation":"count_rows", "required_slots":[], "source_refs":["demo-catalog:customer_count@demo-1"]
+  }]
+}

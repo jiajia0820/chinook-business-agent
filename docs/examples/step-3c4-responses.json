@@ -1,0 +1,1465 @@
+{
+  "generated_by": "services.agent_api.examples.demo_3c4",
+  "recorded_date": "2026-10-06",
+  "note": "真实样例 SQL/D12 与人工计算实例分开；request/query/calculation ID 与计时每次重跑不同。默认 API 未装配。",
+  "records": [
+    {
+      "instance": "real_sample_sql_and_D12",
+      "formal_composer": true,
+      "fixture_only": false,
+      "calculator_enabled": false,
+      "default_api_wired": false
+    },
+    {
+      "question": "客户数量是多少？",
+      "response": {
+        "request_id": "req-3c4-real-0",
+        "session_id": "3c4-real-0",
+        "profile_id": "chinook-music",
+        "status": "answered",
+        "answer": "来源：真实 Chinook 样例库 + A 的 D12 V1.0 Markdown；仅有限问法，没有真实业务计算器。\nChinook 样例库中，登记客户记录数为 59 条。这里统计 Customer 表记录，不等同于筛选交易范围后的购买客户数。\n来源：SQL sql-0dffb8bc-2ca1-4131-a6ee-50d9f2c049d4。展示 SQL 为 C 已接受候选；C 执行前会校验并规范化，不是逐字驱动语句。",
+        "route": "sql",
+        "intent": {
+          "name": "fact_query",
+          "confidence": null
+        },
+        "entities": [],
+        "time_range": null,
+        "sql_results": [
+          {
+            "query_id": "sql-0dffb8bc-2ca1-4131-a6ee-50d9f2c049d4",
+            "profile_id": "chinook-music",
+            "status": "success",
+            "columns": [
+              "customer_count"
+            ],
+            "rows": [
+              {
+                "customer_count": 59
+              }
+            ],
+            "row_count": 1,
+            "truncated": false,
+            "execution_ms": 63,
+            "source": {
+              "type": "database",
+              "name": "Chinook 样例库",
+              "tables": [
+                "main.Customer"
+              ]
+            },
+            "sql": "SELECT COUNT(*) AS customer_count FROM main.Customer",
+            "params": {},
+            "error": null
+          }
+        ],
+        "documents": [],
+        "calculations": [],
+        "metric_definitions": [
+          {
+            "metric_id": "customer_count",
+            "name": "客户记录数",
+            "definition": "Customer 表记录数，不等于购买客户数；演示口径，尚未由 A 正式确认。",
+            "unit": "条",
+            "source_refs": [
+              "demo-catalog:customer_count@demo-1"
+            ]
+          }
+        ],
+        "limitations": [
+          "来源：真实 Chinook 样例库 + A 的 D12 V1.0 Markdown；仅有限问法，没有真实业务计算器。",
+          "当前为有限规则解析，不支持任意自然语言；会话仅在本进程内保留。",
+          "样例数据库与团队自建业务资料，不是企业生产数据。",
+          "C 离线模型仅支持三类固定问法；当前不代表完整自由问法准确率。",
+          "A 的正式字段、别名、指标与文档目录配置尚未齐全；B 暂行配置待对齐。",
+          "3C-2 仅检索 A 的 D12 V1.0 原文；D12 未直接定义登记客户记录数，未解析 D06 等完整目标资料。",
+          "文档词项命中不等于完整语义答案、目标适用范围或公式绑定；本步不进行达标/增长计算。",
+          "此实例仅装配 SQL + RAG，不具备计算器或多格式解析。",
+          "数据库未提供表注释反射",
+          "第三阶段单候选基础流程；未实现精准 Schema Linking、复杂查询评测或自动修复。",
+          "指定指标已传入模型；本阶段未自动证明生成 SQL 与业务口径语义等价。",
+          "固定问法离线演示模型；不是实际模型调用或自由问法效果。",
+          "3C-1：C 离线固定三问 + 真实 Chinook 样例库；不是联网模型或完整自由问法能力。",
+          "展示的 SQL 是 C 已接受候选；执行前 C 会进行只读校验、字段限定与 SQL 规范化，不代表逐字相同的驱动语句。"
+        ],
+        "clarification": null,
+        "trace": [
+          {
+            "step": 1,
+            "tool": "sql.task",
+            "status": "success",
+            "source_refs": [
+              "sql-0dffb8bc-2ca1-4131-a6ee-50d9f2c049d4"
+            ],
+            "duration_ms": 94
+          }
+        ],
+        "error": null
+      }
+    },
+    {
+      "question": "美国客户数量是多少？",
+      "response": {
+        "request_id": "req-3c4-real-1",
+        "session_id": "3c4-real-1",
+        "profile_id": "chinook-music",
+        "status": "answered",
+        "answer": "来源：真实 Chinook 样例库 + A 的 D12 V1.0 Markdown；仅有限问法，没有真实业务计算器。\nChinook 样例库中，Country=USA 的登记客户记录数为 13 条。这里统计 Customer 表记录，不等同于筛选交易范围后的购买客户数。\n来源：SQL sql-e1c501c7-5471-45ec-a0a5-66b831417c87。展示 SQL 为 C 已接受候选；C 执行前会校验并规范化，不是逐字驱动语句。",
+        "route": "sql",
+        "intent": {
+          "name": "fact_query",
+          "confidence": null
+        },
+        "entities": [
+          {
+            "type": "country",
+            "id": "Country:USA",
+            "label": "USA"
+          }
+        ],
+        "time_range": null,
+        "sql_results": [
+          {
+            "query_id": "sql-e1c501c7-5471-45ec-a0a5-66b831417c87",
+            "profile_id": "chinook-music",
+            "status": "success",
+            "columns": [
+              "customer_count"
+            ],
+            "rows": [
+              {
+                "customer_count": 13
+              }
+            ],
+            "row_count": 1,
+            "truncated": false,
+            "execution_ms": 47,
+            "source": {
+              "type": "database",
+              "name": "Chinook 样例库",
+              "tables": [
+                "main.Customer"
+              ]
+            },
+            "sql": "SELECT COUNT(*) AS customer_count FROM main.Customer WHERE Country=:country",
+            "params": {
+              "country": "USA"
+            },
+            "error": null
+          }
+        ],
+        "documents": [],
+        "calculations": [],
+        "metric_definitions": [
+          {
+            "metric_id": "customer_count",
+            "name": "客户记录数",
+            "definition": "Customer 表记录数，不等于购买客户数；演示口径，尚未由 A 正式确认。",
+            "unit": "条",
+            "source_refs": [
+              "demo-catalog:customer_count@demo-1"
+            ]
+          }
+        ],
+        "limitations": [
+          "来源：真实 Chinook 样例库 + A 的 D12 V1.0 Markdown；仅有限问法，没有真实业务计算器。",
+          "当前为有限规则解析，不支持任意自然语言；会话仅在本进程内保留。",
+          "样例数据库与团队自建业务资料，不是企业生产数据。",
+          "C 离线模型仅支持三类固定问法；当前不代表完整自由问法准确率。",
+          "A 的正式字段、别名、指标与文档目录配置尚未齐全；B 暂行配置待对齐。",
+          "3C-2 仅检索 A 的 D12 V1.0 原文；D12 未直接定义登记客户记录数，未解析 D06 等完整目标资料。",
+          "文档词项命中不等于完整语义答案、目标适用范围或公式绑定；本步不进行达标/增长计算。",
+          "此实例仅装配 SQL + RAG，不具备计算器或多格式解析。",
+          "数据库未提供表注释反射",
+          "第三阶段单候选基础流程；未实现精准 Schema Linking、复杂查询评测或自动修复。",
+          "指定指标已传入模型；本阶段未自动证明生成 SQL 与业务口径语义等价。",
+          "固定问法离线演示模型；不是实际模型调用或自由问法效果。",
+          "3C-1：C 离线固定三问 + 真实 Chinook 样例库；不是联网模型或完整自由问法能力。",
+          "展示的 SQL 是 C 已接受候选；执行前 C 会进行只读校验、字段限定与 SQL 规范化，不代表逐字相同的驱动语句。"
+        ],
+        "clarification": null,
+        "trace": [
+          {
+            "step": 1,
+            "tool": "sql.task",
+            "status": "success",
+            "source_refs": [
+              "sql-e1c501c7-5471-45ec-a0a5-66b831417c87"
+            ],
+            "duration_ms": 78
+          }
+        ],
+        "error": null
+      }
+    },
+    {
+      "question": "有哪些音乐类型？",
+      "response": {
+        "request_id": "req-3c4-real-2",
+        "session_id": "3c4-real-2",
+        "profile_id": "chinook-music",
+        "status": "answered",
+        "answer": "来源：真实 Chinook 样例库 + A 的 D12 V1.0 Markdown；仅有限问法，没有真实业务计算器。\n本轮返回 25 个 Genre 分类（该查询未截断）：1: Rock；2: Jazz；3: Metal；4: Alternative & Punk；5: Rock And Roll；6: Blues；7: Latin；8: Reggae；9: Pop；10: Soundtrack；11: Bossa Nova；12: Easy Listening；13: Heavy Metal；14: R&B/Soul；15: Electronica/Dance；16: World；17: Hip Hop/Rap；18: Science Fiction；19: TV Shows；20: Sci Fi & Fantasy；21: Drama；22: Comedy；23: Alternative；24: Classical；25: Opera。查询覆盖整个 Genre 表，含影视分类，不是仅音频风格清单。\n来源：SQL sql-bd98aba5-3a1f-4cf0-be04-5488ffa004ae。展示 SQL 为 C 已接受候选；C 执行前会校验并规范化，不是逐字驱动语句。",
+        "route": "sql",
+        "intent": {
+          "name": "list_genres",
+          "confidence": null
+        },
+        "entities": [],
+        "time_range": null,
+        "sql_results": [
+          {
+            "query_id": "sql-bd98aba5-3a1f-4cf0-be04-5488ffa004ae",
+            "profile_id": "chinook-music",
+            "status": "success",
+            "columns": [
+              "genreid",
+              "name"
+            ],
+            "rows": [
+              {
+                "genreid": 1,
+                "name": "Rock"
+              },
+              {
+                "genreid": 2,
+                "name": "Jazz"
+              },
+              {
+                "genreid": 3,
+                "name": "Metal"
+              },
+              {
+                "genreid": 4,
+                "name": "Alternative & Punk"
+              },
+              {
+                "genreid": 5,
+                "name": "Rock And Roll"
+              },
+              {
+                "genreid": 6,
+                "name": "Blues"
+              },
+              {
+                "genreid": 7,
+                "name": "Latin"
+              },
+              {
+                "genreid": 8,
+                "name": "Reggae"
+              },
+              {
+                "genreid": 9,
+                "name": "Pop"
+              },
+              {
+                "genreid": 10,
+                "name": "Soundtrack"
+              },
+              {
+                "genreid": 11,
+                "name": "Bossa Nova"
+              },
+              {
+                "genreid": 12,
+                "name": "Easy Listening"
+              },
+              {
+                "genreid": 13,
+                "name": "Heavy Metal"
+              },
+              {
+                "genreid": 14,
+                "name": "R&B/Soul"
+              },
+              {
+                "genreid": 15,
+                "name": "Electronica/Dance"
+              },
+              {
+                "genreid": 16,
+                "name": "World"
+              },
+              {
+                "genreid": 17,
+                "name": "Hip Hop/Rap"
+              },
+              {
+                "genreid": 18,
+                "name": "Science Fiction"
+              },
+              {
+                "genreid": 19,
+                "name": "TV Shows"
+              },
+              {
+                "genreid": 20,
+                "name": "Sci Fi & Fantasy"
+              },
+              {
+                "genreid": 21,
+                "name": "Drama"
+              },
+              {
+                "genreid": 22,
+                "name": "Comedy"
+              },
+              {
+                "genreid": 23,
+                "name": "Alternative"
+              },
+              {
+                "genreid": 24,
+                "name": "Classical"
+              },
+              {
+                "genreid": 25,
+                "name": "Opera"
+              }
+            ],
+            "row_count": 25,
+            "truncated": false,
+            "execution_ms": 31,
+            "source": {
+              "type": "database",
+              "name": "Chinook 样例库",
+              "tables": [
+                "main.Genre"
+              ]
+            },
+            "sql": "SELECT GenreId, Name FROM main.Genre ORDER BY GenreId",
+            "params": {},
+            "error": null
+          }
+        ],
+        "documents": [],
+        "calculations": [],
+        "metric_definitions": [],
+        "limitations": [
+          "来源：真实 Chinook 样例库 + A 的 D12 V1.0 Markdown；仅有限问法，没有真实业务计算器。",
+          "当前为有限规则解析，不支持任意自然语言；会话仅在本进程内保留。",
+          "样例数据库与团队自建业务资料，不是企业生产数据。",
+          "C 离线模型仅支持三类固定问法；当前不代表完整自由问法准确率。",
+          "A 的正式字段、别名、指标与文档目录配置尚未齐全；B 暂行配置待对齐。",
+          "3C-2 仅检索 A 的 D12 V1.0 原文；D12 未直接定义登记客户记录数，未解析 D06 等完整目标资料。",
+          "文档词项命中不等于完整语义答案、目标适用范围或公式绑定；本步不进行达标/增长计算。",
+          "此实例仅装配 SQL + RAG，不具备计算器或多格式解析。",
+          "数据库未提供表注释反射",
+          "第三阶段单候选基础流程；未实现精准 Schema Linking、复杂查询评测或自动修复。",
+          "本次未指定已注册指标；SQL 可执行不代表业务口径已由 A 确认。",
+          "固定问法离线演示模型；不是实际模型调用或自由问法效果。",
+          "3C-1：C 离线固定三问 + 真实 Chinook 样例库；不是联网模型或完整自由问法能力。",
+          "固定类型查询列出整个 Genre 表，含影视分类；不是仅音频可销售风格清单。",
+          "展示的 SQL 是 C 已接受候选；执行前 C 会进行只读校验、字段限定与 SQL 规范化，不代表逐字相同的驱动语句。"
+        ],
+        "clarification": null,
+        "trace": [
+          {
+            "step": 1,
+            "tool": "sql.task",
+            "status": "success",
+            "source_refs": [
+              "sql-bd98aba5-3a1f-4cf0-be04-5488ffa004ae"
+            ],
+            "duration_ms": 78
+          }
+        ],
+        "error": null
+      }
+    },
+    {
+      "question": "有哪些音乐类型？",
+      "response": {
+        "request_id": "req-3c4-real-3",
+        "session_id": "3c4-real-3",
+        "profile_id": "chinook-music",
+        "status": "answered",
+        "answer": "来源：真实 Chinook 样例库 + A 的 D12 V1.0 Markdown；仅有限问法，没有真实业务计算器。\n本轮返回 2 个 Genre 分类（结果已截断，不能据此确定分类总数）：1: Rock；2: Jazz。查询覆盖整个 Genre 表，含影视分类，不是仅音频风格清单。\n来源：SQL sql-57f049cf-d3fc-4aa2-9a10-b0a190e7dbc6。展示 SQL 为 C 已接受候选；C 执行前会校验并规范化，不是逐字驱动语句。",
+        "route": "sql",
+        "intent": {
+          "name": "list_genres",
+          "confidence": null
+        },
+        "entities": [],
+        "time_range": null,
+        "sql_results": [
+          {
+            "query_id": "sql-57f049cf-d3fc-4aa2-9a10-b0a190e7dbc6",
+            "profile_id": "chinook-music",
+            "status": "success",
+            "columns": [
+              "genreid",
+              "name"
+            ],
+            "rows": [
+              {
+                "genreid": 1,
+                "name": "Rock"
+              },
+              {
+                "genreid": 2,
+                "name": "Jazz"
+              }
+            ],
+            "row_count": 2,
+            "truncated": true,
+            "execution_ms": 31,
+            "source": {
+              "type": "database",
+              "name": "Chinook 样例库",
+              "tables": [
+                "main.Genre"
+              ]
+            },
+            "sql": "SELECT GenreId, Name FROM main.Genre ORDER BY GenreId",
+            "params": {},
+            "error": null
+          }
+        ],
+        "documents": [],
+        "calculations": [],
+        "metric_definitions": [],
+        "limitations": [
+          "来源：真实 Chinook 样例库 + A 的 D12 V1.0 Markdown；仅有限问法，没有真实业务计算器。",
+          "当前为有限规则解析，不支持任意自然语言；会话仅在本进程内保留。",
+          "样例数据库与团队自建业务资料，不是企业生产数据。",
+          "C 离线模型仅支持三类固定问法；当前不代表完整自由问法准确率。",
+          "A 的正式字段、别名、指标与文档目录配置尚未齐全；B 暂行配置待对齐。",
+          "3C-2 仅检索 A 的 D12 V1.0 原文；D12 未直接定义登记客户记录数，未解析 D06 等完整目标资料。",
+          "文档词项命中不等于完整语义答案、目标适用范围或公式绑定；本步不进行达标/增长计算。",
+          "此实例仅装配 SQL + RAG，不具备计算器或多格式解析。",
+          "数据库未提供表注释反射",
+          "第三阶段单候选基础流程；未实现精准 Schema Linking、复杂查询评测或自动修复。",
+          "本次未指定已注册指标；SQL 可执行不代表业务口径已由 A 确认。",
+          "固定问法离线演示模型；不是实际模型调用或自由问法效果。",
+          "结果已按 max_rows 截断",
+          "3C-1：C 离线固定三问 + 真实 Chinook 样例库；不是联网模型或完整自由问法能力。",
+          "固定类型查询列出整个 Genre 表，含影视分类；不是仅音频可销售风格清单。",
+          "展示的 SQL 是 C 已接受候选；执行前 C 会进行只读校验、字段限定与 SQL 规范化，不代表逐字相同的驱动语句。"
+        ],
+        "clarification": null,
+        "trace": [
+          {
+            "step": 1,
+            "tool": "sql.task",
+            "status": "success",
+            "source_refs": [
+              "sql-57f049cf-d3fc-4aa2-9a10-b0a190e7dbc6"
+            ],
+            "duration_ms": 62
+          }
+        ],
+        "error": null
+      }
+    },
+    {
+      "question": "销售额口径是什么？",
+      "response": {
+        "request_id": "req-3c4-real-4",
+        "session_id": "3c4-real-4",
+        "profile_id": "chinook-music",
+        "status": "answered",
+        "answer": "来源：真实 Chinook 样例库 + A 的 D12 V1.0 Markdown；仅有限问法，没有真实业务计算器。\nD12 原文：“销售额按SUM(InvoiceLine.UnitPrice * InvoiceLine.Quantity)计算，单位为美元。”\n来源：D12 V1.0；经营查询与数据使用 FAQ / 四 指标怎么理解；D12@939adb9abd7e:L43-L49:P6:fbe125ab182f；data/knowledge/D12_经营查询与数据使用FAQ.md#L43-L49。\n仅解释该条文档规则，不代表已查询销售或购买客户数，也不形成目标达成结论。",
+        "route": "rag",
+        "intent": {
+          "name": "document_rule",
+          "confidence": null
+        },
+        "entities": [],
+        "time_range": null,
+        "sql_results": [],
+        "documents": [
+          {
+            "chunk_id": "D12@939adb9abd7e:L43-L49:P6:fbe125ab182f",
+            "doc_id": "D12",
+            "title": "经营查询与数据使用 FAQ",
+            "doc_type": "markdown",
+            "page": null,
+            "section": "经营查询与数据使用 FAQ / 四 指标怎么理解",
+            "text": "## 四 指标怎么理解\n销售额按SUM(InvoiceLine.UnitPrice * InvoiceLine.Quantity)计算，单位为美元。销量按SUM(InvoiceLine.Quantity)计算，单位为件。订单数按InvoiceId去重，购买客户数按CustomerId去重。\n客单价是同一筛选范围内销售额除以订单数，订单数为零时不计算。成交均价是销售额除以销量，用来观察明细成交结构，不能和Track.UnitPrice的目录价格混用。环比比较相邻完整周期，比较时指标、媒体类型、品类和地区口径保持一致。\n如果问题问“销售额和销量哪个更好”，先说明二者衡量对象不同：销售额反映金额，销量反映商品件数。订单数和购买客户数也不能当作销量使用。",
+            "score": 16.463298,
+            "source_uri": "data/knowledge/D12_经营查询与数据使用FAQ.md#L43-L49",
+            "retrieval_id": "retrieval-9dbe6184-e0f5-4b2d-b74b-829b2f6d197b",
+            "bbox": null
+          }
+        ],
+        "calculations": [],
+        "metric_definitions": [],
+        "limitations": [
+          "来源：真实 Chinook 样例库 + A 的 D12 V1.0 Markdown；仅有限问法，没有真实业务计算器。",
+          "当前为有限规则解析，不支持任意自然语言；会话仅在本进程内保留。",
+          "样例数据库与团队自建业务资料，不是企业生产数据。",
+          "C 离线模型仅支持三类固定问法；当前不代表完整自由问法准确率。",
+          "A 的正式字段、别名、指标与文档目录配置尚未齐全；B 暂行配置待对齐。",
+          "3C-2 仅检索 A 的 D12 V1.0 原文；D12 未直接定义登记客户记录数，未解析 D06 等完整目标资料。",
+          "文档词项命中不等于完整语义答案、目标适用范围或公式绑定；本步不进行达标/增长计算。",
+          "此实例仅装配 SQL + RAG，不具备计算器或多格式解析。"
+        ],
+        "clarification": null,
+        "trace": [
+          {
+            "step": 1,
+            "tool": "rag.retrieve",
+            "status": "success",
+            "source_refs": [
+              "D12@939adb9abd7e:L43-L49:P6:fbe125ab182f"
+            ],
+            "duration_ms": 0
+          }
+        ],
+        "error": null
+      }
+    },
+    {
+      "question": "默认音频范围是什么？",
+      "response": {
+        "request_id": "req-3c4-real-5",
+        "session_id": "3c4-real-5",
+        "profile_id": "chinook-music",
+        "status": "answered",
+        "answer": "来源：真实 Chinook 样例库 + A 的 D12 V1.0 Markdown；仅有限问法，没有真实业务计算器。\nD12 原文：“没有特别说明时，“音乐”“音频”“音乐销售额”默认只统计音频MediaTypeId 1、2、4、5。MediaTypeId 3是视频，单独统计。”\n来源：D12 V1.0；经营查询与数据使用 FAQ / 二 默认的音乐范围；D12@939adb9abd7e:L27-L33:P4:cb48eaeb29de；data/knowledge/D12_经营查询与数据使用FAQ.md#L27-L33。\n仅解释该条文档规则，不代表已查询销售或购买客户数，也不形成目标达成结论。",
+        "route": "rag",
+        "intent": {
+          "name": "document_rule",
+          "confidence": null
+        },
+        "entities": [],
+        "time_range": null,
+        "sql_results": [],
+        "documents": [
+          {
+            "chunk_id": "D12@939adb9abd7e:L27-L33:P4:cb48eaeb29de",
+            "doc_id": "D12",
+            "title": "经营查询与数据使用 FAQ",
+            "doc_type": "markdown",
+            "page": null,
+            "section": "经营查询与数据使用 FAQ / 二 默认的音乐范围",
+            "text": "## 二 默认的音乐范围\n没有特别说明时，“音乐”“音频”“音乐销售额”默认只统计音频MediaTypeId 1、2、4、5。MediaTypeId 3是视频，单独统计。全店、全部媒体或音乐加视频问题，在结果中写明是否将视频纳入合计。\n有17张订单同时包含音频和视频明细。计算音乐销售额时按InvoiceLine逐条筛选，不能直接使用Invoice.Total。查询全店订单金额时才使用完整订单范围，并区分全店销售额和音乐销售额。\n“Music Videos”是播放列表名称，不等于所有视频商品；“音乐播放列表”也不等于音频媒体类型。媒体范围看MediaType，主题关系看PlaylistTrack。",
+            "score": 53.196494,
+            "source_uri": "data/knowledge/D12_经营查询与数据使用FAQ.md#L27-L33",
+            "retrieval_id": "retrieval-3c2790de-236f-4429-97f4-ed9c1b227e9b",
+            "bbox": null
+          }
+        ],
+        "calculations": [],
+        "metric_definitions": [],
+        "limitations": [
+          "来源：真实 Chinook 样例库 + A 的 D12 V1.0 Markdown；仅有限问法，没有真实业务计算器。",
+          "当前为有限规则解析，不支持任意自然语言；会话仅在本进程内保留。",
+          "样例数据库与团队自建业务资料，不是企业生产数据。",
+          "C 离线模型仅支持三类固定问法；当前不代表完整自由问法准确率。",
+          "A 的正式字段、别名、指标与文档目录配置尚未齐全；B 暂行配置待对齐。",
+          "3C-2 仅检索 A 的 D12 V1.0 原文；D12 未直接定义登记客户记录数，未解析 D06 等完整目标资料。",
+          "文档词项命中不等于完整语义答案、目标适用范围或公式绑定；本步不进行达标/增长计算。",
+          "此实例仅装配 SQL + RAG，不具备计算器或多格式解析。"
+        ],
+        "clarification": null,
+        "trace": [
+          {
+            "step": 1,
+            "tool": "rag.retrieve",
+            "status": "success",
+            "source_refs": [
+              "D12@939adb9abd7e:L27-L33:P4:cb48eaeb29de"
+            ],
+            "duration_ms": 0
+          }
+        ],
+        "error": null
+      }
+    },
+    {
+      "question": "购买客户数是什么意思？",
+      "response": {
+        "request_id": "req-3c4-real-6",
+        "session_id": "3c4-real-6",
+        "profile_id": "chinook-music",
+        "status": "answered",
+        "answer": "来源：真实 Chinook 样例库 + A 的 D12 V1.0 Markdown；仅有限问法，没有真实业务计算器。\nD12 原文：“购买客户数按CustomerId去重。”\n来源：D12 V1.0；经营查询与数据使用 FAQ / 四 指标怎么理解；D12@939adb9abd7e:L43-L49:P6:fbe125ab182f；data/knowledge/D12_经营查询与数据使用FAQ.md#L43-L49。\n仅解释该条文档规则，不代表已查询销售或购买客户数，也不形成目标达成结论。",
+        "route": "rag",
+        "intent": {
+          "name": "document_rule",
+          "confidence": null
+        },
+        "entities": [],
+        "time_range": null,
+        "sql_results": [],
+        "documents": [
+          {
+            "chunk_id": "D12@939adb9abd7e:L43-L49:P6:fbe125ab182f",
+            "doc_id": "D12",
+            "title": "经营查询与数据使用 FAQ",
+            "doc_type": "markdown",
+            "page": null,
+            "section": "经营查询与数据使用 FAQ / 四 指标怎么理解",
+            "text": "## 四 指标怎么理解\n销售额按SUM(InvoiceLine.UnitPrice * InvoiceLine.Quantity)计算，单位为美元。销量按SUM(InvoiceLine.Quantity)计算，单位为件。订单数按InvoiceId去重，购买客户数按CustomerId去重。\n客单价是同一筛选范围内销售额除以订单数，订单数为零时不计算。成交均价是销售额除以销量，用来观察明细成交结构，不能和Track.UnitPrice的目录价格混用。环比比较相邻完整周期，比较时指标、媒体类型、品类和地区口径保持一致。\n如果问题问“销售额和销量哪个更好”，先说明二者衡量对象不同：销售额反映金额，销量反映商品件数。订单数和购买客户数也不能当作销量使用。",
+            "score": 18.02561,
+            "source_uri": "data/knowledge/D12_经营查询与数据使用FAQ.md#L43-L49",
+            "retrieval_id": "retrieval-acaf99dc-eecc-4578-9ef7-afe38c69564e",
+            "bbox": null
+          }
+        ],
+        "calculations": [],
+        "metric_definitions": [],
+        "limitations": [
+          "来源：真实 Chinook 样例库 + A 的 D12 V1.0 Markdown；仅有限问法，没有真实业务计算器。",
+          "当前为有限规则解析，不支持任意自然语言；会话仅在本进程内保留。",
+          "样例数据库与团队自建业务资料，不是企业生产数据。",
+          "C 离线模型仅支持三类固定问法；当前不代表完整自由问法准确率。",
+          "A 的正式字段、别名、指标与文档目录配置尚未齐全；B 暂行配置待对齐。",
+          "3C-2 仅检索 A 的 D12 V1.0 原文；D12 未直接定义登记客户记录数，未解析 D06 等完整目标资料。",
+          "文档词项命中不等于完整语义答案、目标适用范围或公式绑定；本步不进行达标/增长计算。",
+          "此实例仅装配 SQL + RAG，不具备计算器或多格式解析。"
+        ],
+        "clarification": null,
+        "trace": [
+          {
+            "step": 1,
+            "tool": "rag.retrieve",
+            "status": "success",
+            "source_refs": [
+              "D12@939adb9abd7e:L43-L49:P6:fbe125ab182f"
+            ],
+            "duration_ms": 0
+          }
+        ],
+        "error": null
+      }
+    },
+    {
+      "question": "购买客户数与登记客户记录数有什么区别？",
+      "response": {
+        "request_id": "req-3c4-real-7",
+        "session_id": "3c4-real-7",
+        "profile_id": "chinook-music",
+        "status": "insufficient_evidence",
+        "answer": "来源：真实 Chinook 样例库 + A 的 D12 V1.0 Markdown；仅有限问法，没有真实业务计算器。\nD12 未直接定义登记客户记录数，现有证据不能完整回答它与购买客户数的区别；需要 A 补充正式字段口径来源。",
+        "route": "rag",
+        "intent": {
+          "name": "document_rule",
+          "confidence": null
+        },
+        "entities": [],
+        "time_range": null,
+        "sql_results": [],
+        "documents": [],
+        "calculations": [],
+        "metric_definitions": [],
+        "limitations": [
+          "来源：真实 Chinook 样例库 + A 的 D12 V1.0 Markdown；仅有限问法，没有真实业务计算器。",
+          "当前为有限规则解析，不支持任意自然语言；会话仅在本进程内保留。",
+          "样例数据库与团队自建业务资料，不是企业生产数据。",
+          "C 离线模型仅支持三类固定问法；当前不代表完整自由问法准确率。",
+          "A 的正式字段、别名、指标与文档目录配置尚未齐全；B 暂行配置待对齐。",
+          "3C-2 仅检索 A 的 D12 V1.0 原文；D12 未直接定义登记客户记录数，未解析 D06 等完整目标资料。",
+          "文档词项命中不等于完整语义答案、目标适用范围或公式绑定；本步不进行达标/增长计算。",
+          "此实例仅装配 SQL + RAG，不具备计算器或多格式解析。"
+        ],
+        "clarification": null,
+        "trace": [
+          {
+            "step": 1,
+            "tool": "rag.retrieve",
+            "status": "success",
+            "source_refs": [],
+            "duration_ms": 0
+          }
+        ],
+        "error": null
+      }
+    },
+    {
+      "question": "火星移民政策规则是什么？",
+      "response": {
+        "request_id": "req-3c4-real-8",
+        "session_id": "3c4-real-8",
+        "profile_id": "chinook-music",
+        "status": "insufficient_evidence",
+        "answer": "来源：真实 Chinook 样例库 + A 的 D12 V1.0 Markdown；仅有限问法，没有真实业务计算器。\n本轮证据、适用范围或计算绑定不完整，不能形成确定结论。",
+        "route": "rag",
+        "intent": {
+          "name": "document_rule",
+          "confidence": null
+        },
+        "entities": [],
+        "time_range": null,
+        "sql_results": [],
+        "documents": [],
+        "calculations": [],
+        "metric_definitions": [],
+        "limitations": [
+          "来源：真实 Chinook 样例库 + A 的 D12 V1.0 Markdown；仅有限问法，没有真实业务计算器。",
+          "当前为有限规则解析，不支持任意自然语言；会话仅在本进程内保留。",
+          "样例数据库与团队自建业务资料，不是企业生产数据。",
+          "C 离线模型仅支持三类固定问法；当前不代表完整自由问法准确率。",
+          "A 的正式字段、别名、指标与文档目录配置尚未齐全；B 暂行配置待对齐。",
+          "3C-2 仅检索 A 的 D12 V1.0 原文；D12 未直接定义登记客户记录数，未解析 D06 等完整目标资料。",
+          "文档词项命中不等于完整语义答案、目标适用范围或公式绑定；本步不进行达标/增长计算。",
+          "此实例仅装配 SQL + RAG，不具备计算器或多格式解析。"
+        ],
+        "clarification": null,
+        "trace": [
+          {
+            "step": 1,
+            "tool": "rag.retrieve",
+            "status": "success",
+            "source_refs": [],
+            "duration_ms": 0
+          }
+        ],
+        "error": null
+      }
+    },
+    {
+      "question": "第三季度 Rock 达标了吗？",
+      "response": {
+        "request_id": "req-3c4-real-9",
+        "session_id": "3c4-real-9",
+        "profile_id": "chinook-music",
+        "status": "clarification_required",
+        "answer": "来源：真实 Chinook 样例库 + A 的 D12 V1.0 Markdown；仅有限问法，没有真实业务计算器。\n请补充或确认：具体年份，例如 2025 年（不会默认补年份）",
+        "route": "clarification",
+        "intent": {
+          "name": "target_attainment",
+          "confidence": null
+        },
+        "entities": [
+          {
+            "type": "genre",
+            "id": "Genre:1",
+            "label": "Rock"
+          }
+        ],
+        "time_range": null,
+        "sql_results": [],
+        "documents": [],
+        "calculations": [],
+        "metric_definitions": [],
+        "limitations": [
+          "来源：真实 Chinook 样例库 + A 的 D12 V1.0 Markdown；仅有限问法，没有真实业务计算器。",
+          "当前为有限规则解析，不支持任意自然语言；会话仅在本进程内保留。",
+          "样例数据库与团队自建业务资料，不是企业生产数据。",
+          "C 离线模型仅支持三类固定问法；当前不代表完整自由问法准确率。",
+          "A 的正式字段、别名、指标与文档目录配置尚未齐全；B 暂行配置待对齐。",
+          "3C-2 仅检索 A 的 D12 V1.0 原文；D12 未直接定义登记客户记录数，未解析 D06 等完整目标资料。",
+          "文档词项命中不等于完整语义答案、目标适用范围或公式绑定；本步不进行达标/增长计算。",
+          "此实例仅装配 SQL + RAG，不具备计算器或多格式解析。"
+        ],
+        "clarification": {
+          "question": "请补充或确认：具体年份，例如 2025 年（不会默认补年份）",
+          "missing_slots": [
+            {
+              "name": "year",
+              "description": "具体年份，例如 2025 年（不会默认补年份）"
+            }
+          ],
+          "options": [
+            "2025 年",
+            "仅 Rock，按销售额",
+            "取消当前问题"
+          ]
+        },
+        "trace": [],
+        "error": null
+      }
+    },
+    {
+      "question": "2025 Q3 Rock 销售额是多少，并解释口径？",
+      "response": {
+        "request_id": "req-3c4-real-10",
+        "session_id": "3c4-real-10",
+        "profile_id": "chinook-music",
+        "status": "unsupported",
+        "answer": "来源：真实 Chinook 样例库 + A 的 D12 V1.0 Markdown；仅有限问法，没有真实业务计算器。\n当前工具明确不支持这项任务，未生成业务结论。",
+        "route": "unsupported",
+        "intent": {
+          "name": "cross_source_query",
+          "confidence": null
+        },
+        "entities": [
+          {
+            "type": "genre",
+            "id": "Genre:1",
+            "label": "Rock"
+          }
+        ],
+        "time_range": {
+          "start": "2025-07-01",
+          "end": "2025-10-01",
+          "end_inclusive": false,
+          "label": "2025 Q3"
+        },
+        "sql_results": [],
+        "documents": [],
+        "calculations": [],
+        "metric_definitions": [],
+        "limitations": [
+          "来源：真实 Chinook 样例库 + A 的 D12 V1.0 Markdown；仅有限问法，没有真实业务计算器。",
+          "当前为有限规则解析，不支持任意自然语言；会话仅在本进程内保留。",
+          "样例数据库与团队自建业务资料，不是企业生产数据。",
+          "C 离线模型仅支持三类固定问法；当前不代表完整自由问法准确率。",
+          "A 的正式字段、别名、指标与文档目录配置尚未齐全；B 暂行配置待对齐。",
+          "3C-2 仅检索 A 的 D12 V1.0 原文；D12 未直接定义登记客户记录数，未解析 D06 等完整目标资料。",
+          "文档词项命中不等于完整语义答案、目标适用范围或公式绑定；本步不进行达标/增长计算。",
+          "此实例仅装配 SQL + RAG，不具备计算器或多格式解析。",
+          "数据库未提供表注释反射",
+          "第三阶段单候选基础流程；未实现精准 Schema Linking、复杂查询评测或自动修复。",
+          "本次未指定已注册指标；SQL 可执行不代表业务口径已由 A 确认。",
+          "固定问法离线演示模型；不是实际模型调用或自由问法效果。",
+          "SQL 后端暂不支持本次任务。",
+          "3C-1：C 离线固定三问 + 真实 Chinook 样例库；不是联网模型或完整自由问法能力。"
+        ],
+        "clarification": null,
+        "trace": [
+          {
+            "step": 1,
+            "tool": "sql.task",
+            "status": "unsupported",
+            "source_refs": [],
+            "duration_ms": 31
+          }
+        ],
+        "error": null
+      }
+    },
+    {
+      "question": "销售额口径是什么？",
+      "response": {
+        "request_id": "req-3c4-real-11",
+        "session_id": "3c4-real-11",
+        "profile_id": "chinook-music",
+        "status": "answered",
+        "answer": "来源：真实 Chinook 样例库 + A 的 D12 V1.0 Markdown；仅有限问法，没有真实业务计算器。\nD12 原文：“销售额按SUM(InvoiceLine.UnitPrice * InvoiceLine.Quantity)计算，单位为美元。”\n来源：D12 V1.0；经营查询与数据使用 FAQ / 四 指标怎么理解；D12@939adb9abd7e:L43-L49:P6:fbe125ab182f；data/knowledge/D12_经营查询与数据使用FAQ.md#L43-L49。\n仅解释该条文档规则，不代表已查询销售或购买客户数，也不形成目标达成结论。",
+        "route": "rag",
+        "intent": {
+          "name": "document_rule",
+          "confidence": null
+        },
+        "entities": [],
+        "time_range": null,
+        "sql_results": [],
+        "documents": [
+          {
+            "chunk_id": "D12@939adb9abd7e:L43-L49:P6:fbe125ab182f",
+            "doc_id": "D12",
+            "title": "经营查询与数据使用 FAQ",
+            "doc_type": "markdown",
+            "page": null,
+            "section": "经营查询与数据使用 FAQ / 四 指标怎么理解",
+            "text": "## 四 指标怎么理解\n销售额按SUM(InvoiceLine.UnitPrice * InvoiceLine.Quantity)计算，单位为美元。销量按SUM(InvoiceLine.Quantity)计算，单位为件。订单数按InvoiceId去重，购买客户数按CustomerId去重。\n客单价是同一筛选范围内销售额除以订单数，订单数为零时不计算。成交均价是销售额除以销量，用来观察明细成交结构，不能和Track.UnitPrice的目录价格混用。环比比较相邻完整周期，比较时指标、媒体类型、品类和地区口径保持一致。\n如果问题问“销售额和销量哪个更好”，先说明二者衡量对象不同：销售额反映金额，销量反映商品件数。订单数和购买客户数也不能当作销量使用。",
+            "score": 16.463298,
+            "source_uri": "data/knowledge/D12_经营查询与数据使用FAQ.md#L43-L49",
+            "retrieval_id": "retrieval-391a8a0e-a76b-41d9-8704-c48c3cf4d523",
+            "bbox": null
+          },
+          {
+            "chunk_id": "D12@939adb9abd7e:L65-L67:P9:3fe00bad1484",
+            "doc_id": "D12",
+            "title": "经营查询与数据使用 FAQ",
+            "doc_type": "markdown",
+            "page": null,
+            "section": "经营查询与数据使用 FAQ / 六 常见数字查询 / 第三季度Rock销售额达到目标了吗",
+            "text": "### 第三季度Rock销售额达到目标了吗\n先筛选2025-07-01至2025-10-01的音频实际销售，再用Rock销售额50.00美元的季度目标计算差额和达成率。如果还要给出下一步，就补充专题陈列、组合推荐和每周跟踪等品类动作。",
+            "score": 12.573606,
+            "source_uri": "data/knowledge/D12_经营查询与数据使用FAQ.md#L65-L67",
+            "retrieval_id": "retrieval-391a8a0e-a76b-41d9-8704-c48c3cf4d523",
+            "bbox": null
+          },
+          {
+            "chunk_id": "D12@939adb9abd7e:L27-L33:P4:cb48eaeb29de",
+            "doc_id": "D12",
+            "title": "经营查询与数据使用 FAQ",
+            "doc_type": "markdown",
+            "page": null,
+            "section": "经营查询与数据使用 FAQ / 二 默认的音乐范围",
+            "text": "## 二 默认的音乐范围\n没有特别说明时，“音乐”“音频”“音乐销售额”默认只统计音频MediaTypeId 1、2、4、5。MediaTypeId 3是视频，单独统计。全店、全部媒体或音乐加视频问题，在结果中写明是否将视频纳入合计。\n有17张订单同时包含音频和视频明细。计算音乐销售额时按InvoiceLine逐条筛选，不能直接使用Invoice.Total。查询全店订单金额时才使用完整订单范围，并区分全店销售额和音乐销售额。\n“Music Videos”是播放列表名称，不等于所有视频商品；“音乐播放列表”也不等于音频媒体类型。媒体范围看MediaType，主题关系看PlaylistTrack。",
+            "score": 8.742775,
+            "source_uri": "data/knowledge/D12_经营查询与数据使用FAQ.md#L27-L33",
+            "retrieval_id": "retrieval-391a8a0e-a76b-41d9-8704-c48c3cf4d523",
+            "bbox": null
+          },
+          {
+            "chunk_id": "D12@939adb9abd7e:L107-L111:P18:e3c37896fde9",
+            "doc_id": "D12",
+            "title": "经营查询与数据使用 FAQ",
+            "doc_type": "markdown",
+            "page": null,
+            "section": "经营查询与数据使用 FAQ / 九 需要澄清的问题",
+            "text": "## 九 需要澄清的问题\n“销售增长率是多少”需要比较周期、范围和指标。“第三季度销售情况怎么样”需要确认销售额、销量、订单数还是客户数，也要确认年份。“某商品属于什么类型”需要确认是Genre、MediaType、Album还是Playlist。\n“摇滚相关销售额”需要确认是否包括Rock And Roll；“金属销售额”需要确认是否包括Heavy Metal；“音乐和视频销售额”需要确认分开列示还是合计。“某播放列表表现”需要确认是收录数量还是销售额。",
+            "score": 8.336856,
+            "source_uri": "data/knowledge/D12_经营查询与数据使用FAQ.md#L107-L111",
+            "retrieval_id": "retrieval-391a8a0e-a76b-41d9-8704-c48c3cf4d523",
+            "bbox": null
+          },
+          {
+            "chunk_id": "D12@939adb9abd7e:L19-L25:P3:6ab0202d58d4",
+            "doc_id": "D12",
+            "title": "经营查询与数据使用 FAQ",
+            "doc_type": "markdown",
+            "page": null,
+            "section": "经营查询与数据使用 FAQ / 一 数据能回答什么",
+            "text": "## 一 数据能回答什么\n目前能查到客户、订单、订单明细、商品、专辑、艺术家、音乐分类、媒体格式和播放列表收录关系。常见结果包括销售额、销量、订单数、购买客户数、客单价、品类排名、商品排名、客户购买事实、账单地区分布和目标达成情况。\n经营资料中还记录了指标解释、时间范围、分类别名、客户分层、商品选品、品类动作、活动安排和季度复盘内容。一个问题同时涉及实际数字和业务规则时，先查数据库实际值，再采用文档中的目标、规则或动作。\n当前资料中没有成本、利润、毛利率、退款、库存、广告曝光、活动点击、播放量、收听时长和客户打开记录。遇到这些主题时，说明需要补充哪些数据，不用销售额、Playlist收录关系或支持负责人字段代替这些数据。",
+            "score": 7.270105,
+            "source_uri": "data/knowledge/D12_经营查询与数据使用FAQ.md#L19-L25",
+            "retrieval_id": "retrieval-391a8a0e-a76b-41d9-8704-c48c3cf4d523",
+            "bbox": null
+          }
+        ],
+        "calculations": [],
+        "metric_definitions": [],
+        "limitations": [
+          "来源：真实 Chinook 样例库 + A 的 D12 V1.0 Markdown；仅有限问法，没有真实业务计算器。",
+          "当前为有限规则解析，不支持任意自然语言；会话仅在本进程内保留。",
+          "样例数据库与团队自建业务资料，不是企业生产数据。",
+          "C 离线模型仅支持三类固定问法；当前不代表完整自由问法准确率。",
+          "A 的正式字段、别名、指标与文档目录配置尚未齐全；B 暂行配置待对齐。",
+          "3C-2 仅检索 A 的 D12 V1.0 原文；D12 未直接定义登记客户记录数，未解析 D06 等完整目标资料。",
+          "文档词项命中不等于完整语义答案、目标适用范围或公式绑定；本步不进行达标/增长计算。",
+          "此实例仅装配 SQL + RAG，不具备计算器或多格式解析。"
+        ],
+        "clarification": null,
+        "trace": [],
+        "error": null
+      }
+    },
+    {
+      "instance": "artificial_SQL_docs_actual_LocalCalculator",
+      "fixture_only": true
+    },
+    {
+      "question": "2025 Q3 Rock 目标差额是多少？",
+      "response": {
+        "request_id": "req-3c4-fixture-0",
+        "session_id": "3c4-fixture-0",
+        "profile_id": "fixture-music-3c3",
+        "status": "answered",
+        "answer": "人工测试来源：SQL 行、目标及公式文档是 fixture；仅 LocalCalculator 实际计算，不能当作真实销售或企业达标结论。\n人工实际值 80.00 USD，周期 [2025-07-01, 2025-10-01)，来源 sql-cell:[\"fixture-sql-aa59cc10-d45b-4438-968b-849a5376f16a\",0,\"actual_amount\"]\n人工目标 100.00 USD，周期 [2025-07-01, 2025-10-01)，来源 fixture-chunk-09a4e98f51c0698aa880\n指标 sales_amount；媒体 [1, 2, 4, 5]；品类 ['Genre:1']；地区 全部\n命名函数 difference；公式 actual - target；公式来源 fixture-chunk-09a4e98f51c0698aa880（fixture-v1）。\n人工测试目标差额：-20.00 USD；Decimal 计算，ROUND_HALF_UP 保留两位小数。\n计算来源：calc-3fd9acc7-2ce7-402c-8b42-4edc72b06271。这仅验证算术与绑定，不能当作真实销售、达标或增长结论。",
+        "route": "cross_source",
+        "intent": {
+          "name": "target_difference",
+          "confidence": null
+        },
+        "entities": [
+          {
+            "type": "genre",
+            "id": "Genre:1",
+            "label": "Rock"
+          }
+        ],
+        "time_range": {
+          "start": "2025-07-01",
+          "end": "2025-10-01",
+          "end_inclusive": false,
+          "label": "2025 Q3"
+        },
+        "sql_results": [
+          {
+            "query_id": "fixture-sql-aa59cc10-d45b-4438-968b-849a5376f16a",
+            "profile_id": "fixture-music-3c3",
+            "status": "success",
+            "columns": [
+              "actual_amount"
+            ],
+            "rows": [
+              {
+                "actual_amount": 80
+              }
+            ],
+            "row_count": 1,
+            "truncated": false,
+            "execution_ms": 0,
+            "source": {
+              "type": "fixture",
+              "name": "3C-3 authored numbers; no DB",
+              "tables": []
+            },
+            "sql": null,
+            "params": null,
+            "error": null
+          }
+        ],
+        "documents": [
+          {
+            "chunk_id": "fixture-chunk-09a4e98f51c0698aa880",
+            "doc_id": "fixture-3c3-policy",
+            "title": "3C-3 authored policy; NOT A business document",
+            "doc_type": "fixture",
+            "page": null,
+            "section": "fixture numeric target and named formulas",
+            "text": "AUTHORED 3C-3 FIXTURE: NOT A/D06/D12, NOT REAL BUSINESS\nversion=fixture-v1\nmetric=sales_amount; input_unit=USD\nmedia_ids=1,2,4,5; genre_id=Genre:1; countries=all\nperiod=2025-07-01/2025-10-01; target=100.00 USD\ndifference: actual - target\nattainment_rate: actual / target * 100\ngrowth_rate: (current - previous) / previous * 100",
+            "score": null,
+            "source_uri": "fixture://3c3/policy",
+            "retrieval_id": "retrieval-67eb5c7a-66f8-496b-a726-20c4ed843e97",
+            "bbox": null
+          }
+        ],
+        "calculations": [
+          {
+            "calculation_id": "calc-3fd9acc7-2ce7-402c-8b42-4edc72b06271",
+            "formula": "actual - target",
+            "inputs": [
+              "fixture-chunk-09a4e98f51c0698aa880",
+              "sql-cell:[\"fixture-sql-aa59cc10-d45b-4438-968b-849a5376f16a\",0,\"actual_amount\"]"
+            ],
+            "result": -20,
+            "unit": "USD"
+          }
+        ],
+        "metric_definitions": [],
+        "limitations": [
+          "人工测试来源：SQL 行、目标及公式文档是 fixture；仅 LocalCalculator 实际计算，不能当作真实销售或企业达标结论。",
+          "当前为有限规则解析，不支持任意自然语言；会话仅在本进程内保留。",
+          "3C-3 人工 SQL/文档 fixture；没有执行 SQL、读取真实业务资料或调用模型。",
+          "SQL 行是人工 fixture，没有生成或执行查询。"
+        ],
+        "clarification": null,
+        "trace": [
+          {
+            "step": 1,
+            "tool": "sql.task",
+            "status": "success",
+            "source_refs": [
+              "fixture-sql-aa59cc10-d45b-4438-968b-849a5376f16a"
+            ],
+            "duration_ms": 0
+          },
+          {
+            "step": 2,
+            "tool": "rag.retrieve",
+            "status": "success",
+            "source_refs": [
+              "fixture-chunk-09a4e98f51c0698aa880"
+            ],
+            "duration_ms": 0
+          },
+          {
+            "step": 3,
+            "tool": "calculator.calculate",
+            "status": "success",
+            "source_refs": [
+              "calc-3fd9acc7-2ce7-402c-8b42-4edc72b06271",
+              "fixture-chunk-09a4e98f51c0698aa880",
+              "sql-cell:[\"fixture-sql-aa59cc10-d45b-4438-968b-849a5376f16a\",0,\"actual_amount\"]"
+            ],
+            "duration_ms": 0
+          }
+        ],
+        "error": null
+      }
+    },
+    {
+      "question": "2025 Q3 Rock 目标完成率是多少？",
+      "response": {
+        "request_id": "req-3c4-fixture-1",
+        "session_id": "3c4-fixture-1",
+        "profile_id": "fixture-music-3c3",
+        "status": "answered",
+        "answer": "人工测试来源：SQL 行、目标及公式文档是 fixture；仅 LocalCalculator 实际计算，不能当作真实销售或企业达标结论。\n人工实际值 80.00 USD，周期 [2025-07-01, 2025-10-01)，来源 sql-cell:[\"fixture-sql-6ae0758e-0396-4de3-88fd-c217ab8df4f5\",0,\"actual_amount\"]\n人工目标 100.00 USD，周期 [2025-07-01, 2025-10-01)，来源 fixture-chunk-09a4e98f51c0698aa880\n指标 sales_amount；媒体 [1, 2, 4, 5]；品类 ['Genre:1']；地区 全部\n命名函数 attainment_rate；公式 actual / target * 100；公式来源 fixture-chunk-09a4e98f51c0698aa880（fixture-v1）。\n人工测试达成率：80.00 %；Decimal 计算，ROUND_HALF_UP 保留两位小数。\n计算来源：calc-3798d684-419b-41ff-95ce-ff22d2b609ac。这仅验证算术与绑定，不能当作真实销售、达标或增长结论。",
+        "route": "cross_source",
+        "intent": {
+          "name": "target_attainment",
+          "confidence": null
+        },
+        "entities": [
+          {
+            "type": "genre",
+            "id": "Genre:1",
+            "label": "Rock"
+          }
+        ],
+        "time_range": {
+          "start": "2025-07-01",
+          "end": "2025-10-01",
+          "end_inclusive": false,
+          "label": "2025 Q3"
+        },
+        "sql_results": [
+          {
+            "query_id": "fixture-sql-6ae0758e-0396-4de3-88fd-c217ab8df4f5",
+            "profile_id": "fixture-music-3c3",
+            "status": "success",
+            "columns": [
+              "actual_amount"
+            ],
+            "rows": [
+              {
+                "actual_amount": 80
+              }
+            ],
+            "row_count": 1,
+            "truncated": false,
+            "execution_ms": 0,
+            "source": {
+              "type": "fixture",
+              "name": "3C-3 authored numbers; no DB",
+              "tables": []
+            },
+            "sql": null,
+            "params": null,
+            "error": null
+          }
+        ],
+        "documents": [
+          {
+            "chunk_id": "fixture-chunk-09a4e98f51c0698aa880",
+            "doc_id": "fixture-3c3-policy",
+            "title": "3C-3 authored policy; NOT A business document",
+            "doc_type": "fixture",
+            "page": null,
+            "section": "fixture numeric target and named formulas",
+            "text": "AUTHORED 3C-3 FIXTURE: NOT A/D06/D12, NOT REAL BUSINESS\nversion=fixture-v1\nmetric=sales_amount; input_unit=USD\nmedia_ids=1,2,4,5; genre_id=Genre:1; countries=all\nperiod=2025-07-01/2025-10-01; target=100.00 USD\ndifference: actual - target\nattainment_rate: actual / target * 100\ngrowth_rate: (current - previous) / previous * 100",
+            "score": null,
+            "source_uri": "fixture://3c3/policy",
+            "retrieval_id": "retrieval-b288cf84-d22a-43cc-a6a4-7ed08ccfc7df",
+            "bbox": null
+          }
+        ],
+        "calculations": [
+          {
+            "calculation_id": "calc-3798d684-419b-41ff-95ce-ff22d2b609ac",
+            "formula": "actual / target * 100",
+            "inputs": [
+              "fixture-chunk-09a4e98f51c0698aa880",
+              "sql-cell:[\"fixture-sql-6ae0758e-0396-4de3-88fd-c217ab8df4f5\",0,\"actual_amount\"]"
+            ],
+            "result": 80,
+            "unit": "%"
+          }
+        ],
+        "metric_definitions": [],
+        "limitations": [
+          "人工测试来源：SQL 行、目标及公式文档是 fixture；仅 LocalCalculator 实际计算，不能当作真实销售或企业达标结论。",
+          "当前为有限规则解析，不支持任意自然语言；会话仅在本进程内保留。",
+          "3C-3 人工 SQL/文档 fixture；没有执行 SQL、读取真实业务资料或调用模型。",
+          "SQL 行是人工 fixture，没有生成或执行查询。"
+        ],
+        "clarification": null,
+        "trace": [
+          {
+            "step": 1,
+            "tool": "sql.task",
+            "status": "success",
+            "source_refs": [
+              "fixture-sql-6ae0758e-0396-4de3-88fd-c217ab8df4f5"
+            ],
+            "duration_ms": 0
+          },
+          {
+            "step": 2,
+            "tool": "rag.retrieve",
+            "status": "success",
+            "source_refs": [
+              "fixture-chunk-09a4e98f51c0698aa880"
+            ],
+            "duration_ms": 0
+          },
+          {
+            "step": 3,
+            "tool": "calculator.calculate",
+            "status": "success",
+            "source_refs": [
+              "calc-3798d684-419b-41ff-95ce-ff22d2b609ac",
+              "fixture-chunk-09a4e98f51c0698aa880",
+              "sql-cell:[\"fixture-sql-6ae0758e-0396-4de3-88fd-c217ab8df4f5\",0,\"actual_amount\"]"
+            ],
+            "duration_ms": 0
+          }
+        ],
+        "error": null
+      }
+    },
+    {
+      "question": "2025 Q3 Rock 销售额环比增长率是多少？",
+      "response": {
+        "request_id": "req-3c4-fixture-2",
+        "session_id": "3c4-fixture-2",
+        "profile_id": "fixture-music-3c3",
+        "status": "answered",
+        "answer": "人工测试来源：SQL 行、目标及公式文档是 fixture；仅 LocalCalculator 实际计算，不能当作真实销售或企业达标结论。\n人工本期值 80.00 USD，周期 [2025-07-01, 2025-10-01)，来源 sql-cell:[\"fixture-sql-4a025fb6-17df-4fcb-8e6b-6dc7b217f0af\",0,\"actual_amount\"]\n人工基期值 50.00 USD，周期 [2025-04-01, 2025-07-01)，来源 sql-cell:[\"fixture-sql-8cadd54a-d9f2-4dab-8f97-049477f611a8\",0,\"previous_amount\"]\n指标 sales_amount；媒体 [1, 2, 4, 5]；品类 ['Genre:1']；地区 全部\n命名函数 growth_rate；公式 (current - previous) / previous * 100；公式来源 fixture-chunk-09a4e98f51c0698aa880（fixture-v1）。\n人工测试增长率：60.00 %；Decimal 计算，ROUND_HALF_UP 保留两位小数。\n计算来源：calc-9233518e-f88a-4b02-8d8f-334c7430dd6e。这仅验证算术与绑定，不能当作真实销售、达标或增长结论。",
+        "route": "cross_source",
+        "intent": {
+          "name": "growth_rate",
+          "confidence": null
+        },
+        "entities": [
+          {
+            "type": "genre",
+            "id": "Genre:1",
+            "label": "Rock"
+          }
+        ],
+        "time_range": {
+          "start": "2025-07-01",
+          "end": "2025-10-01",
+          "end_inclusive": false,
+          "label": "2025 Q3"
+        },
+        "sql_results": [
+          {
+            "query_id": "fixture-sql-4a025fb6-17df-4fcb-8e6b-6dc7b217f0af",
+            "profile_id": "fixture-music-3c3",
+            "status": "success",
+            "columns": [
+              "actual_amount"
+            ],
+            "rows": [
+              {
+                "actual_amount": 80
+              }
+            ],
+            "row_count": 1,
+            "truncated": false,
+            "execution_ms": 0,
+            "source": {
+              "type": "fixture",
+              "name": "3C-3 authored numbers; no DB",
+              "tables": []
+            },
+            "sql": null,
+            "params": null,
+            "error": null
+          },
+          {
+            "query_id": "fixture-sql-8cadd54a-d9f2-4dab-8f97-049477f611a8",
+            "profile_id": "fixture-music-3c3",
+            "status": "success",
+            "columns": [
+              "previous_amount"
+            ],
+            "rows": [
+              {
+                "previous_amount": 50
+              }
+            ],
+            "row_count": 1,
+            "truncated": false,
+            "execution_ms": 0,
+            "source": {
+              "type": "fixture",
+              "name": "3C-3 authored numbers; no DB",
+              "tables": []
+            },
+            "sql": null,
+            "params": null,
+            "error": null
+          }
+        ],
+        "documents": [
+          {
+            "chunk_id": "fixture-chunk-09a4e98f51c0698aa880",
+            "doc_id": "fixture-3c3-policy",
+            "title": "3C-3 authored policy; NOT A business document",
+            "doc_type": "fixture",
+            "page": null,
+            "section": "fixture numeric target and named formulas",
+            "text": "AUTHORED 3C-3 FIXTURE: NOT A/D06/D12, NOT REAL BUSINESS\nversion=fixture-v1\nmetric=sales_amount; input_unit=USD\nmedia_ids=1,2,4,5; genre_id=Genre:1; countries=all\nperiod=2025-07-01/2025-10-01; target=100.00 USD\ndifference: actual - target\nattainment_rate: actual / target * 100\ngrowth_rate: (current - previous) / previous * 100",
+            "score": null,
+            "source_uri": "fixture://3c3/policy",
+            "retrieval_id": "retrieval-3f416296-3daa-4d3f-beb7-4c7ad1298eb7",
+            "bbox": null
+          }
+        ],
+        "calculations": [
+          {
+            "calculation_id": "calc-9233518e-f88a-4b02-8d8f-334c7430dd6e",
+            "formula": "(current - previous) / previous * 100",
+            "inputs": [
+              "fixture-chunk-09a4e98f51c0698aa880",
+              "sql-cell:[\"fixture-sql-4a025fb6-17df-4fcb-8e6b-6dc7b217f0af\",0,\"actual_amount\"]",
+              "sql-cell:[\"fixture-sql-8cadd54a-d9f2-4dab-8f97-049477f611a8\",0,\"previous_amount\"]"
+            ],
+            "result": 60,
+            "unit": "%"
+          }
+        ],
+        "metric_definitions": [],
+        "limitations": [
+          "人工测试来源：SQL 行、目标及公式文档是 fixture；仅 LocalCalculator 实际计算，不能当作真实销售或企业达标结论。",
+          "当前为有限规则解析，不支持任意自然语言；会话仅在本进程内保留。",
+          "3C-3 人工 SQL/文档 fixture；没有执行 SQL、读取真实业务资料或调用模型。",
+          "SQL 行是人工 fixture，没有生成或执行查询。"
+        ],
+        "clarification": null,
+        "trace": [
+          {
+            "step": 1,
+            "tool": "sql.task",
+            "status": "success",
+            "source_refs": [
+              "fixture-sql-4a025fb6-17df-4fcb-8e6b-6dc7b217f0af",
+              "fixture-sql-8cadd54a-d9f2-4dab-8f97-049477f611a8"
+            ],
+            "duration_ms": 0
+          },
+          {
+            "step": 2,
+            "tool": "rag.retrieve",
+            "status": "success",
+            "source_refs": [
+              "fixture-chunk-09a4e98f51c0698aa880"
+            ],
+            "duration_ms": 0
+          },
+          {
+            "step": 3,
+            "tool": "calculator.calculate",
+            "status": "success",
+            "source_refs": [
+              "calc-9233518e-f88a-4b02-8d8f-334c7430dd6e",
+              "fixture-chunk-09a4e98f51c0698aa880",
+              "sql-cell:[\"fixture-sql-4a025fb6-17df-4fcb-8e6b-6dc7b217f0af\",0,\"actual_amount\"]",
+              "sql-cell:[\"fixture-sql-8cadd54a-d9f2-4dab-8f97-049477f611a8\",0,\"previous_amount\"]"
+            ],
+            "duration_ms": 0
+          }
+        ],
+        "error": null
+      }
+    },
+    {
+      "case": "zero_denominator",
+      "response": {
+        "request_id": "req-3c4-zero",
+        "session_id": "session-e0ef5af1-6806-4683-9cfb-c701f2e38e7e",
+        "profile_id": "fixture-music-3c3",
+        "status": "error",
+        "answer": "人工测试来源：SQL 行、目标及公式文档是 fixture；仅 LocalCalculator 实际计算，不能当作真实销售或企业达标结论。\n本轮处理失败，未输出成功数值结论；请查看结构化 error。",
+        "route": "cross_source",
+        "intent": {
+          "name": "growth_rate",
+          "confidence": null
+        },
+        "entities": [
+          {
+            "type": "genre",
+            "id": "Genre:1",
+            "label": "Rock"
+          }
+        ],
+        "time_range": {
+          "start": "2025-07-01",
+          "end": "2025-10-01",
+          "end_inclusive": false,
+          "label": "2025 Q3"
+        },
+        "sql_results": [
+          {
+            "query_id": "fixture-sql-afd87242-3c85-4ac9-b9df-7457eef91eb7",
+            "profile_id": "fixture-music-3c3",
+            "status": "success",
+            "columns": [
+              "actual_amount"
+            ],
+            "rows": [
+              {
+                "actual_amount": 80
+              }
+            ],
+            "row_count": 1,
+            "truncated": false,
+            "execution_ms": 0,
+            "source": {
+              "type": "fixture",
+              "name": "3C-3 authored numbers; no DB",
+              "tables": []
+            },
+            "sql": null,
+            "params": null,
+            "error": null
+          },
+          {
+            "query_id": "fixture-sql-ead6591e-d6eb-4cab-a17c-0d5cb4f5e575",
+            "profile_id": "fixture-music-3c3",
+            "status": "success",
+            "columns": [
+              "previous_amount"
+            ],
+            "rows": [
+              {
+                "previous_amount": 0
+              }
+            ],
+            "row_count": 1,
+            "truncated": false,
+            "execution_ms": 0,
+            "source": {
+              "type": "fixture",
+              "name": "3C-3 authored numbers; no DB",
+              "tables": []
+            },
+            "sql": null,
+            "params": null,
+            "error": null
+          }
+        ],
+        "documents": [
+          {
+            "chunk_id": "fixture-chunk-09a4e98f51c0698aa880",
+            "doc_id": "fixture-3c3-policy",
+            "title": "3C-3 authored policy; NOT A business document",
+            "doc_type": "fixture",
+            "page": null,
+            "section": "fixture numeric target and named formulas",
+            "text": "AUTHORED 3C-3 FIXTURE: NOT A/D06/D12, NOT REAL BUSINESS\nversion=fixture-v1\nmetric=sales_amount; input_unit=USD\nmedia_ids=1,2,4,5; genre_id=Genre:1; countries=all\nperiod=2025-07-01/2025-10-01; target=100.00 USD\ndifference: actual - target\nattainment_rate: actual / target * 100\ngrowth_rate: (current - previous) / previous * 100",
+            "score": null,
+            "source_uri": "fixture://3c3/policy",
+            "retrieval_id": "retrieval-37475dc5-3bda-4e47-abbd-e2ae563813ad",
+            "bbox": null
+          }
+        ],
+        "calculations": [],
+        "metric_definitions": [],
+        "limitations": [
+          "人工测试来源：SQL 行、目标及公式文档是 fixture；仅 LocalCalculator 实际计算，不能当作真实销售或企业达标结论。",
+          "当前为有限规则解析，不支持任意自然语言；会话仅在本进程内保留。",
+          "3C-3 人工 SQL/文档 fixture；没有执行 SQL、读取真实业务资料或调用模型。",
+          "SQL 行是人工 fixture，没有生成或执行查询。"
+        ],
+        "clarification": null,
+        "trace": [
+          {
+            "step": 1,
+            "tool": "sql.task",
+            "status": "success",
+            "source_refs": [
+              "fixture-sql-afd87242-3c85-4ac9-b9df-7457eef91eb7",
+              "fixture-sql-ead6591e-d6eb-4cab-a17c-0d5cb4f5e575"
+            ],
+            "duration_ms": 16
+          },
+          {
+            "step": 2,
+            "tool": "rag.retrieve",
+            "status": "success",
+            "source_refs": [
+              "fixture-chunk-09a4e98f51c0698aa880"
+            ],
+            "duration_ms": 0
+          },
+          {
+            "step": 3,
+            "tool": "calculator.calculate",
+            "status": "failed",
+            "source_refs": [],
+            "duration_ms": 0
+          }
+        ],
+        "error": {
+          "code": "CALCULATION_ZERO_DENOMINATOR",
+          "message": "基期为零，不能计算增长率。",
+          "retryable": false,
+          "details": null
+        }
+      }
+    },
+    {
+      "database_D12_and_C_unchanged": true,
+      "network_model_called": false,
+      "gold_read": false,
+      "default_api_wired": false,
+      "new_dependencies": false
+    }
+  ]
+}
+

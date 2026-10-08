@@ -1,0 +1,768 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:chinook:public-contract",
+  "$defs": {
+    "ApiError": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "minLength": 1,
+          "title": "Code",
+          "type": "string"
+        },
+        "details": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JsonValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "message": {
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
+        },
+        "retryable": {
+          "title": "Retryable",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "retryable"
+      ],
+      "title": "ApiError",
+      "type": "object"
+    },
+    "AskOptions": {
+      "additionalProperties": false,
+      "properties": {
+        "max_rows": {
+          "default": 50,
+          "maximum": 200,
+          "minimum": 1,
+          "title": "Max Rows",
+          "type": "integer"
+        },
+        "show_trace": {
+          "default": true,
+          "title": "Show Trace",
+          "type": "boolean"
+        },
+        "top_k": {
+          "default": 5,
+          "maximum": 10,
+          "minimum": 1,
+          "title": "Top K",
+          "type": "integer"
+        }
+      },
+      "title": "AskOptions",
+      "type": "object"
+    },
+    "AskRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "options": {
+          "$ref": "#/$defs/AskOptions"
+        },
+        "profile_id": {
+          "minLength": 1,
+          "title": "Profile Id",
+          "type": "string"
+        },
+        "question": {
+          "minLength": 1,
+          "title": "Question",
+          "type": "string"
+        },
+        "session_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Session Id"
+        },
+        "user_role": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "User Role"
+        }
+      },
+      "required": [
+        "question",
+        "profile_id"
+      ],
+      "title": "AskRequest",
+      "type": "object"
+    },
+    "AskResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "answer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Answer"
+        },
+        "calculations": {
+          "items": {
+            "$ref": "#/$defs/Calculation"
+          },
+          "title": "Calculations",
+          "type": "array"
+        },
+        "clarification": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Clarification"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "documents": {
+          "items": {
+            "$ref": "#/$defs/DocumentChunk"
+          },
+          "title": "Documents",
+          "type": "array"
+        },
+        "entities": {
+          "items": {
+            "additionalProperties": {
+              "$ref": "#/$defs/JsonValue"
+            },
+            "type": "object"
+          },
+          "title": "Entities",
+          "type": "array"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApiError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "intent": {
+          "$ref": "#/$defs/Intent"
+        },
+        "limitations": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Limitations",
+          "type": "array"
+        },
+        "metric_definitions": {
+          "items": {
+            "$ref": "#/$defs/MetricDefinition"
+          },
+          "title": "Metric Definitions",
+          "type": "array"
+        },
+        "profile_id": {
+          "minLength": 1,
+          "title": "Profile Id",
+          "type": "string"
+        },
+        "request_id": {
+          "minLength": 1,
+          "title": "Request Id",
+          "type": "string"
+        },
+        "route": {
+          "$ref": "#/$defs/Route"
+        },
+        "session_id": {
+          "minLength": 1,
+          "title": "Session Id",
+          "type": "string"
+        },
+        "sql_results": {
+          "items": {
+            "$ref": "#/$defs/SqlQueryResponse"
+          },
+          "title": "Sql Results",
+          "type": "array"
+        },
+        "status": {
+          "$ref": "#/$defs/AskStatus"
+        },
+        "time_range": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeRange"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trace": {
+          "items": {
+            "$ref": "#/$defs/TraceStep"
+          },
+          "title": "Trace",
+          "type": "array"
+        }
+      },
+      "required": [
+        "request_id",
+        "session_id",
+        "profile_id",
+        "status",
+        "answer",
+        "route",
+        "intent",
+        "time_range",
+        "clarification",
+        "error"
+      ],
+      "title": "AskResponse",
+      "type": "object"
+    },
+    "AskStatus": {
+      "enum": [
+        "answered",
+        "clarification_required",
+        "insufficient_evidence",
+        "unsupported",
+        "error"
+      ],
+      "title": "AskStatus",
+      "type": "string"
+    },
+    "Calculation": {
+      "additionalProperties": false,
+      "properties": {
+        "calculation_id": {
+          "minLength": 1,
+          "title": "Calculation Id",
+          "type": "string"
+        },
+        "formula": {
+          "minLength": 1,
+          "title": "Formula",
+          "type": "string"
+        },
+        "inputs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Inputs",
+          "type": "array"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Result"
+        },
+        "unit": {
+          "minLength": 1,
+          "title": "Unit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "calculation_id",
+        "formula",
+        "result",
+        "unit"
+      ],
+      "title": "Calculation",
+      "type": "object"
+    },
+    "Clarification": {
+      "additionalProperties": false,
+      "properties": {
+        "missing_slots": {
+          "items": {
+            "$ref": "#/$defs/MissingSlot"
+          },
+          "title": "Missing Slots",
+          "type": "array"
+        },
+        "options": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Options",
+          "type": "array"
+        },
+        "question": {
+          "minLength": 1,
+          "title": "Question",
+          "type": "string"
+        }
+      },
+      "required": [
+        "question"
+      ],
+      "title": "Clarification",
+      "type": "object"
+    },
+    "DocumentChunk": {
+      "additionalProperties": false,
+      "properties": {
+        "bbox": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JsonValue"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "chunk_id": {
+          "minLength": 1,
+          "title": "Chunk Id",
+          "type": "string"
+        },
+        "doc_id": {
+          "minLength": 1,
+          "title": "Doc Id",
+          "type": "string"
+        },
+        "doc_type": {
+          "minLength": 1,
+          "title": "Doc Type",
+          "type": "string"
+        },
+        "page": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Page"
+        },
+        "retrieval_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Retrieval Id"
+        },
+        "score": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Score"
+        },
+        "section": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Section"
+        },
+        "source_uri": {
+          "minLength": 1,
+          "title": "Source Uri",
+          "type": "string"
+        },
+        "text": {
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "chunk_id",
+        "doc_id",
+        "title",
+        "doc_type",
+        "text",
+        "source_uri"
+      ],
+      "title": "DocumentChunk",
+      "type": "object"
+    },
+    "HealthResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "service": {
+          "title": "Service",
+          "type": "string"
+        },
+        "status": {
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "status",
+        "service"
+      ],
+      "title": "HealthResponse",
+      "type": "object"
+    },
+    "Intent": {
+      "additionalProperties": false,
+      "properties": {
+        "confidence": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Confidence"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "Intent",
+      "type": "object"
+    },
+    "JsonValue": {},
+    "MetricDefinition": {
+      "additionalProperties": false,
+      "properties": {
+        "definition": {
+          "minLength": 1,
+          "title": "Definition",
+          "type": "string"
+        },
+        "metric_id": {
+          "minLength": 1,
+          "title": "Metric Id",
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "source_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Refs",
+          "type": "array"
+        },
+        "unit": {
+          "minLength": 1,
+          "title": "Unit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "metric_id",
+        "name",
+        "definition",
+        "unit"
+      ],
+      "title": "MetricDefinition",
+      "type": "object"
+    },
+    "MissingSlot": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "minLength": 1,
+          "title": "Description",
+          "type": "string"
+        },
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "description"
+      ],
+      "title": "MissingSlot",
+      "type": "object"
+    },
+    "Route": {
+      "enum": [
+        "sql",
+        "rag",
+        "cross_source",
+        "clarification",
+        "unsupported"
+      ],
+      "title": "Route",
+      "type": "string"
+    },
+    "SqlExecutionStatus": {
+      "enum": [
+        "success",
+        "rejected",
+        "failed"
+      ],
+      "title": "SqlExecutionStatus",
+      "type": "string"
+    },
+    "SqlQueryResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "columns": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Columns",
+          "type": "array"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApiError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "execution_ms": {
+          "minimum": 0,
+          "title": "Execution Ms",
+          "type": "integer"
+        },
+        "params": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "$ref": "#/$defs/JsonValue"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Params"
+        },
+        "profile_id": {
+          "minLength": 1,
+          "title": "Profile Id",
+          "type": "string"
+        },
+        "query_id": {
+          "minLength": 1,
+          "title": "Query Id",
+          "type": "string"
+        },
+        "row_count": {
+          "minimum": 0,
+          "title": "Row Count",
+          "type": "integer"
+        },
+        "rows": {
+          "items": {
+            "additionalProperties": {
+              "$ref": "#/$defs/JsonValue"
+            },
+            "type": "object"
+          },
+          "title": "Rows",
+          "type": "array"
+        },
+        "source": {
+          "$ref": "#/$defs/SqlSource"
+        },
+        "sql": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Sql"
+        },
+        "status": {
+          "$ref": "#/$defs/SqlExecutionStatus"
+        },
+        "truncated": {
+          "title": "Truncated",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "query_id",
+        "profile_id",
+        "status",
+        "row_count",
+        "truncated",
+        "execution_ms",
+        "source"
+      ],
+      "title": "SqlQueryResponse",
+      "type": "object"
+    },
+    "SqlSource": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "tables": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tables",
+          "type": "array"
+        },
+        "type": {
+          "minLength": 1,
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "name"
+      ],
+      "title": "SqlSource",
+      "type": "object"
+    },
+    "TimeRange": {
+      "additionalProperties": false,
+      "properties": {
+        "end": {
+          "minLength": 1,
+          "title": "End",
+          "type": "string"
+        },
+        "end_inclusive": {
+          "title": "End Inclusive",
+          "type": "boolean"
+        },
+        "label": {
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "start": {
+          "minLength": 1,
+          "title": "Start",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "end_inclusive",
+        "label"
+      ],
+      "title": "TimeRange",
+      "type": "object"
+    },
+    "TraceStep": {
+      "additionalProperties": false,
+      "properties": {
+        "duration_ms": {
+          "minimum": 0,
+          "title": "Duration Ms",
+          "type": "integer"
+        },
+        "source_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Refs",
+          "type": "array"
+        },
+        "status": {
+          "minLength": 1,
+          "title": "Status",
+          "type": "string"
+        },
+        "step": {
+          "minimum": 1,
+          "title": "Step",
+          "type": "integer"
+        },
+        "tool": {
+          "minLength": 1,
+          "title": "Tool",
+          "type": "string"
+        }
+      },
+      "required": [
+        "step",
+        "tool",
+        "status",
+        "duration_ms"
+      ],
+      "title": "TraceStep",
+      "type": "object"
+    }
+  }
+}
