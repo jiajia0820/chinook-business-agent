@@ -1,7 +1,7 @@
 {
   "version": "chinook-business-1",
   "metrics": [
-    {"metric_id":"customer_count","name":"客户记录数","definition":"Customer 表记录数，不等于购买客户数。","unit":"条","grain":"customer","required_columns":["main.Customer.CustomerId"],"aggregation":"count_rows","required_slots":[],"source_refs":["D01","D12"]},
+    {"metric_id":"customer_count","name":"客户记录数","definition":"Customer 表记录数，不等于购买客户数；演示口径，尚未由 A 正式确认。","unit":"条","grain":"customer","required_columns":["main.Customer.CustomerId"],"aggregation":"count_rows","required_slots":[],"source_refs":["D01","D12"]},
     {"metric_id":"sales_amount","name":"销售额","definition":"按 InvoiceLine.UnitPrice * InvoiceLine.Quantity 汇总，默认只统计音频媒体，日期采用左闭右开。","unit":"USD","grain":"period_scope","required_columns":["main.InvoiceLine.UnitPrice","main.InvoiceLine.Quantity","main.Invoice.InvoiceDate","main.Track.MediaTypeId"],"aggregation":"sum(line.unit_price * line.quantity)","required_slots":["start_date","end_date","media_ids"],"source_refs":["D01","D12"]},
     {"metric_id":"units_sold","name":"销量","definition":"按 InvoiceLine.Quantity 汇总，单位为件。","unit":"件","grain":"period_scope","required_columns":["main.InvoiceLine.Quantity","main.Invoice.InvoiceDate","main.Track.MediaTypeId"],"aggregation":"sum(line.quantity)","required_slots":["start_date","end_date","media_ids"],"source_refs":["D01","D12"]},
     {"metric_id":"order_count","name":"订单数","definition":"在筛选范围内按 InvoiceId 去重计数。","unit":"单","grain":"period_scope","required_columns":["main.Invoice.InvoiceId","main.Invoice.InvoiceDate"],"aggregation":"count(distinct invoice.invoice_id)","required_slots":["start_date","end_date"],"source_refs":["D01","D02"]},
