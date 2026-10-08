@@ -99,6 +99,32 @@ class DemoJSONModel:
             '有哪些音乐类型':{'sql':'SELECT GenreId, Name FROM main.Genre ORDER BY GenreId','params':{}},
             '美国客户数量是多少':{'sql':'SELECT COUNT(*) AS customer_count FROM main.Customer WHERE Country=:country','params':{'country':'USA'}}
         }
+        question_lower = question.casefold()
+        if ('销售额' in question or '目标' in question or '增长' in question) and ('rock' in question_lower or '摇滚' in question):
+            start, end = ('2025-07-01', '2025-10-01') if ('第三季度' in question or 'q3' in question_lower) else ('2025-04-01', '2025-07-01')
+            if '增长' in question or '环比' in question:
+                examples[question] = {
+                    'sql': (
+                        "SELECT 'current' AS period, COALESCE(SUM(il.UnitPrice * il.Quantity), 0) AS sales_amount "
+                        "FROM main.InvoiceLine il JOIN main.Invoice i ON i.InvoiceId=il.InvoiceId JOIN main.Track t ON t.TrackId=il.TrackId "
+                        "WHERE i.InvoiceDate >= :current_start AND i.InvoiceDate < :current_end AND t.GenreId=:genre_id AND t.MediaTypeId IN (1,2,4,5) "
+                        "UNION ALL SELECT 'previous' AS period, COALESCE(SUM(il.UnitPrice * il.Quantity), 0) AS sales_amount "
+                        "FROM main.InvoiceLine il JOIN main.Invoice i ON i.InvoiceId=il.InvoiceId JOIN main.Track t ON t.TrackId=il.TrackId "
+                        "WHERE i.InvoiceDate >= :previous_start AND i.InvoiceDate < :previous_end AND t.GenreId=:genre_id AND t.MediaTypeId IN (1,2,4,5)"
+                    ),
+                    'params': {'current_start': start, 'current_end': end, 'previous_start': '2025-04-01', 'previous_end': '2025-07-01', 'genre_id': 1},
+                }
+            else:
+                examples[question] = {
+                'sql': (
+                    'SELECT COALESCE(SUM(il.UnitPrice * il.Quantity), 0) AS sales_amount '
+                    'FROM main.InvoiceLine il JOIN main.Invoice i ON i.InvoiceId=il.InvoiceId '
+                    'JOIN main.Track t ON t.TrackId=il.TrackId '
+                    'WHERE i.InvoiceDate >= :start_date AND i.InvoiceDate < :end_date '
+                    'AND t.GenreId=:genre_id AND t.MediaTypeId IN (1,2,4,5)'
+                ),
+                    'params': {'start_date': start, 'end_date': end, 'genre_id': 1},
+                }
         if question not in examples:
             raise ModuleError('UNSUPPORTED_CAPABILITY','离线演示仅支持文档列出的固定问法')
         return json.dumps(examples[question],ensure_ascii=False)

@@ -38,9 +38,11 @@ def validate_request(request, profile):
         raise request_error('resolved_slots 类型错误或包含未声明槽位')
     for name,value in slots.items():
         rule=profile.data['slots'][name]
-        allowed={'integer':(int,),'number':(int,float),'boolean':(bool,),'string':(str,)}[rule['type']]
+        allowed={'integer':(int,),'number':(int,float),'boolean':(bool,),'string':(str,),'array':(list,),'object':(dict,)}[rule['type']]
         if type(value) not in allowed or (type(value) is float and not math.isfinite(value)):
             raise request_error('槽位类型不符合 profile')
+        if rule['type'] == 'array' and (not value or any(type(item) is not int or item < 1 for item in value) or len(value) != len(set(value))):
+            raise request_error('数组槽位需要唯一的正整数')
         if 'values' in rule and value not in rule['values']:
             raise request_error('槽位值未被 profile 允许')
     if 'metric_ids' in context: strings(context['metric_ids'],'metric_ids',nonempty=False)

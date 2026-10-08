@@ -13,12 +13,12 @@ from ..tools.models import Capability, InternalModel
 
 
 class SlotRule(InternalModel):
-    type: Literal["integer", "number", "boolean", "string"]
+    type: Literal["integer", "number", "boolean", "string", "array", "object"]
     values: list[JsonValue] | None = None
     required_by_default: bool = False
 
     def accepts(self, value: JsonValue) -> bool:
-        accepted_types = {"integer": (int,), "number": (int, float), "boolean": (bool,), "string": (str,)}
+        accepted_types = {"integer": (int,), "number": (int, float), "boolean": (bool,), "string": (str,), "array": (list,), "object": (dict,)}
         if type(value) not in accepted_types[self.type]:
             return False
         return self.values is None or any(type(item) is type(value) and item == value for item in self.values)

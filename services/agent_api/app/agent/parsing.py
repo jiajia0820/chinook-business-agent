@@ -226,6 +226,8 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
     if task.intent == "target_attainment" and not task.business_metric_ids:
         return clarify(task, ["target_metric"] + ([] if task.slots.get("year") else ["year"]), reused=reused, rules=["target_metric_not_inferred"])
     missing = []
+    if task.intent == "unknown" and profile.supports("rag") and not years and not quarters and not entities:
+        task.intent, task.route = "document_rule", "rag"
     if task.intent == "unknown" or hits.get("vague_metric") and not task.business_metric_ids:
         missing.append("metric" if hits.get("vague_metric") else "intent")
     if task.route != "rag":
@@ -242,15 +244,18 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
     # Do not answer a narrower day/month question using a whole-quarter query.
     if re.search(r"\d{1,2}月|\d{1,2}日|最近|今年|去年|本季度|本月", q):
         missing.append("time_range")
-    if re.search(r"第?[五六七八九0-9]{1,2}季度", q) and not re.search(r"第?[一二三四1-4]季度", q):
+    if re.search(r"第?(?:[五六七八九]|[5-9])季度", q) and not re.search(r"第?[一二三四1-4]季度", q):
         missing.append("time_range")
     if len(years) > 1 or len(quarters) > 1:
-        if task.intent != "growth_rate" or len(quarters) != 2 or len(years) > 2 or "对比" not in q:
+        if task.intent != "growth_rate" or len(quarters) != 2 or len(years) > 2 or not any(term in q for term in ("对比", "相比")):
             missing.append("time_range")
-    if task.intent != "unknown" and task.route != "rag" and _unparsed_query_text(q, profile):
+    if task.intent != "unknown" and task.route != "rag" and profile.sql_backend.model_mode == "offline" and _unparsed_query_text(q, profile):
         missing.append("filter_scope")
     try:
         task.time_range = _time_range(task.slots)
+        if task.time_range is not None:
+            task.slots["start_date"] = task.time_range.start
+            task.slots["end_date"] = task.time_range.end
     except (ValueError, TypeError):
         missing.append("time_range")
     if base and not explicit_slots and not entities and not metric_ids and not any(hits.values()) and not supplement:

@@ -17,6 +17,7 @@ from ..tools.models import InternalModel, SqlTaskOutcome, SqlTaskRequest, ToolFa
 
 
 VENDOR_ROOT = Path(__file__).resolve().parents[4] / "third_party" / "chinook_c"
+PROJECT_ROOT = Path(__file__).resolve().parents[4]
 ARCHIVE_SHA256 = "74748f209e042eab3bc446491e6b6ad7ccf5138e5dad93b79221dfa55541e27d"
 DATABASE_SHA256 = "adb73b5b0ea57598926fa8a72ffb2848c64f7f17a4e57b5e0c04a182e24f565c"
 SERVICE_SHA256 = "04f4369b3e7432d8d77624e0f41683545fc7aea93afca9b5f5c06eedd58768b2"
@@ -82,17 +83,30 @@ def verify_vendor(root: Path) -> ArtifactManifest:
     return manifest
 
 
-def _load_backend(root: Path, profiles: ProfileRegistry, tables: frozenset[str] | None, model_mode: str = "offline"):
-    if root != VENDOR_ROOT:
-        verify_vendor(VENDOR_ROOT)  # Resource override never redirects Python imports.
-    verify_vendor(root)
+def _load_backend(root: Path, profiles: ProfileRegistry, tables: frozenset[str] | None,
+                  model_mode: str = "offline", canonical: bool = False):
+    if canonical:
+        required = (root / "profiles/chinook/profile.json", root / "profiles/chinook/metrics.json",
+                    root / "data/chinook/Chinook.db")
+        if any(not path.is_file() for path in required):
+            raise ValueError("canonical backend artifact missing")
+    else:
+        if root != VENDOR_ROOT:
+            verify_vendor(VENDOR_ROOT)
+        verify_vendor(root)
     # The only executable module location is the bundled namespace; a custom
     # trusted root selects resources, not arbitrary Python code for import.
-    from third_party.chinook_c.backend.sql_module.catalog import load_catalog
-    from third_party.chinook_c.backend.sql_module.generation import DemoJSONModel
-    from backend.sql_module.generation import HTTPJSONModel
-    from third_party.chinook_c.backend.sql_module.profiles import AccessContext, Registry
-    from third_party.chinook_c.backend.sql_module.service import NLQueryService
+    if canonical:
+        from backend.sql_module.catalog import load_catalog
+        from backend.sql_module.generation import DemoJSONModel, HTTPJSONModel
+        from backend.sql_module.profiles import AccessContext, Registry
+        from backend.sql_module.service import NLQueryService
+    else:
+        from third_party.chinook_c.backend.sql_module.catalog import load_catalog
+        from third_party.chinook_c.backend.sql_module.generation import DemoJSONModel
+        from backend.sql_module.generation import HTTPJSONModel
+        from third_party.chinook_c.backend.sql_module.profiles import AccessContext, Registry
+        from third_party.chinook_c.backend.sql_module.service import NLQueryService
 
     registry = Registry.load(root / "profiles")
     backend = registry.profiles["chinook"]
@@ -114,7 +128,9 @@ def _load_backend(root: Path, profiles: ProfileRegistry, tables: frozenset[str] 
     catalog = load_catalog(backend, snapshot)
     profile = profiles.get("chinook-music")
     registered = {metric["metric_id"] for metric in catalog["metrics"]}
-    if not profile.supports("sql") or not profile.sql_backend or profile.sql_backend.profile_id != "chinook" or profile.sql_backend.model_mode != model_mode or set(profile.sql_backend.registered_metric_ids) != registered or profile.sql_backend.declared_slots != backend.data.get("slots", {}):
+    declared = {name: rule.model_dump(mode="python", exclude_none=True, exclude_defaults=True) for name, rule in profile.sql_backend.declared_slots.items()}
+    metrics_match = bool(profile.sql_backend) and (set(profile.sql_backend.registered_metric_ids) == registered if tables is None else registered <= set(profile.sql_backend.registered_metric_ids))
+    if not profile.supports("sql") or not profile.sql_backend or profile.sql_backend.profile_id != "chinook" or profile.sql_backend.model_mode != model_mode or not metrics_match or declared != backend.data.get("slots", {}):
         raise ValueError("B/C profile mapping drift")
     for metric in catalog["metrics"]:
         if metric.get("unit") != profile.metric(metric["metric_id"]).unit:
@@ -168,7 +184,7 @@ async def create_offline_sql_integration(*, profiles: ProfileRegistry | None = N
     executor = None
     try:
         if profiles is None:
-            profile = ProfileRegistry.defaults().get("chinook-music")
+            profile = ProfileRegistry.stage1().get("chinook-music")
             profile.sql_backend.model_mode = model_mode
             # Keep the public hybrid identity, but advertise only the capability
             # actually installed in this independently-created 3C-1 instance.
@@ -180,6 +196,33 @@ async def create_offline_sql_integration(*, profiles: ProfileRegistry | None = N
         root = (vendor_root or VENDOR_ROOT).resolve()
         executor = BoundedExecutor(max_workers)
         service, access, provenance = await executor.run(lambda: _load_backend(root, profiles, trusted_tables, model_mode))
+        adapter = OfflineCSqlAdapter(profiles, service, access, executor, provenance)
+        runtime = ToolRuntime(profiles)
+        runtime.register(create_c_sql_spec(adapter.run, profiles, timeout_ms=timeout_ms))
+        return OfflineSqlIntegration(profiles, runtime, adapter)
+    except BaseException as exc:
+        if executor is not None:
+            await executor.aclose()
+        if isinstance(exc, (KeyboardInterrupt, SystemExit)) or not isinstance(exc, Exception):
+            raise
+        raise _startup_error("DEPENDENCY_MISSING" if isinstance(exc, ImportError) else "CONFIG_OR_ARTIFACT_INVALID") from None
+
+
+async def create_canonical_sql_integration(*, profiles: ProfileRegistry | None = None,
+    trusted_tables: frozenset[str] | None = None, max_workers: int = 2,
+    timeout_ms: int = 60000, model_mode: str = "offline") -> OfflineSqlIntegration:
+    executor = None
+    try:
+        if profiles is None:
+            profile = ProfileRegistry.defaults().get("chinook-music")
+            profile.sql_backend.model_mode = model_mode
+            profile.capabilities = ["sql", "rag"]
+            profiles = ProfileRegistry([profile])
+        root = PROJECT_ROOT.resolve()
+        executor = BoundedExecutor(max_workers)
+        service, access, provenance = await executor.run(
+            lambda: _load_backend(root, profiles, trusted_tables, model_mode, canonical=True)
+        )
         adapter = OfflineCSqlAdapter(profiles, service, access, executor, provenance)
         runtime = ToolRuntime(profiles)
         runtime.register(create_c_sql_spec(adapter.run, profiles, timeout_ms=timeout_ms))

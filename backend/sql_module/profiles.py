@@ -147,7 +147,7 @@ def validate_profile(data, directory):
         for key, slot in data['slots'].items():
             string(key, 'slot 名称')
             obj(slot, ['type', 'required_by_default', 'values'], ['type'], 'slot')
-            if slot['type'] not in ('integer', 'string', 'boolean', 'number'):
+            if slot['type'] not in ('integer', 'string', 'boolean', 'number', 'array', 'object'):
                 raise invalid('slot 类型无效')
             if 'required_by_default' in slot and type(slot['required_by_default']) is not bool:
                 raise invalid('required_by_default 必须是 boolean')

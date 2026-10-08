@@ -170,7 +170,8 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
     async def call_rag(state: AgentState):
         task = ParsedTurn.model_validate(state["parsed"]).task
         request = AskRequest.model_validate(state["request"])
-        payload = RetrievalRequest(retrieval_id="retrieval-" + str(uuid.uuid4()), profile_id=state["profile_id"], query=task.normalized_question, filters={"slots": task.slots, "business_metric_ids": task.business_metric_ids}, top_k=request.options.top_k)
+        retrieval_query = task.original_question if task.route == "cross_source" else task.normalized_question
+        payload = RetrievalRequest(retrieval_id="retrieval-" + str(uuid.uuid4()), profile_id=state["profile_id"], query=retrieval_query, filters={"slots": task.slots, "business_metric_ids": task.business_metric_ids}, top_k=request.options.top_k)
         outcome = await runtime.run("rag.retrieve", payload, context(state))
         return tool_update(state, "rag", outcome, "retrieval_outcome", list(outcome.source_refs))
 

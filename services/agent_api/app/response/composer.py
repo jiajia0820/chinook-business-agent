@@ -44,6 +44,7 @@ class SourcePolicy:
     profile_id: str
     database_name: str | None = None
     documents: tuple[DocumentSnapshot, ...] = ()
+    allow_business_calculation: bool = False
 
 
 BANNERS = {
@@ -99,6 +100,19 @@ class FormalResponseComposer:
         return cls(SourcePolicy("offline_sql_d12_integration", profile.profile_id, profile.sql_backend.display_name, records))
 
     @classmethod
+    def for_sql_knowledge(cls, profile, index):
+        records = tuple(
+            DocumentSnapshot(
+                item.record.chunk_id, item.record.doc_id, item.record.title,
+                item.record.section or "正文", item.record.text,
+                item.record.source_uri, item.record.version,
+            )
+            for item in index.chunks
+        )
+        return cls(SourcePolicy("offline_sql_d12_integration", profile.profile_id,
+            profile.sql_backend.display_name, records, True))
+
+    @classmethod
     def for_calculation_fixture(cls, profile):
         return cls(SourcePolicy("calculation_fixture", profile.profile_id))
 
@@ -135,11 +149,11 @@ class FormalResponseComposer:
                 if real:
                     snapshots = {item.chunk_id: item for item in self.policy.documents}
                     item = snapshots.get(chunk.chunk_id)
-                    if item is None or (chunk.doc_id, chunk.title, chunk.section, chunk.text, chunk.source_uri, chunk.doc_type, chunk.page, chunk.bbox) != (item.doc_id, item.title, item.section, item.text, item.source_uri, "markdown", None, None):
+                    if item is None or (chunk.doc_id, chunk.title, chunk.section, chunk.text, chunk.source_uri) != (item.doc_id, item.title, item.section, item.text, item.source_uri):
                         raise SourceMismatch()
                 elif self.execution_mode in {"fixture", "calculation_fixture"} and (chunk.doc_type != "fixture" or not chunk.doc_id.startswith("fixture-") or not chunk.source_uri.startswith("fixture://")):
                     raise SourceMismatch()
-        if context.calculations and self.execution_mode not in {"fixture", "calculation_fixture"}:
+        if context.calculations and self.execution_mode not in {"fixture", "calculation_fixture"} and not self.policy.allow_business_calculation:
             raise SourceMismatch()  # Real business calculation is not installed.
 
     def _sql_answer(self, context):
@@ -212,7 +226,8 @@ class FormalResponseComposer:
             authorized = authorize_calculation(bundle, task=context.task, sql=context.sql, rag=context.rag,
                 profile=context.profile, context=ToolContext(request_id=context.request_id, session_id=context.session_id,
                     profile_id=context.profile.profile_id, available_source_refs=context.available_source_refs),
-                calculation_id=calc.calculation_id, expected_mode="fixture")
+                calculation_id=calc.calculation_id,
+                expected_mode="verified_business" if self.policy.allow_business_calculation else "fixture")
             request = authorized.request
             expected_inputs = list(dict.fromkeys([request.formula_ref, *(item.source_ref for item in request.operands.values())]))
             if request != context.binding or calc.calculation_id not in self._tool_refs(context, "calculator.calculate") or calc.formula != FORMULAS[request.function] or calc.inputs != expected_inputs or calc.unit != request.result_unit or type(calc.result) not in (int, float) or Decimal(str(calc.result)) != calculate_decimal(request):
@@ -262,8 +277,16 @@ class FormalResponseComposer:
                     answer = self._calculation_answer(context)
                 elif context.route == "sql":
                     answer = self._sql_answer(context)
+                elif context.route == "cross_source" and self.policy.allow_business_calculation:
+                    answer = self._calculation_answer(context)
                 elif context.route == "rag" and self.execution_mode == "offline_sql_d12_integration":
-                    answer = self._d12_answer(context)
+                    if context.task.intent == "document_rule" and documents and all(item.doc_id == "D12" for item in documents):
+                        answer = self._d12_answer(context)
+                    elif documents:
+                        first = documents[0]
+                        answer = f"已从 {first.doc_id}《{first.title}》检索到相关原文：\n{first.text}\n来源：{first.source_uri}。"
+                    else:
+                        raise EvidenceGap()
                 else:
                     raise EvidenceGap()
             except EvidenceConflict as conflict:

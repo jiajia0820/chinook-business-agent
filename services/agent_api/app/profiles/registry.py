@@ -49,3 +49,9 @@ class ProfileRegistry:
     @classmethod
     def defaults(cls) -> ProfileRegistry:
         return cls.from_directory(Path(__file__).parent / "configs")
+
+    @classmethod
+    def stage1(cls) -> ProfileRegistry:
+        """Frozen historical SQL+D12 configuration for compatibility tests."""
+        cls.defaults()  # Preserve startup validation and dependency injection hooks.
+        return cls.from_directory(Path(__file__).parent / "history")

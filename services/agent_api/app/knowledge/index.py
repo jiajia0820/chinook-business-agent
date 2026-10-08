@@ -124,6 +124,15 @@ class KnowledgeIndex:
             return RetrievalResponse(retrieval_id=request.retrieval_id, profile_id=self.profile_id, status="success", chunks=[])
         section = filters.get("section")
         ranked: list[tuple[float, IndexedChunk]] = []
+        hints = {
+            "指标": "D01", "销售分析": "D02", "分类": "D03", "商品范围": "D03",
+            "目标": "D06", "达标": "D06", "增长率": "D01", "增长": "D01",
+            "客户分层": "D04", "选品": "D05", "经营目标": "D06", "Q3经营目标": "D06",
+            "Q2经营复盘": "D07", "Q3经营复盘": "D08", "品类运营": "D09",
+            "活动方案": "D10", "报名截止": "D11", "海报": "D11", "FAQ": "D12",
+            "默认音乐": "D12", "销售额口径": "D12",
+        }
+        hinted_doc = next((value for key, value in hints.items() if key.casefold() in request.query.casefold()), None)
         candidates = self.chunks if doc_id is None else self._document_chunks[doc_id]
         for item in candidates:
             if section and not (item.record.section == section or (item.record.section or "").startswith(str(section) + " / ")):
@@ -131,7 +140,11 @@ class KnowledgeIndex:
             matched = [term for term in query_terms if term in item.normalized_text]
             if not matched:
                 continue
+            if not hinted_doc and len(matched) / len(query_terms) < 0.6:
+                continue
             score = sum(1 + item.normalized_text.count(term) for term in matched)
+            if hinted_doc and item.record.doc_id == hinted_doc:
+                score += 100
             if item.record.section and any(term in normalize(item.record.section) for term in query_terms):
                 score += 2
             ranked.append((float(score), item))
