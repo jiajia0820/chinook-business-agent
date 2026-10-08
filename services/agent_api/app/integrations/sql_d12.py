@@ -60,13 +60,14 @@ class OfflineKnowledgeIntegration:
 async def create_offline_knowledge_integration(*, profiles: ProfileRegistry | None = None,
     knowledge_root: Path | None = None, vendor_root: Path | None = None,
     trusted_tables: frozenset[str] | None = None, max_workers: int = 2,
-    sql_timeout_ms: int = 60000, rag_timeout_ms: int = 5000, max_chars: int = 1000) -> OfflineKnowledgeIntegration:
+    sql_timeout_ms: int = 60000, rag_timeout_ms: int = 5000, max_chars: int = 1000, model_mode: str = "offline") -> OfflineKnowledgeIntegration:
     """Factory parameters are trusted server settings, never client paths."""
     sql = None
     try:
         root = (knowledge_root or KNOWLEDGE_ROOT).resolve()
         if profiles is None:
             profile = ProfileRegistry.defaults().get("chinook-music")
+            profile.sql_backend.model_mode = model_mode
             profile.capabilities = ["sql", "rag"]
             profile.document_root = "data/knowledge"
             profile.config_version += "+3c2-sql-d12"
@@ -84,7 +85,7 @@ async def create_offline_knowledge_integration(*, profiles: ProfileRegistry | No
         if profile.mode != "hybrid" or profile.capabilities != ["sql", "rag"] or profile.document_root != "data/knowledge":
             raise ValueError("unexpected knowledge instance configuration")
         sql = await create_offline_sql_integration(profiles=profiles, vendor_root=vendor_root,
-            trusted_tables=trusted_tables, max_workers=max_workers, timeout_ms=sql_timeout_ms)
+            trusted_tables=trusted_tables, max_workers=max_workers, timeout_ms=sql_timeout_ms, model_mode=model_mode)
         index = await sql.sql_tool.executor.run(lambda: load_d12_index(root, profile, max_chars=max_chars))
         adapter = D12RagAdapter(index, sql.sql_tool.executor)
         sql.runtime.register(ToolSpec(name="rag.retrieve", capability="rag",

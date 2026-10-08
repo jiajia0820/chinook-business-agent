@@ -13,6 +13,7 @@ class Settings:
     app_name: str = "Explainable Data Agent API"
     cors_origins: tuple[str, ...] = ("http://localhost:5173",)
     backend_mode: Literal["offline_sql_d12", "unavailable"] = "offline_sql_d12"
+    model_mode: Literal["offline", "live"] = "offline"
     enabled_profiles: tuple[str, ...] = ("chinook-music",)
     sql_workers: int = 2
     max_inflight_requests: int = 8
@@ -23,7 +24,7 @@ class Settings:
 
     def __post_init__(self):
         # Never include environment values in validation errors or logs.
-        if type(self.backend_mode) is not str or self.backend_mode not in {"offline_sql_d12", "unavailable"} or self.enabled_profiles != ("chinook-music",):
+        if type(self.backend_mode) is not str or self.backend_mode not in {"offline_sql_d12", "unavailable"} or self.model_mode not in {"offline", "live"} or self.enabled_profiles != ("chinook-music",):
             raise ValueError("unsupported backend/profile configuration")
         for value, maximum in [(self.sql_workers, 16), (self.max_inflight_requests, 64), (self.sql_timeout_ms, 60000), (self.rag_timeout_ms, 60000)]:
             if type(value) is not int or not 1 <= value <= maximum:
@@ -41,6 +42,7 @@ class Settings:
         try:
             return cls(cors_origins=origins or ("http://localhost:5173",),
                 backend_mode=os.getenv("AGENT_BACKEND_MODE", "offline_sql_d12").strip(),
+                model_mode=os.getenv("AGENT_MODEL_MODE", "offline").strip().lower(),
                 enabled_profiles=tuple(value.strip() for value in os.getenv("AGENT_ENABLED_PROFILES", "chinook-music").split(",") if value.strip()),
                 sql_workers=int(os.getenv("AGENT_SQL_WORKERS", "2")),
                 max_inflight_requests=int(os.getenv("AGENT_MAX_INFLIGHT_REQUESTS", "8")),

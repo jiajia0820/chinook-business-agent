@@ -53,15 +53,13 @@ class HTTPJSONModel:
 
     @classmethod
     def from_env(cls):
-        endpoint=os.environ.get('C_SQL_MODEL_ENDPOINT')
-        model=os.environ.get('C_SQL_MODEL_NAME')
-        key=os.environ.get('C_SQL_MODEL_API_KEY')
-        if not endpoint or not model or not key:
-            raise unavailable('CONFIG_MISSING','模型未配置；需服务端 C_SQL_MODEL_ENDPOINT/NAME/API_KEY，或显式离线演示')
-        parts=urlsplit(endpoint)
-        if parts.scheme!='https' or not parts.hostname or parts.username or parts.password or parts.query or parts.fragment:
-            raise unavailable('MODEL_CONFIG_INVALID','模型端点必须为无凭据/查询参数的 HTTPS 完整 URL')
-        return cls(endpoint,model,key)
+        from services.agent_api.app.core.model_config import ModelConfig, ModelConfigurationError
+        try:
+            config = ModelConfig.from_env()
+        except ModelConfigurationError as exc:
+            raise unavailable(exc.reason, '模型配置不可用；请设置 LLM_BASE_URL、LLM_MODEL 和 LLM_API_KEY') from None
+        params = config.c_http_parameters()
+        return cls(params["endpoint"], params["model"], params["api_key"])
 
     def generate_json(self, messages, output_schema, deadline):
         timeout=min(20,deadline-time.monotonic())

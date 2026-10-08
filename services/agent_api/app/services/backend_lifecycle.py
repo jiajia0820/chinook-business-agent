@@ -24,7 +24,7 @@ def unavailable(reason: str, *, retryable: bool = False) -> UnavailableAskServic
 
 async def create_default_backend(settings: Settings) -> OfflineKnowledgeIntegration:
     return await create_offline_knowledge_integration(max_workers=settings.sql_workers,
-        sql_timeout_ms=settings.sql_timeout_ms, rag_timeout_ms=settings.rag_timeout_ms)
+        sql_timeout_ms=settings.sql_timeout_ms, rag_timeout_ms=settings.rag_timeout_ms, model_mode=settings.model_mode)
 
 
 class ManagedAskService:
@@ -75,7 +75,7 @@ class BackendLifecycle:
             async with asyncio.timeout(self.settings.startup_timeout_seconds):
                 self.integration = await self.factory(self.settings)
             profile = self.integration.profiles.get("chinook-music")
-            if profile.capabilities != ["sql", "rag"] or profile.document_root != "data/knowledge" or profile.sql_backend.model_mode != "offline":
+            if profile.capabilities != ["sql", "rag"] or profile.document_root != "data/knowledge":
                 raise ValueError("backend configuration mismatch")
             delegate = self.integration.create_formal_graph_service()
             self.service = ManagedAskService(delegate, self.settings.max_inflight_requests)

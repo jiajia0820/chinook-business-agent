@@ -82,7 +82,7 @@ def verify_vendor(root: Path) -> ArtifactManifest:
     return manifest
 
 
-def _load_backend(root: Path, profiles: ProfileRegistry, tables: frozenset[str] | None):
+def _load_backend(root: Path, profiles: ProfileRegistry, tables: frozenset[str] | None, model_mode: str = "offline"):
     if root != VENDOR_ROOT:
         verify_vendor(VENDOR_ROOT)  # Resource override never redirects Python imports.
     verify_vendor(root)
@@ -90,6 +90,7 @@ def _load_backend(root: Path, profiles: ProfileRegistry, tables: frozenset[str] 
     # trusted root selects resources, not arbitrary Python code for import.
     from third_party.chinook_c.backend.sql_module.catalog import load_catalog
     from third_party.chinook_c.backend.sql_module.generation import DemoJSONModel
+    from backend.sql_module.generation import HTTPJSONModel
     from third_party.chinook_c.backend.sql_module.profiles import AccessContext, Registry
     from third_party.chinook_c.backend.sql_module.service import NLQueryService
 
@@ -103,17 +104,22 @@ def _load_backend(root: Path, profiles: ProfileRegistry, tables: frozenset[str] 
     if tables is not None and (not isinstance(tables, frozenset) or not tables <= allowed):
         raise ValueError("invalid trusted table configuration")
     access = AccessContext({"chinook": allowed if tables is None else tables})
-    service = NLQueryService(registry, model=DemoJSONModel())
+    if model_mode == "live":
+        service = NLQueryService(registry, model=HTTPJSONModel.from_env())
+    elif model_mode == "offline":
+        service = NLQueryService(registry, model=DemoJSONModel())
+    else:
+        raise ValueError("unsupported model mode")
     snapshot = service.schemas.get_schema("chinook", access)
     catalog = load_catalog(backend, snapshot)
     profile = profiles.get("chinook-music")
     registered = {metric["metric_id"] for metric in catalog["metrics"]}
-    if not profile.supports("sql") or not profile.sql_backend or profile.sql_backend.profile_id != "chinook" or profile.sql_backend.model_mode != "offline" or set(profile.sql_backend.registered_metric_ids) != registered or profile.sql_backend.declared_slots != backend.data.get("slots", {}):
+    if not profile.supports("sql") or not profile.sql_backend or profile.sql_backend.profile_id != "chinook" or profile.sql_backend.model_mode != model_mode or set(profile.sql_backend.registered_metric_ids) != registered or profile.sql_backend.declared_slots != backend.data.get("slots", {}):
         raise ValueError("B/C profile mapping drift")
     for metric in catalog["metrics"]:
         if metric.get("unit") != profile.metric(metric["metric_id"]).unit:
             raise ValueError("B/C unit drift")
-    return service, access, {"backend_profile_id": "chinook", "model_mode": "offline", "database_sha256": DATABASE_SHA256, "schema_version": snapshot["schema_version"], "table_count": len(snapshot["tables"])}
+    return service, access, {"backend_profile_id": "chinook", "model_mode": model_mode, "database_sha256": DATABASE_SHA256, "schema_version": snapshot["schema_version"], "table_count": len(snapshot["tables"])}
 
 
 class OfflineCSqlAdapter:
@@ -122,8 +128,8 @@ class OfflineCSqlAdapter:
 
     async def run(self, task: SqlTaskRequest, context: ToolContext) -> SqlTaskOutcome:
         profile = self.profiles.get(context.profile_id)
-        if not profile.sql_backend or profile.sql_backend.model_mode != "offline" or profile.sql_backend.profile_id != "chinook":
-            raise ToolFailure(ApiError(code="UNSUPPORTED_CAPABILITY", message="此适配器仅支持已确认的 chinook 离线后端。", retryable=False))
+        if not profile.sql_backend or profile.sql_backend.model_mode not in {"offline", "live"} or profile.sql_backend.profile_id != "chinook":
+            raise ToolFailure(ApiError(code="UNSUPPORTED_CAPABILITY", message="此适配器仅支持已确认的 chinook SQL 后端。", retryable=False))
         request = build_c_request(task, request_id=context.request_id, profile=profile)
         raw = await self.executor.run(lambda: self._service.answer_sql(request.payload(), self._access), deadline=context.deadline)
         outcome = normalize_c_response(raw, task=task, request_id=context.request_id, profile=profile)
@@ -157,12 +163,13 @@ class OfflineSqlIntegration:
         return await self.sql_tool.executor.aclose(grace_seconds=grace_seconds)
 
 
-async def create_offline_sql_integration(*, profiles: ProfileRegistry | None = None, vendor_root: Path | None = None, trusted_tables: frozenset[str] | None = None, max_workers: int = 2, timeout_ms: int = 60000) -> OfflineSqlIntegration:
+async def create_offline_sql_integration(*, profiles: ProfileRegistry | None = None, vendor_root: Path | None = None, trusted_tables: frozenset[str] | None = None, max_workers: int = 2, timeout_ms: int = 60000, model_mode: str = "offline") -> OfflineSqlIntegration:
     """Trusted server factory only. No API, user_role, HTTP model or RAG wiring."""
     executor = None
     try:
         if profiles is None:
             profile = ProfileRegistry.defaults().get("chinook-music")
+            profile.sql_backend.model_mode = model_mode
             # Keep the public hybrid identity, but advertise only the capability
             # actually installed in this independently-created 3C-1 instance.
             profile.capabilities = ["sql"]
@@ -172,7 +179,7 @@ async def create_offline_sql_integration(*, profiles: ProfileRegistry | None = N
             profiles = ProfileRegistry([profile])
         root = (vendor_root or VENDOR_ROOT).resolve()
         executor = BoundedExecutor(max_workers)
-        service, access, provenance = await executor.run(lambda: _load_backend(root, profiles, trusted_tables))
+        service, access, provenance = await executor.run(lambda: _load_backend(root, profiles, trusted_tables, model_mode))
         adapter = OfflineCSqlAdapter(profiles, service, access, executor, provenance)
         runtime = ToolRuntime(profiles)
         runtime.register(create_c_sql_spec(adapter.run, profiles, timeout_ms=timeout_ms))
