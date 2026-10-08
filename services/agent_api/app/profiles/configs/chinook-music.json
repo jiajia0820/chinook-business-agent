@@ -1,0 +1,100 @@
+{
+  "profile_id": "chinook-music",
+  "config_version": "b-3c3-calculator-2026-10-06",
+  "mode": "hybrid",
+  "capabilities": ["sql", "rag", "calculate"],
+  "sql_backend": {
+    "profile_id": "chinook",
+    "display_name": "Chinook 样例库",
+    "model_mode": "offline",
+    "registered_metric_ids": ["customer_count"],
+    "declared_slots": {}
+  },
+  "document_root": "data/knowledge",
+  "catalogs": {"dictionary": null, "aliases": null, "metrics": null, "documents": null},
+  "metric_definitions": [
+    {
+      "metric_id": "customer_count",
+      "name": "客户记录数",
+      "definition": "Customer 表记录数，不等于购买客户数；C 演示口径，尚未由 A 正式确认。",
+      "unit": "条",
+      "source_refs": ["demo-catalog:customer_count@demo-1"]
+    },
+    {
+      "metric_id": "sales_amount",
+      "name": "音频销售额",
+      "definition": "按音频订单明细 SUM(InvoiceLine.UnitPrice * InvoiceLine.Quantity) 计算；默认 MediaTypeId 1、2、4、5，日期左闭右开。",
+      "unit": "USD",
+      "source_refs": ["D12:四 指标怎么理解", "D12:二 默认的音乐范围"]
+    },
+    {
+      "metric_id": "purchasing_customers",
+      "name": "购买客户数",
+      "definition": "筛选范围内按 Invoice.CustomerId 去重，不等于 Customer 表全部登记记录。",
+      "unit": "人",
+      "source_refs": ["D12:四 指标怎么理解"]
+    }
+  ],
+  "aliases": [
+    {"alias": "摇滚", "entity_type": "genre", "entity_id": "Genre:1", "label": "Rock"},
+    {"alias": "摇滚乐", "entity_type": "genre", "entity_id": "Genre:5", "label": "Rock And Roll"},
+    {"alias": "金属", "entity_type": "genre", "entity_id": "Genre:3", "label": "Metal"},
+    {"alias": "重金属", "entity_type": "genre", "entity_id": "Genre:13", "label": "Heavy Metal"},
+    {"alias": "美国", "entity_type": "country", "entity_id": "Country:USA", "label": "USA"}
+  ],
+  "question_rules": {
+    "document_queries": [
+      {"canonical_question": "默认音乐范围是什么？", "aliases": ["默认音乐范围是什么", "默认音频范围是什么", "默认音乐统计范围是什么"], "business_metric_ids": []},
+      {"canonical_question": "购买客户数定义是什么？", "aliases": ["购买客户数定义是什么", "购买客户数是什么意思"], "business_metric_ids": ["purchasing_customers"]},
+      {"canonical_question": "购买客户数与登记客户记录数有什么区别？", "aliases": ["购买客户数与登记客户记录数有什么区别", "购买客户数与登记客户数有什么区别"], "business_metric_ids": ["purchasing_customers", "customer_count"]}
+    ],
+    "offline_queries": [
+      {"canonical_question": "客户数量是多少？", "aliases": ["客户数量是多少", "客户总数是多少", "登记客户数是多少"], "intent": "fact_query", "business_metric_ids": ["customer_count"]},
+      {"canonical_question": "有哪些音乐类型？", "aliases": ["有哪些音乐类型", "音乐类型有哪些"], "intent": "list_genres", "business_metric_ids": []},
+      {"canonical_question": "美国客户数量是多少？", "aliases": ["美国客户数量是多少", "美国客户总数是多少", "来自美国的客户有多少"], "intent": "fact_query", "business_metric_ids": ["customer_count"]}
+    ],
+    "metric_terms": {
+      "customer_count": ["客户数量", "客户总数", "登记客户数", "客户记录数", "多少客户", "客户有多少"],
+      "sales_amount": ["销售额", "销售金额", "营收"],
+      "purchasing_customers": ["购买客户数", "购买人数"]
+    },
+    "unsupported_terms": {
+      "profit": ["利润", "profit"], "cost": ["成本"],
+      "inventory": ["库存"], "refund": ["退款"],
+      "ad_impressions": ["广告曝光"], "play_count": ["播放量", "播放次数"]
+    },
+    "ambiguous_scope_terms": ["摇滚相关"],
+    "intent_default_metric_ids": {"target_attainment": ["sales_amount"], "target_difference": ["sales_amount"]},
+    "query_fillers": ["请问", "请", "帮我", "查一下", "查询", "统计", "计算", "是多少", "多少", "是什么", "什么", "如何", "呢", "吗", "了", "的", "有", "在", "来自", "以及", "和", "对比", "目标", "完成率", "音乐", "音频", "全部", "仅", "按", "换成", "改成", "更正", "全年"],
+    "intent_terms": {
+      "target_difference": ["目标差额", "与目标差多少", "目标差多少"],
+      "target_attainment": ["达标", "和目标比", "目标完成率", "对比目标"],
+      "growth_rate": ["增长率", "环比", "同比"],
+      "document_rule": ["口径", "定义", "规则", "怎么计算", "公式"],
+      "document_calculation": ["按文档计算", "根据文档计算"],
+      "cross_source": ["结合文档", "并解释口径", "同时说明口径"],
+      "vague_metric": ["卖得怎么样", "销售情况"]
+    }
+  },
+  "required_slots_by_intent": {
+    "target_difference": ["year", "quarter", "scope", "target_metric"],
+    "quarterly_sales": ["year", "quarter"],
+    "target_attainment": ["year", "quarter", "scope", "target_metric"],
+    "growth_rate": ["comparison_period", "data_scope"]
+  },
+  "unsupported_metrics": ["profit", "cost", "inventory", "refund", "ad_impressions", "play_count"],
+  "default_media_ids": [1, 2, 4, 5],
+  "data_start": "2021-01-01",
+  "data_end": "2025-12-22",
+  "currency": "USD",
+  "sources": [
+    {"ref_id": "ac-snapshot:2026-10-05", "status": "snapshot_verified", "description": "数据库日期范围经只读核对；C 后端 profile/指标来自交付包。"},
+    {"ref_id": "D12", "status": "document_derived_pending_alignment", "description": "B 暂行口径与槽位来自团队业务文档，待 A 正式配置替换；别名边界另参 D03。"},
+    {"ref_id": "D03", "status": "document_derived_pending_alignment", "description": "中文别名来自业务分类说明，不是已经交付的别名 JSON catalog。"}
+  ],
+  "limitations": [
+    "样例数据库与团队自建业务资料，不是企业生产数据。",
+    "C 离线模型仅支持三类固定问法；当前不代表完整自由问法准确率。",
+    "A 的正式字段、别名、指标与文档目录配置尚未齐全；B 暂行配置待对齐。"
+  ]
+}

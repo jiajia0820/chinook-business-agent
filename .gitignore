@@ -45,3 +45,12 @@ Thumbs.db
 /docs/参赛导师角色设定.md
 /docs/赛题八中级难点突破评估.md
 /docs/superpowers/
+
+# B module caches and test outputs
+.uv-cache/
+.pnpm-cache/
+.pnpm-store/
+coverage/
+.coverage
+*.tsbuildinfo
+.vitest/
