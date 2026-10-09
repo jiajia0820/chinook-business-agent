@@ -75,7 +75,7 @@
 
 ## special-multitable-006
 
-问题：第三季度购买音频客户按支持负责人分布如何？
+问题：2025年第三季度购买音频客户按支持负责人分布如何？
 
 难度：hard　能力：support_rep_customer_join
 
@@ -89,7 +89,7 @@
 
 ## special-multitable-007
 
-问题：第三季度各音乐分类的订单数和购买客户数是多少？
+问题：2025年第三季度各音乐分类的订单数和购买客户数是多少？
 
 难度：hard　能力：genre_customer_order_join
 
