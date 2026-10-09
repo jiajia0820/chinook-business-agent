@@ -68,7 +68,7 @@ function focusEvidence(refId: string) {
         </div>
         <p class="helper">点击候选项会带当前会话发送补充请求；也可以在输入框手动补充。不会默认补年份。</p>
       </section>
-      <EvidencePanel :key="business.request_id" :response="business" :show-trace-requested="requestOptions?.show_trace ?? null" />
+      <EvidencePanel :key="business.request_id" :response="business" :show-trace-requested="requestOptions?.show_trace ?? null" @focus-ref="focusEvidence" />
     </template>
     <template v-else-if="apiError">
       <h2 id="result-heading">API 请求出错</h2>

@@ -8,7 +8,7 @@ defineProps<{ steps: TraceStep[]; showTraceRequested: boolean | null }>();
     <h4>执行轨迹</h4>
     <p class="helper">仅展示后端工具步骤，不是模型思维链；步骤耗时不等于完整网络/端到端时间。</p>
     <p v-if="showTraceRequested === false" data-testid="trace-not-requested">本次发送未要求执行轨迹（show_trace=false）。</p>
-    <details data-testid="trace-details">
+    <details data-testid="trace-details" open>
       <summary>查看 {{ steps.length }} 条后端步骤（按返回顺序）</summary>
       <ol class="trace-list">
         <li v-for="(step, index) in steps" :key="`${step.step}-${index}`" data-testid="trace-step">

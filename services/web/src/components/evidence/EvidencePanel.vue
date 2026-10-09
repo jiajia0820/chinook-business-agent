@@ -8,7 +8,9 @@ import CalculationEvidence from './CalculationEvidence.vue';
 import TraceEvidence from './TraceEvidence.vue';
 import { hasFixtureSources, jsonText } from './format';
 const props = defineProps<{ response: AskResponse; showTraceRequested: boolean | null }>();
+const emit = defineEmits<{ 'focus-ref': [refId: string] }>();
 const fixtureSources = computed(() => hasFixtureSources(props.response));
+const docIds = computed(() => (props.response.documents ?? []).map((document) => document.chunk_id));
 </script>
 
 <template>
@@ -40,7 +42,7 @@ const fixtureSources = computed(() => hasFixtureSources(props.response));
       <DocumentEvidence v-for="(document, index) in response.documents" :key="`${response.request_id}-${document.chunk_id}-${index}`" :document="document" />
     </section>
     <p v-else class="evidence-empty" data-testid="documents-none" title="本轮未返回文档片段，不代表资料不存在或已具备足够证据。">文档片段：本轮无</p>
-    <MetricDefinitions :metrics="response.metric_definitions ?? []" />
+    <MetricDefinitions :metrics="response.metric_definitions ?? []" :available-doc-ids="docIds" @focus-ref="emit('focus-ref', $event)" />
     <CalculationEvidence :calculations="response.calculations ?? []" :fixture-sources="fixtureSources" />
     <TraceEvidence :steps="response.trace ?? []" :show-trace-requested="showTraceRequested" />
   </section>

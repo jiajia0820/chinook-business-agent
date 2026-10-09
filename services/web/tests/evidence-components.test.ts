@@ -177,6 +177,24 @@ describe('D12 documents, metric definitions and safe locators', () => {
     expect(wrapper.text()).toContain('未提供口径来源引用');
     expect(wrapper.find('a').exists()).toBe(false);
   });
+  it('turns source refs into jump links only when the chunk is in this round', async () => {
+    const metrics = copySample().metric_definitions!;
+    const present = metrics[0]!.source_refs![0]!;
+    metrics[0]!.source_refs = [present, 'D99'];
+    const chunkId = `${present}@deadbeef:L1-L2:P1:cafe`;
+    const wrapper = mount(MetricDefinitions, { props: { metrics, availableDocIds: [chunkId] } });
+    await wrapper.get(`[data-testid="metric-ref-${present}"]`).trigger('click');
+    expect(wrapper.emitted('focus-ref')?.[0]).toEqual([`ev-doc-${chunkId}`]);
+    expect(wrapper.get('.ref-missing').text()).toBe('D99');
+  });
+  it('bubbles metric ref jumps through the evidence panel', async () => {
+    const response = copySample();
+    const ref = response.metric_definitions![0]!.source_refs![0]!;
+    response.documents = [{ ...documentChunk(), chunk_id: `${ref}@deadbeef:L1-L2:P1:cafe` }];
+    const wrapper = panel(response);
+    await wrapper.get(`[data-testid="metric-ref-${ref}"]`).trigger('click');
+    expect(wrapper.emitted('focus-ref')?.[0]).toEqual([`ev-doc-${ref}@deadbeef:L1-L2:P1:cafe`]);
+  });
 });
 
 describe('calculation/trace display and current response identity', () => {
@@ -213,6 +231,7 @@ describe('calculation/trace display and current response identity', () => {
     expect(items[1]!.text()).toContain('步骤 2');
     expect(wrapper.text()).toContain('doc:test');
     expect(wrapper.text()).toContain('1.5 ms');
+    expect((wrapper.get('[data-testid="trace-details"]').element as HTMLDetailsElement).open).toBe(true);
     expect(wrapper.text()).toContain('不是模型思维链');
     expect(wrapper.text()).not.toContain('总耗时');
   });
