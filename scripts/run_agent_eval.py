@@ -20,6 +20,9 @@ import sys
 import time
 from pathlib import Path
 
+if hasattr(sys.stdout, "reconfigure"):  # Windows GBK 控制台无法打印中文明细
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
