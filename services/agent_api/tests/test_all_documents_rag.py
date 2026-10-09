@@ -53,6 +53,16 @@ class AllDocumentsRagTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.documents[0].doc_id, "D01")
         self.assertIn("销售额", response.answer)
 
+    async def test_alias_question_returns_authoritative_classification_document(self):
+        response = await self.ask("重金属是否并入 Metal？")
+        self.assertEqual(response.status, "answered")
+        self.assertEqual(response.documents[0].doc_id, "D03")
+
+    async def test_multidoc_question_returns_both_review_documents(self):
+        response = await self.ask("比较 2025 年第二季度和第三季度经营复盘的核心结果")
+        self.assertEqual(response.route, "rag")
+        self.assertEqual({chunk.doc_id for chunk in response.documents}, {"D07", "D08"})
+
 
 if __name__ == "__main__":
     unittest.main()
