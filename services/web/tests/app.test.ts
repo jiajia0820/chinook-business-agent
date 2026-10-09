@@ -22,13 +22,10 @@ describe('4B page interactions in simulated DOM (not live browser E2E)', () => {
   it('mounts without requests and exposes the live SQL capabilities/defaults', () => {
     const ask = vi.fn<AskClient['ask']>();
     const wrapper = makeApp(ask);
-    expect(wrapper.get('h1').text()).toBe('业务问答工作台');
-    expect(wrapper.text()).toContain('大模型 NL2SQL 已启用');
-    expect(wrapper.text()).not.toContain('真实模型、销售自由问法和经营目标计算尚未启用');
-    expect(wrapper.text()).toContain('仅本 worker');
+    expect(wrapper.get('h1').text()).toBe('多模态数据驱动的可解释精准问数/问答智能体');
     expect(wrapper.get(selector('submit-question')).attributes('disabled')).toBeDefined();
     expect(wrapper.get(selector('reset-task')).attributes('disabled')).toBeDefined();
-    expect(wrapper.findAll('.example-list button')).toHaveLength(15);
+    expect(wrapper.findAll('.example-list button')).toHaveLength(EXAMPLES.length);
     expect((wrapper.get(selector('max-rows')).element as HTMLInputElement).value).toBe('50');
     expect((wrapper.get(selector('top-k')).element as HTMLInputElement).value).toBe('5');
     expect(ask).not.toHaveBeenCalled();
@@ -56,7 +53,6 @@ describe('4B page interactions in simulated DOM (not live browser E2E)', () => {
     await wrapper.get(selector('show-trace')).setValue(false);
     await send(wrapper, ' 客户数量是多少？ ');
     expect(ask.mock.calls[0]?.[0]).toEqual({ question: EXAMPLES[0], profile_id: 'chinook-music', options: { max_rows: 3, top_k: 2, show_trace: false } });
-    expect(wrapper.get(selector('session-id')).text()).toContain('session-ui');
     expect(wrapper.get(selector('answer')).text()).toContain('59');
     expect(wrapper.get(selector('last-request')).text()).toContain('SQL 上限 3');
     await send(wrapper, EXAMPLES[1]);
@@ -90,7 +86,8 @@ describe('4B page interactions in simulated DOM (not live browser E2E)', () => {
     pending.resolve(business());
     await flushPromises();
     expect(wrapper.find(selector('ask-result')).exists()).toBe(false);
-    expect(wrapper.get(selector('session-id')).text()).toContain('尚未生成');
+    await send(wrapper, EXAMPLES[1]);
+    expect(ask.mock.calls[1]?.[0].session_id).toBeUndefined();
   });
   it('new session while loading ignores old response and sends next question without old ID', async () => {
     const pending = deferred<AskClientResult>();
@@ -105,7 +102,8 @@ describe('4B page interactions in simulated DOM (not live browser E2E)', () => {
     expect(ask.mock.calls[2]?.[0].session_id).toBeUndefined();
     pending.resolve(business('answered', 'old'));
     await flushPromises();
-    expect(wrapper.get(selector('session-id')).text()).toContain('new');
+    await send(wrapper, EXAMPLES[2]);
+    expect(ask.mock.calls[3]?.[0].session_id).toBe('new');
   });
   it('candidate click continues the same recorded session and truthfully displays unsupported', async () => {
     const [first, second] = clarificationPair();
@@ -139,8 +137,9 @@ describe('4B page interactions in simulated DOM (not live browser E2E)', () => {
     pending.resolve(resetResponse('known'));
     await flushPromises();
     expect((wrapper.get(selector('question-input')).element as HTMLTextAreaElement).value).toBe('');
-    expect(wrapper.get(selector('session-id')).text()).toContain('known');
     expect(wrapper.text()).toContain('已清空当前任务');
+    await send(wrapper, EXAMPLES[1]);
+    expect(ask.mock.calls[2]?.[0].session_id).toBe('known');
   });
   it.each([apiError(), requestError('network'), requestError('timeout'), requestError('invalid_response')])('manual retry recovers from $kind and never auto-repeats', async (error) => {
     const ask = vi.fn<AskClient['ask']>().mockResolvedValueOnce(error).mockResolvedValueOnce(business());
@@ -166,7 +165,6 @@ describe('4B page interactions in simulated DOM (not live browser E2E)', () => {
     const ask = vi.fn<AskClient['ask']>().mockResolvedValue(business());
     const wrapper = makeApp(ask);
     await wrapper.get(selector('question-input')).setValue('问'.repeat(4001));
-    expect(wrapper.get(selector('validation-message')).text()).toContain('4000');
     expect(wrapper.get(selector('submit-question')).attributes('disabled')).toBeDefined();
     await wrapper.get(selector('question-input')).setValue(EXAMPLES[0]!);
     await wrapper.get(selector('max-rows')).setValue('0');

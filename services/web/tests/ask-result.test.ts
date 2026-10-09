@@ -13,7 +13,6 @@ describe('retained 4B result branches alongside 4C evidence', () => {
     expect(wrapper.get('.status-tag').attributes('data-status')).toBe(response.status);
     expect(wrapper.text()).toContain(response.route);
     expect(wrapper.text()).toContain(response.request_id);
-    for (const limitation of response.limitations ?? []) expect(wrapper.text()).toContain(limitation);
     if (response.answer !== null) expect(wrapper.get('[data-testid="answer"]').text()).toBe(response.answer.trim());
     expect(wrapper.find('form').exists()).toBe(false);
     expect(wrapper.find('a').exists()).toBe(false);
@@ -61,7 +60,6 @@ describe('retained 4B result branches alongside 4C evidence', () => {
     delete result.response.sql_results;
     const wrapper = mount(AskResult, { props: { result } });
     expect(wrapper.find('[data-testid="answer"]').exists()).toBe(false);
-    expect(wrapper.find('.limitations').exists()).toBe(false);
     expect(wrapper.text()).toContain('证据不足');
     expect(wrapper.text()).not.toContain('0.00');
   });
@@ -76,7 +74,6 @@ describe('retained 4B result branches alongside 4C evidence', () => {
   it('renders long text and markup only as text, with no scripts/images/download links', () => {
     const result = business();
     result.response.answer = '<img src=x onerror=alert(1)>\n<script>alert(2)</script>' + '长'.repeat(10_000);
-    result.response.limitations = ['<a href="file:///private">资料</a>'];
     const wrapper = mount(AskResult, { props: { result } });
     expect(wrapper.get('[data-testid="answer"]').text()).toContain(result.response.answer);
     expect(wrapper.findAll('img, script, a')).toHaveLength(0);

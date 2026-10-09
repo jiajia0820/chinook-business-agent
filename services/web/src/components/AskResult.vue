@@ -43,10 +43,6 @@ const routes: Record<Route, string> = { sql: '数据库问数', rag: '文档检�
         </div>
         <p class="helper">点击候选项会带当前会话发送补充请求；也可以在输入框手动补充。不会默认补年份。</p>
       </section>
-      <section v-if="business.limitations?.length" class="limitations" aria-labelledby="limitations-heading">
-        <h3 id="limitations-heading">口径与能力限制</h3>
-        <ul><li v-for="(limitation, index) in business.limitations" :key="index">{{ limitation }}</li></ul>
-      </section>
       <EvidencePanel :key="business.request_id" :response="business" :show-trace-requested="requestOptions?.show_trace ?? null" />
     </template>
     <template v-else-if="apiError">

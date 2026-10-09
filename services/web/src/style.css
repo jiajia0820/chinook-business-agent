@@ -25,18 +25,19 @@ li { overflow-wrap: anywhere; }
 .intro { color: #536778; margin-bottom: 12px; }
 ul { padding-left: 24px; }
 .page-heading, .result-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
-.boundary { margin: 18px 0; padding: 16px 20px; background: #eef5f5; border-radius: 8px; border-left: 4px solid #246f76; }
 .session-bar { padding: 12px 16px; background: #f6f8fa; border: 1px solid #dce4e9; border-radius: 8px; }
 .helper, .input-hint { color: #526575; font-size: 13px; }
 .composer { margin-top: 24px; }
 label, legend { font-weight: 600; }
 textarea, input, button { font: inherit; }
 textarea { display: block; width: 100%; margin-top: 8px; padding: 12px; resize: vertical; min-height: 130px; border: 1px solid #7c919f; border-radius: 8px; background: #fff; color: #182a38; }
-textarea[aria-invalid="true"] { border-color: #ab3c30; }
+.question-box { margin-top: 8px; padding: 4px 12px 10px; border: 1px solid #7c919f; border-radius: 8px; background: #fff; }
+.question-box:has(textarea[aria-invalid="true"]) { border-color: #ab3c30; }
+.question-box textarea { margin-top: 0; padding: 8px 2px; border: none; border-radius: 0; background: transparent; min-height: 110px; }
+.question-box-footer { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px 16px; flex-wrap: wrap; }
 input[type="number"] { display: block; width: 100px; padding: 6px 8px; border: 1px solid #7c919f; border-radius: 5px; }
 input[type="checkbox"] { accent-color: #246f76; }
-.input-hint { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.validation-message { font-size: 13px; color: #67552c; min-height: 23px; }
+.input-hint { display: flex; gap: 12px; flex-wrap: wrap; }
 .request-options { display: flex; flex-wrap: wrap; align-items: center; gap: 16px 24px; border: 1px solid #dce4e9; border-radius: 8px; padding: 12px 16px 16px; margin: 16px 0; }
 .request-options label { font-size: 13px; }
 button { padding: 9px 14px; border: 1px solid #9bb0bc; border-radius: 6px; background: #fff; color: #244556; cursor: pointer; text-align: left; overflow-wrap: anywhere; }
@@ -46,6 +47,7 @@ button.primary:hover:not(:disabled) { background: #19585e; }
 button:disabled, fieldset:disabled { opacity: .55; cursor: not-allowed; }
 button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 3px solid #d18b1e; outline-offset: 3px; }
 .action-row, .example-list, .choice-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.action-row { justify-content: flex-end; }
 .example-list { margin-top: 18px; }
 .example-list button { font-size: 13px; }
 .clarification-example { margin-top: 10px; border-style: dashed; font-size: 13px; }
@@ -62,7 +64,6 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 3px
 .result-meta dd { margin: 0; overflow-wrap: anywhere; }
 .answer-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .clarification-card { margin: 16px 0; padding: 16px; background: #eef4fb; border-radius: 6px; }
-.limitations { margin-top: 16px; padding: 16px; background: #fbf6eb; border-radius: 6px; }
 .error-message { color: #963427; background: #fbece9; padding: 12px; border-radius: 6px; }
 .retry-area { margin-top: 16px; }
 .empty-state { padding: 20px; border: 1px dashed #c9d8df; border-radius: 8px; color: #526575; }
