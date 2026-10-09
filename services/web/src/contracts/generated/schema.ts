@@ -167,6 +167,8 @@ export interface components {
         };
         /** HealthResponse */
         HealthResponse: {
+            /** Model Mode */
+            model_mode?: string | null;
             /** Service */
             service: string;
             /** Status */

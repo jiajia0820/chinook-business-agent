@@ -1,6 +1,6 @@
 """Health-check endpoint."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from pydantic import BaseModel, ConfigDict
 
 
@@ -12,9 +12,12 @@ class HealthResponse(BaseModel):
 
     status: str
     service: str
+    model_mode: str | None = None
 
 
 @router.get("/health", response_model=HealthResponse)
-async def health() -> HealthResponse:
-    return HealthResponse(status="ok", service="agent-api")
+async def health(request: Request) -> HealthResponse:
+    settings = getattr(request.app.state, "settings", None)
+    return HealthResponse(status="ok", service="agent-api",
+                          model_mode=getattr(settings, "model_mode", None))
 

@@ -54,3 +54,9 @@ coverage/
 .coverage
 *.tsbuildinfo
 .vitest/
+
+# Local agent workspace
+.workbuddy/
+
+# Office temp lock files
+~$*

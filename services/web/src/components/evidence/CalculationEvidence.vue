@@ -4,11 +4,10 @@ defineProps<{ calculations: Calculation[]; fixtureSources: boolean }>();
 </script>
 
 <template>
-  <section class="evidence-section" aria-label="计算记录" data-testid="calculation-evidence">
+  <section v-if="calculations.length" class="evidence-section" aria-label="计算记录" data-testid="calculation-evidence">
     <h4>计算记录</h4>
-    <p v-if="!calculations.length" data-testid="calculation-empty">本轮未返回计算记录；当前默认离线实例未启用真实业务计算器。</p>
-    <p v-else class="helper">仅展示后端返回的公式、结果和引用；前端不执行或重新计算公式，也不自行确认业务适用性。</p>
-    <p v-if="calculations.length && fixtureSources" class="evidence-warning" data-testid="calculation-fixture">人工来源计算测试，不代表真实经营结果。</p>
+    <p class="helper">仅展示后端返回的公式、结果和引用；前端不执行或重新计算公式，也不自行确认业务适用性。</p>
+    <p v-if="fixtureSources" class="evidence-warning" data-testid="calculation-fixture">人工来源计算测试，不代表真实经营结果。</p>
     <article v-for="(calculation, index) in calculations" :key="`${calculation.calculation_id}-${index}`" class="evidence-card" data-testid="calculation-record">
       <h5>{{ calculation.calculation_id }}</h5>
       <p>公式（仅文本）</p><pre data-testid="calculation-formula">{{ calculation.formula }}</pre>
@@ -18,4 +17,5 @@ defineProps<{ calculations: Calculation[]; fixtureSources: boolean }>();
       <p v-else class="helper">未提供输入引用。</p>
     </article>
   </section>
+  <p v-else class="evidence-empty" data-testid="calculation-empty" title="本轮未返回计算记录；当前默认离线实例未启用真实业务计算器。">计算记录：本轮无</p>
 </template>

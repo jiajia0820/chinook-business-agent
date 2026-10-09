@@ -8,7 +8,9 @@ import CalculationEvidence from './CalculationEvidence.vue';
 import TraceEvidence from './TraceEvidence.vue';
 import { hasFixtureSources, jsonText } from './format';
 const props = defineProps<{ response: AskResponse; showTraceRequested: boolean | null }>();
+const emit = defineEmits<{ 'focus-ref': [refId: string] }>();
 const fixtureSources = computed(() => hasFixtureSources(props.response));
+const docIds = computed(() => (props.response.documents ?? []).map((document) => document.chunk_id));
 </script>
 
 <template>
@@ -30,17 +32,17 @@ const fixtureSources = computed(() => hasFixtureSources(props.response));
       <pre v-if="response.entities?.length" data-testid="parsed-entities">{{ jsonText(response.entities) }}</pre>
       <p v-else>本轮未返回实体条件。</p>
     </details>
-    <section class="evidence-section" aria-label="SQL 与查询结果">
+    <section v-if="response.sql_results?.length" class="evidence-section" aria-label="SQL 与查询结果">
       <h4>SQL 与查询结果</h4>
-      <p v-if="!response.sql_results?.length" data-testid="sql-none">本轮未返回 SQL 结果，不代表业务数值为 0。</p>
-      <SqlEvidence v-for="(sql, index) in response.sql_results" :key="`${response.request_id}-${sql.query_id}-${index}`" :result="sql" />
+      <SqlEvidence v-for="(sql, index) in response.sql_results" :key="`${response.request_id}-${sql.query_id}-${index}`" :result="sql" :answer-text="response.answer" />
     </section>
-    <section class="evidence-section" aria-label="文档片段">
+    <p v-else class="evidence-empty" data-testid="sql-none" title="本轮未返回 SQL 结果，不代表业务数值为 0。">SQL 与查询结果：本轮无</p>
+    <section v-if="response.documents?.length" class="evidence-section" aria-label="文档片段">
       <h4>文档片段</h4>
-      <p v-if="!response.documents?.length" data-testid="documents-none">本轮未返回文档片段，不代表资料不存在或已具备足够证据。</p>
       <DocumentEvidence v-for="(document, index) in response.documents" :key="`${response.request_id}-${document.chunk_id}-${index}`" :document="document" />
     </section>
-    <MetricDefinitions :metrics="response.metric_definitions ?? []" />
+    <p v-else class="evidence-empty" data-testid="documents-none" title="本轮未返回文档片段，不代表资料不存在或已具备足够证据。">文档片段：本轮无</p>
+    <MetricDefinitions :metrics="response.metric_definitions ?? []" :available-doc-ids="docIds" @focus-ref="emit('focus-ref', $event)" />
     <CalculationEvidence :calculations="response.calculations ?? []" :fixture-sources="fixtureSources" />
     <TraceEvidence :steps="response.trace ?? []" :show-trace-requested="showTraceRequested" />
   </section>

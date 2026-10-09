@@ -1,5 +1,40 @@
 import type { AskResponse, JsonValue, SqlQueryResponse } from '../../contracts';
 
+export type CitationKind = 'sql' | 'document' | 'metric';
+export interface CitationTarget { refId: string; token: string; label: string; kind: CitationKind }
+export interface AnswerSegment { text: string; refId: string | null }
+
+/** Evidence anchors for the current response: SQL queries, document chunks, metric definitions. */
+export function citationTargets(response: AskResponse): CitationTarget[] {
+  const targets: CitationTarget[] = [];
+  for (const sql of response.sql_results ?? []) targets.push({ refId: `ev-sql-${sql.query_id}`, token: sql.query_id, label: `SQL · ${sql.query_id}`, kind: 'sql' });
+  for (const document of response.documents ?? []) targets.push({ refId: `ev-doc-${document.chunk_id}`, token: document.chunk_id, label: `文档 · ${document.title}`, kind: 'document' });
+  for (const metric of response.metric_definitions ?? []) targets.push({ refId: `ev-metric-${metric.metric_id}`, token: metric.metric_id, label: `口径 · ${metric.name}`, kind: 'metric' });
+  return targets;
+}
+
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const ANSWER_NOTE_LINE = /^来源：(真实|SQL)/;
+
+/** Separate source-banner/provenance boilerplate lines from the substantive answer so the UI can lead with the conclusion. */
+export function splitAnswer(answer: string): { conclusion: string; notes: string } {
+  const conclusion: string[] = [];
+  const notes: string[] = [];
+  for (const line of answer.split('\n')) (ANSWER_NOTE_LINE.test(line.trim()) ? notes : conclusion).push(line);
+  if (conclusion.some((line) => line.trim())) return { conclusion: conclusion.join('\n'), notes: notes.join('\n') };
+  return { conclusion: answer, notes: '' };
+}
+
+/** Split the answer into plain text and clickable evidence-ID segments; text content is preserved verbatim. */
+export function answerSegments(answer: string, targets: CitationTarget[]): AnswerSegment[] {
+  const tokenMap = new Map(targets.filter((target) => target.kind !== 'metric' && target.token).map((target) => [target.token, target.refId]));
+  if (!answer || tokenMap.size === 0) return [{ text: answer, refId: null }];
+  const tokens = [...tokenMap.keys()].sort((a, b) => b.length - a.length);
+  const pattern = new RegExp(`(${tokens.map(escapeRegExp).join('|')})`, 'g');
+  return answer.split(pattern).filter((part) => part !== '').map((part) => ({ text: part, refId: tokenMap.get(part) ?? null }));
+}
+
 export function jsonText(value: JsonValue | undefined): string {
   return value === undefined ? '（未提供）' : JSON.stringify(value, null, 2);
 }
@@ -22,6 +57,14 @@ export function sqlShapeNotes(result: SqlQueryResponse): string[] {
   if (rows.some((row) => columns.some((column) => !Object.hasOwn(row, column)))) notes.push('部分行缺少声明列；缺失字段不是 null 或 0。');
   if (rows.some((row) => Object.keys(row).some((key) => !columnSet.has(key)))) notes.push('部分行包含声明列之外的字段；请查看完整原始行。');
   return notes;
+}
+
+/** RFC-4180 CSV for one result table; the caller prepends the UTF-8 BOM for Excel. */
+export function sqlRowsToCsv(columns: string[], rows: Record<string, JsonValue>[]): string {
+  const field = (value: string) => (/[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value);
+  const lines = [columns.map(field).join(',')];
+  for (const row of rows) lines.push(columns.map((column) => field(cellText(row, column))).join(','));
+  return lines.join('\r\n');
 }
 const fixtureText = (value: string) => /fixture(?::|\/\/)|人工(?:测试|来源|资料|证据|计算| SQL)/i.test(value);
 export function hasFixtureSources(response: AskResponse): boolean {

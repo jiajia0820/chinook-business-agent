@@ -97,6 +97,12 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
 
     def initialize(state: AgentState):
         profile = profiles.get(state["profile_id"])
+        profile_limitations = list(profile.limitations)
+        if profile.sql_backend and profile.sql_backend.model_mode == "live":
+            profile_limitations = [
+                item for item in profile_limitations
+                if "离线模型" not in item and "固定问法" not in item
+            ]
         memory = state.get("memory")
         if not memory or memory["profile_id"] != profile.profile_id or memory["config_version"] != profile.config_version:
             memory = SessionMemory(profile_id=profile.profile_id, config_version=profile.config_version).model_dump(mode="json")
@@ -105,7 +111,7 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
             "tool_plan": [], "sql_outcome": None, "retrieval_outcome": None,
             "calculations": [], "calculation_binding": None, "calculation_evidence": None, "evidence_refs": [],
             "events": [], "node_path": ["initialize_turn"], "error": None, "response": None,
-            "limitations": [source_banner, "当前为有限规则解析，不支持任意自然语言；会话仅在本进程内保留。", *profile.limitations],
+            "limitations": [source_banner, "当前解析覆盖已登记的业务指标、时间和实体范围；会话仅在本进程内保留。", *profile_limitations],
         }
 
     def parse(state: AgentState):
@@ -134,6 +140,9 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
         if "partial_data_coverage" in parsed.rules:
             profile = profiles.get(state["profile_id"])
             limitations = [*limitations, f"请求周期超出样例数据实际覆盖 {profile.data_start} 至 {profile.data_end}，仅代表已有数据，不能声称完整周期统计。"]
+        year_assumed = (parsed.task.slots or {}).get("year_assumed") if parsed.task else None
+        if year_assumed:
+            limitations = [*limitations, f"原问题未给年份，按经营资料锚定的 {year_assumed} 年口径声明后计算，未静默猜测。"]
         return mark(state, "validate_slots_and_capabilities", parsed=parsed.model_dump(mode="json"), status=statuses[parsed.decision], route=route, tool_plan=plan, limitations=limitations)
 
     def start_route(state):
@@ -170,7 +179,8 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
     async def call_rag(state: AgentState):
         task = ParsedTurn.model_validate(state["parsed"]).task
         request = AskRequest.model_validate(state["request"])
-        payload = RetrievalRequest(retrieval_id="retrieval-" + str(uuid.uuid4()), profile_id=state["profile_id"], query=task.normalized_question, filters={"slots": task.slots, "business_metric_ids": task.business_metric_ids}, top_k=request.options.top_k)
+        retrieval_query = task.original_question if task.route == "cross_source" else task.normalized_question
+        payload = RetrievalRequest(retrieval_id="retrieval-" + str(uuid.uuid4()), profile_id=state["profile_id"], query=retrieval_query, filters={"slots": task.slots, "business_metric_ids": task.business_metric_ids}, top_k=request.options.top_k)
         outcome = await runtime.run("rag.retrieve", payload, context(state))
         return tool_update(state, "rag", outcome, "retrieval_outcome", list(outcome.source_refs))
 

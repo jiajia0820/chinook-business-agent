@@ -281,3 +281,59 @@ describe('question/session state without a runtime fixture fallback', () => {
     expect(second.sessionId.value).toBe('second');
   });
 });
+
+describe('local session question history', () => {
+  it('starts empty and records settled questions newest first', async () => {
+    const ask = vi.fn<AskClient['ask']>().mockResolvedValueOnce(business()).mockResolvedValueOnce(requestError());
+    const state = workspace({ ask });
+    expect(state.history.value).toEqual([]);
+    state.question.value = EXAMPLES[0]!;
+    expect(await state.submit()).toBe(true);
+    state.question.value = EXAMPLES[1]!;
+    expect(await state.submit()).toBe(true);
+    expect(state.history.value.map((entry) => entry.status)).toEqual(['network', 'answered']);
+    expect(state.history.value.map((entry) => entry.question)).toEqual([EXAMPLES[1], EXAMPLES[0]]);
+    for (const entry of state.history.value) {
+      expect(entry.summary.length).toBeGreaterThan(0);
+      expect(entry.summary).not.toContain('\n');
+      expect(entry.atMs).toBeGreaterThan(0);
+    }
+    expect(state.history.value[0]!.id).toBeGreaterThan(state.history.value[1]!.id);
+  });
+  it('summarizes clarification and API failures without inventing answers', async () => {
+    const ask = vi.fn<AskClient['ask']>().mockResolvedValueOnce(resetResponse()).mockResolvedValueOnce(apiError());
+    const state = workspace({ ask });
+    state.question.value = EXAMPLES[0]!;
+    await state.submit();
+    state.question.value = EXAMPLES[1]!;
+    await state.submit();
+    expect(state.history.value[0]!.status).toBe('api_error');
+    expect(state.history.value[0]!.summary).toContain('API 暂不可用');
+    expect(state.history.value[1]!.status).toBe('clarification_required');
+    expect(state.history.value[1]!.summary).toContain('清空当前任务');
+  });
+  it('does not record a question whose wait was stopped', async () => {
+    const pending = deferred<AskClientResult>();
+    const ask = vi.fn<AskClient['ask']>().mockReturnValue(pending.promise);
+    const state = workspace({ ask });
+    state.question.value = EXAMPLES[0]!;
+    const work = state.submit();
+    state.stopWaiting();
+    pending.resolve(business());
+    expect(await work).toBe(false);
+    await Promise.resolve();
+    expect(state.history.value).toEqual([]);
+  });
+  it('clears with a new session and keeps only the newest 30 entries', async () => {
+    const ask = vi.fn<AskClient['ask']>().mockResolvedValue(business());
+    const state = workspace({ ask });
+    for (let index = 0; index < 31; index += 1) {
+      state.question.value = `${EXAMPLES[0]}${index}`;
+      expect(await state.submit()).toBe(true);
+    }
+    expect(state.history.value).toHaveLength(30);
+    expect(state.history.value[0]!.question).toBe(`${EXAMPLES[0]}30`);
+    state.newSession();
+    expect(state.history.value).toEqual([]);
+  });
+});

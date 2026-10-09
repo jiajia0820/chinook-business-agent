@@ -67,7 +67,11 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         response = await self.request(self.create_app(), "GET", "/health")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"status": "ok", "service": "agent-api"})
+        payload = response.json()
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["service"], "agent-api")
+        # 健康检查必须暴露当前模型模式，避免再次静默退回离线替身而无人察觉。
+        self.assertIn(payload["model_mode"], {"offline", "live", None})
         self.assertTrue(response.headers["X-Request-ID"].startswith("req-"))
 
     async def test_incoming_request_id_is_preserved(self) -> None:

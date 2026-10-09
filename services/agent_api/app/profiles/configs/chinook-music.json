@@ -7,8 +7,19 @@
     "profile_id": "chinook",
     "display_name": "Chinook 样例库",
     "model_mode": "offline",
-    "registered_metric_ids": ["customer_count"],
-    "declared_slots": {}
+    "registered_metric_ids": [
+      "customer_count", "sales_amount", "units_sold", "order_count",
+      "purchasing_customers", "average_order_value", "genre_sales",
+      "track_sales", "album_sales", "artist_sales", "media_type_sales",
+      "billing_country_sales", "playlist_track_count"
+    ],
+    "declared_slots": {
+      "start_date": {"type": "string"},
+      "end_date": {"type": "string"},
+      "media_ids": {"type": "array"},
+      "playlist_id": {"type": "integer"},
+      "comparison_period": {"type": "object"}
+    }
   },
   "document_root": "data/knowledge",
   "catalogs": {"dictionary": null, "aliases": null, "metrics": null, "documents": null},
@@ -33,6 +44,76 @@
       "definition": "筛选范围内按 Invoice.CustomerId 去重，不等于 Customer 表全部登记记录。",
       "unit": "人",
       "source_refs": ["D12:四 指标怎么理解"]
+    },
+    {
+      "metric_id": "units_sold",
+      "name": "销量",
+      "definition": "按 InvoiceLine.Quantity 汇总，单位为件。",
+      "unit": "件",
+      "source_refs": ["D01", "D12"]
+    },
+    {
+      "metric_id": "order_count",
+      "name": "订单数",
+      "definition": "在筛选范围内按 InvoiceId 去重计数。",
+      "unit": "单",
+      "source_refs": ["D01", "D02"]
+    },
+    {
+      "metric_id": "average_order_value",
+      "name": "客单价",
+      "definition": "同一筛选范围内销售额除以订单数。",
+      "unit": "USD/单",
+      "source_refs": ["D01", "D02"]
+    },
+    {
+      "metric_id": "genre_sales",
+      "name": "品类销售额",
+      "definition": "按 Genre 汇总筛选范围内的销售额。",
+      "unit": "USD",
+      "source_refs": ["D01", "D03"]
+    },
+    {
+      "metric_id": "track_sales",
+      "name": "商品销售额",
+      "definition": "按 Track 汇总筛选范围内的销售额。",
+      "unit": "USD",
+      "source_refs": ["D01", "D05", "D12"]
+    },
+    {
+      "metric_id": "album_sales",
+      "name": "专辑销售额",
+      "definition": "按 Album 汇总筛选范围内的销售额。",
+      "unit": "USD",
+      "source_refs": ["D01", "D12"]
+    },
+    {
+      "metric_id": "artist_sales",
+      "name": "艺术家销售额",
+      "definition": "按 Artist 汇总筛选范围内的销售额。",
+      "unit": "USD",
+      "source_refs": ["D01", "D12"]
+    },
+    {
+      "metric_id": "media_type_sales",
+      "name": "媒体类型销售额",
+      "definition": "按 MediaType 汇总销售额，用于区分音频与视频。",
+      "unit": "USD",
+      "source_refs": ["D01", "D03"]
+    },
+    {
+      "metric_id": "billing_country_sales",
+      "name": "账单国家销售额",
+      "definition": "按 Invoice.BillingCountry 汇总销售额。",
+      "unit": "USD",
+      "source_refs": ["D01", "D02"]
+    },
+    {
+      "metric_id": "playlist_track_count",
+      "name": "播放列表商品数",
+      "definition": "按 PlaylistTrack 统计播放列表收录的去重 Track 数。",
+      "unit": "件",
+      "source_refs": ["D03", "D12"]
     }
   ],
   "aliases": [
@@ -44,6 +125,17 @@
   ],
   "question_rules": {
     "document_queries": [
+      {"canonical_question": "销售额指标定义是什么？", "aliases": ["销售额指标定义是什么", "销售额指标怎么定义", "指标销售额怎么计算", "销售额口径是什么", "销售额定义是什么", "销售额怎么计算"], "business_metric_ids": ["sales_amount"]},
+      {"canonical_question": "销售分析方法是什么？", "aliases": ["销售分析方法是什么", "销售分析怎么做"], "business_metric_ids": []},
+      {"canonical_question": "音乐分类和商品范围是什么？", "aliases": ["音乐分类和商品范围是什么", "音乐分类范围是什么"], "business_metric_ids": []},
+      {"canonical_question": "客户如何分层？", "aliases": ["客户如何分层", "客户分层规则是什么"], "business_metric_ids": []},
+      {"canonical_question": "商品推荐与选品规则是什么？", "aliases": ["商品推荐与选品规则是什么", "商品如何选品"], "business_metric_ids": []},
+      {"canonical_question": "2025年第三季度经营目标是什么？", "aliases": ["2025年第三季度经营目标是什么", "2025 Q3经营目标是什么"], "business_metric_ids": ["sales_amount"]},
+      {"canonical_question": "2025年第二季度经营复盘是什么？", "aliases": ["2025年第二季度经营复盘是什么", "2025 Q2经营复盘是什么"], "business_metric_ids": []},
+      {"canonical_question": "2025年第三季度经营复盘是什么？", "aliases": ["2025年第三季度经营复盘是什么", "2025 Q3经营复盘是什么"], "business_metric_ids": []},
+      {"canonical_question": "Rock品类运营规则是什么？", "aliases": ["Rock品类运营规则是什么", "Rock品类怎么运营"], "business_metric_ids": []},
+      {"canonical_question": "音乐主题活动方案是什么？", "aliases": ["音乐主题活动方案是什么", "音乐活动方案是什么"], "business_metric_ids": []},
+      {"canonical_question": "活动报名截止时间是什么？", "aliases": ["活动报名截止时间是什么", "活动报名需要什么"], "business_metric_ids": []},
       {"canonical_question": "默认音乐范围是什么？", "aliases": ["默认音乐范围是什么", "默认音频范围是什么", "默认音乐统计范围是什么"], "business_metric_ids": []},
       {"canonical_question": "购买客户数定义是什么？", "aliases": ["购买客户数定义是什么", "购买客户数是什么意思"], "business_metric_ids": ["purchasing_customers"]},
       {"canonical_question": "购买客户数与登记客户记录数有什么区别？", "aliases": ["购买客户数与登记客户记录数有什么区别", "购买客户数与登记客户数有什么区别"], "business_metric_ids": ["purchasing_customers", "customer_count"]}
@@ -56,7 +148,17 @@
     "metric_terms": {
       "customer_count": ["客户数量", "客户总数", "登记客户数", "客户记录数", "多少客户", "客户有多少"],
       "sales_amount": ["销售额", "销售金额", "营收"],
-      "purchasing_customers": ["购买客户数", "购买人数"]
+      "purchasing_customers": ["购买客户数", "购买人数", "购买客户", "购买的客户", "购买过的客户", "多少位客户", "下单客户", "成交客户"],
+      "units_sold": ["销量", "销售件数", "销售量", "卖了多少件", "卖出多少件", "多少件", "件数"],
+      "order_count": ["订单数", "订单数量", "订单量", "订单张数", "多少张订单", "多少笔订单", "多少个订单", "订单有多少"],
+      "average_order_value": ["客单价"],
+      "genre_sales": ["品类销售额", "分类销售额", "音乐分类", "各品类", "各分类"],
+      "track_sales": ["商品销售额", "单曲销售额", "音频商品", "各商品"],
+      "album_sales": ["专辑销售额"],
+      "artist_sales": ["艺术家销售额", "歌手销售额"],
+      "media_type_sales": ["媒体类型销售额", "各媒体类型", "媒体类型的销售"],
+      "billing_country_sales": ["账单国家销售额", "国家销售额", "账单国家", "各国家"],
+      "playlist_track_count": ["播放列表商品数", "播放列表收录数"]
     },
     "unsupported_terms": {
       "profit": ["利润", "profit"], "cost": ["成本"],
@@ -64,13 +166,16 @@
       "ad_impressions": ["广告曝光"], "play_count": ["播放量", "播放次数"]
     },
     "ambiguous_scope_terms": ["摇滚相关"],
-    "intent_default_metric_ids": {"target_attainment": ["sales_amount"], "target_difference": ["sales_amount"]},
-    "query_fillers": ["请问", "请", "帮我", "查一下", "查询", "统计", "计算", "是多少", "多少", "是什么", "什么", "如何", "呢", "吗", "了", "的", "有", "在", "来自", "以及", "和", "对比", "目标", "完成率", "音乐", "音频", "全部", "仅", "按", "换成", "改成", "更正", "全年"],
+    "intent_default_metric_ids": {"target_attainment": ["sales_amount"], "target_difference": ["sales_amount"], "growth_rate": ["sales_amount"]},
+    "query_fillers": ["请问", "请", "帮我", "查一下", "查询", "统计", "计算", "是多少", "多少", "是什么", "什么", "如何", "呢", "吗", "了", "的", "有", "在", "来自", "以及", "和", "与", "对比", "相比", "目标", "完成率", "音乐", "音频", "全部", "仅", "按", "换成", "改成", "更正", "全年", "各", "各项", "各个", "每个", "分别"],
     "intent_terms": {
       "target_difference": ["目标差额", "与目标差多少", "目标差多少"],
-      "target_attainment": ["达标", "和目标比", "目标完成率", "对比目标"],
-      "growth_rate": ["增长率", "环比", "同比"],
-      "document_rule": ["口径", "定义", "规则", "怎么计算", "公式"],
+      "target_attainment": ["达标", "达到目标", "和目标比", "目标完成率", "对比目标"],
+      "growth_rate": ["增长率", "增长多少", "增长", "环比", "同比"],
+      "document_rule": ["口径", "定义", "规则", "怎么计算", "公式", "怎么写", "包括哪些", "包含哪些",
+        "对应哪个", "对应什么", "通常对应", "默认按哪个", "是否应该", "如何归类", "怎么归类",
+        "是一个分类", "如何衔接", "怎么衔接", "是否一致", "范围差异", "核心结果", "如何结合",
+        "如何影响", "怎么处理", "建议关注", "建议观察", "应使用哪个", "目标是多少"],
       "document_calculation": ["按文档计算", "根据文档计算"],
       "cross_source": ["结合文档", "并解释口径", "同时说明口径"],
       "vague_metric": ["卖得怎么样", "销售情况"]

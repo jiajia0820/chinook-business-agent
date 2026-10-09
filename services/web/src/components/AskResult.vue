@@ -2,7 +2,9 @@
 import { computed } from 'vue';
 import type { AskClientResult } from '../api/client';
 import type { AskOptions, AskStatus, Route } from '../contracts';
+import CopyButton from './CopyButton.vue';
 import EvidencePanel from './evidence/EvidencePanel.vue';
+import { answerSegments, citationTargets, splitAnswer } from './evidence/format';
 
 const props = withDefaults(defineProps<{ result: AskClientResult; choicesDisabled?: boolean; requestOptions?: AskOptions | null }>(), { choicesDisabled: false, requestOptions: null });
 defineEmits<{ clarification: [text: string] }>();
@@ -14,6 +16,22 @@ const titles: Record<AskStatus, string> = {
   insufficient_evidence: '证据不足', unsupported: '当前能力不支持', error: '业务处理出错',
 };
 const routes: Record<Route, string> = { sql: '数据库问数', rag: '文档检索', cross_source: '跨源', clarification: '澄清', unsupported: '不支持' };
+const citations = computed(() => business.value ? citationTargets(business.value) : []);
+// The answer leads with the substantive conclusion; source-banner/provenance lines are demoted to small notes below it.
+const answerSplit = computed(() => (business.value?.answer != null ? splitAnswer(business.value.answer) : null));
+const conclusionSegments = computed(() => (answerSplit.value ? answerSegments(answerSplit.value.conclusion, citations.value) : []));
+const noteSegments = computed(() => (answerSplit.value?.notes ? answerSegments(answerSplit.value.notes, citations.value) : []));
+// Citation click: expand, scroll to and briefly highlight the referenced evidence card.
+function focusEvidence(refId: string) {
+  const element = document.getElementById(refId);
+  if (!element) return;
+  element.querySelectorAll('details').forEach((details) => { details.open = true; });
+  // Cards taller than the viewport must keep their head (SQL text, metric definition) on screen, so align those to the top.
+  const block = element.getBoundingClientRect().height > window.innerHeight * 0.8 ? 'start' : 'center';
+  element.scrollIntoView?.({ behavior: 'smooth', block });
+  element.classList.add('evidence-highlight');
+  window.setTimeout(() => element.classList.remove('evidence-highlight'), 2400);
+}
 </script>
 
 <template>
@@ -23,11 +41,18 @@ const routes: Record<Route, string> = { sql: '数据库问数', rag: '文档检�
         <h2 id="result-heading">{{ titles[business.status] }}</h2>
         <span class="status-tag" :data-status="business.status">{{ business.status }}</span>
       </div>
+      <div v-if="business.answer !== null" class="answer-block" data-testid="answer">
+        <p class="answer-conclusion" data-testid="answer-conclusion"><CopyButton v-if="business.answer" class="answer-copy" :text="business.answer" label="复制答案" /><template v-for="(segment, index) in conclusionSegments" :key="index"><button v-if="segment.refId" type="button" class="cite-link" :data-testid="`answer-ref-${index}`" @click="focusEvidence(segment.refId)">{{ segment.text }}</button><template v-else>{{ segment.text }}</template></template></p>
+        <p v-if="noteSegments.length" class="answer-notes" data-testid="answer-notes"><template v-for="(segment, index) in noteSegments" :key="`note-${index}`"><button v-if="segment.refId" type="button" class="cite-link" :data-testid="`answer-note-ref-${index}`" @click="focusEvidence(segment.refId)">{{ segment.text }}</button><template v-else>{{ segment.text }}</template></template></p>
+      </div>
+      <div v-if="citations.length" class="citation-bar" data-testid="citation-bar" aria-label="回答引用">
+        <span class="citation-bar-label">回答引用</span>
+        <button v-for="(target, index) in citations" :key="`${target.refId}-${index}`" type="button" class="citation-chip" :data-kind="target.kind" :data-testid="`citation-chip-${index}`" :title="target.label" @click="focusEvidence(target.refId)">{{ target.label }}</button>
+      </div>
       <dl class="result-meta">
         <div><dt>业务路由</dt><dd>{{ routes[business.route] }} · {{ business.route }}</dd></div>
         <div><dt>请求 ID</dt><dd>{{ result.requestId }}</dd></div>
       </dl>
-      <p v-if="business.answer !== null" class="answer-text" data-testid="answer">{{ business.answer }}</p>
       <div v-if="business.status === 'error' && business.error" class="error-message" role="alert">
         <p>{{ business.error.code }}：{{ business.error.message }}</p>
         <p>{{ business.error.retryable ? '可手动重试，不会自动重发。' : '请依据提示修改问题或检查能力范围。' }}</p>
@@ -43,11 +68,7 @@ const routes: Record<Route, string> = { sql: '数据库问数', rag: '文档检�
         </div>
         <p class="helper">点击候选项会带当前会话发送补充请求；也可以在输入框手动补充。不会默认补年份。</p>
       </section>
-      <section v-if="business.limitations?.length" class="limitations" aria-labelledby="limitations-heading">
-        <h3 id="limitations-heading">口径与能力限制</h3>
-        <ul><li v-for="(limitation, index) in business.limitations" :key="index">{{ limitation }}</li></ul>
-      </section>
-      <EvidencePanel :key="business.request_id" :response="business" :show-trace-requested="requestOptions?.show_trace ?? null" />
+      <EvidencePanel :key="business.request_id" :response="business" :show-trace-requested="requestOptions?.show_trace ?? null" @focus-ref="focusEvidence" />
     </template>
     <template v-else-if="apiError">
       <h2 id="result-heading">API 请求出错</h2>

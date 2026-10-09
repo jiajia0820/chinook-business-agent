@@ -121,6 +121,48 @@ class BasicNLTests(unittest.TestCase):
         r=service.answer_sql(request,self.access)
         self.assertEqual(r['error']['code'],'PROFILE_UNAVAILABLE',r)
 
+    def test_model_failure_degrades_to_controlled_plan(self):
+        class FailingModel:
+            is_demo=False
+            def generate_json(self,messages,output_schema,deadline):
+                raise ModuleError('SQL_EXECUTION_FAILED','模型服务返回 HTTP 504','MODEL_HTTP_FAILED',True)
+
+        request=dict(request_id='r',profile_id='chinook',question='2025年第三季度音频销售额是多少？',
+                     context=dict(resolved_slots=dict(start_date='2025-07-01',end_date='2025-10-01',media_ids=[1,2,4,5]),
+                                  metric_ids=['sales_amount']))
+        r=NLQueryService(self.registry,FailingModel()).answer_sql(request,self.access)
+        self.assertEqual(r['status'],'answered',r)
+        self.assertEqual(r['sql_results'][0]['rows'],[{'sales_amount':112.86}])
+        self.assertTrue(any('受控查询计划' in line and '模型调用' in line for line in r['limitations']),r['limitations'])
+        self.assertTrue(any('受控查询计划' in (step.get('summary') or '') for step in r['trace']),r['trace'])
+
+    def test_model_failure_without_registered_metrics_still_errors(self):
+        class FailingModel:
+            is_demo=False
+            def generate_json(self,messages,output_schema,deadline):
+                raise ModuleError('SQL_EXECUTION_FAILED','模型调用超时','MODEL_TIMEOUT')
+
+        # 没有已登记指标就没有确定性口径可用，此时必须如实失败，不能猜一条 SQL。
+        r=NLQueryService(self.registry,FailingModel()).answer_sql(
+            dict(request_id='r',profile_id='chinook',question='随便问点什么'),self.access)
+        self.assertEqual(r['status'],'error',r)
+        self.assertEqual(r['error']['details']['reason'],'MODEL_TIMEOUT',r)
+        self.assertEqual(r['sql_results'],[])
+
+    def test_config_failure_does_not_degrade(self):
+        class UnconfiguredModel:
+            is_demo=False
+            def generate_json(self,messages,output_schema,deadline):
+                raise ModuleError('PROFILE_UNAVAILABLE','模型配置不可用','CONFIG_MISSING')
+
+        request=dict(request_id='r',profile_id='chinook',question='2025年第三季度音频销售额是多少？',
+                     context=dict(resolved_slots=dict(start_date='2025-07-01',end_date='2025-10-01',media_ids=[1,2,4,5]),
+                                  metric_ids=['sales_amount']))
+        r=NLQueryService(self.registry,UnconfiguredModel()).answer_sql(request,self.access)
+        self.assertEqual(r['status'],'error',r)
+        self.assertEqual(r['error']['details']['reason'],'CONFIG_MISSING',r)
+        self.assertEqual(r['sql_results'],[])
+
     def test_demo_explicit_label_and_supported_examples(self):
         for question,value in [('客户数量是多少？',59),('美国客户数量是多少？',13)]:
             r=self.ask(DemoJSONModel(),question=question)

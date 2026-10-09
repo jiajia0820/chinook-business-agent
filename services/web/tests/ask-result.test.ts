@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { enableAutoUnmount, mount } from '@vue/test-utils';
 import AskResult from '../src/components/AskResult.vue';
 import type { AskResponse } from '../src/contracts';
 import { recordedBusiness } from './recorded-http';
+import { actualResponse } from './evidence-fixtures';
 import { apiError, business, requestError } from './workspace-fixtures';
 
 enableAutoUnmount(afterEach);
@@ -13,8 +14,14 @@ describe('retained 4B result branches alongside 4C evidence', () => {
     expect(wrapper.get('.status-tag').attributes('data-status')).toBe(response.status);
     expect(wrapper.text()).toContain(response.route);
     expect(wrapper.text()).toContain(response.request_id);
-    for (const limitation of response.limitations ?? []) expect(wrapper.text()).toContain(limitation);
-    if (response.answer !== null) expect(wrapper.get('[data-testid="answer"]').text()).toBe(response.answer.trim());
+    if (response.answer !== null) {
+      // The answer is regrouped (conclusion first, boilerplate as notes), so assert every source line survives verbatim.
+      const rendered = wrapper.get('[data-testid="answer"]').text().replace(/\s+/g, '');
+      for (const line of response.answer.trim().split('\n')) {
+        const compact = line.replace(/\s+/g, '');
+        if (compact) expect(rendered).toContain(compact);
+      }
+    }
     expect(wrapper.find('form').exists()).toBe(false);
     expect(wrapper.find('a').exists()).toBe(false);
     if (response.status !== 'answered') expect(wrapper.get('h2').text()).not.toBe('已回答');
@@ -61,7 +68,6 @@ describe('retained 4B result branches alongside 4C evidence', () => {
     delete result.response.sql_results;
     const wrapper = mount(AskResult, { props: { result } });
     expect(wrapper.find('[data-testid="answer"]').exists()).toBe(false);
-    expect(wrapper.find('.limitations').exists()).toBe(false);
     expect(wrapper.text()).toContain('证据不足');
     expect(wrapper.text()).not.toContain('0.00');
   });
@@ -76,7 +82,6 @@ describe('retained 4B result branches alongside 4C evidence', () => {
   it('renders long text and markup only as text, with no scripts/images/download links', () => {
     const result = business();
     result.response.answer = '<img src=x onerror=alert(1)>\n<script>alert(2)</script>' + '长'.repeat(10_000);
-    result.response.limitations = ['<a href="file:///private">资料</a>'];
     const wrapper = mount(AskResult, { props: { result } });
     expect(wrapper.get('[data-testid="answer"]').text()).toContain(result.response.answer);
     expect(wrapper.findAll('img, script, a')).toHaveLength(0);
@@ -90,5 +95,105 @@ describe('retained 4B result branches alongside 4C evidence', () => {
     expect(wrapper.text()).toContain(result.error.message);
     expect(wrapper.find('svg').exists()).toBe(false);
     expect(wrapper.text()).not.toContain('PRIVATE_TEST_DETAIL');
+  });
+});
+
+describe('answer-to-evidence citation linking', () => {
+  function answeredWithSql() {
+    const response = actualResponse('客户数量是多少？');
+    const queryId = response.sql_results![0]!.query_id;
+    response.answer = `客户数量为 59。来源：SQL ${queryId}。`;
+    return { result: { kind: 'business' as const, response, requestId: response.request_id, httpStatus: 200 as const }, queryId };
+  }
+  it('turns evidence IDs inside the answer into clickable refs without altering text', () => {
+    const { result, queryId } = answeredWithSql();
+    const wrapper = mount(AskResult, { props: { result } });
+    const refs = wrapper.findAll('.cite-link');
+    expect(refs).toHaveLength(1);
+    expect(refs[0]!.text()).toBe(queryId);
+    expect(wrapper.get('[data-testid="answer"]').text()).toBe(result.response.answer);
+  });
+  it('lists SQL/document/metric citations and focuses the target card on click', async () => {
+    const { result, queryId } = answeredWithSql();
+    const wrapper = mount(AskResult, { props: { result }, attachTo: document.body });
+    const chips = wrapper.findAll('[data-testid="citation-bar"] .citation-chip');
+    expect(chips.length).toBeGreaterThanOrEqual(2);
+    expect(chips[0]!.text()).toContain(queryId);
+    expect(chips.some((chip) => chip.attributes('data-kind') === 'metric')).toBe(true);
+    const card = document.getElementById(`ev-sql-${queryId}`);
+    expect(card).not.toBeNull();
+    const details = card!.querySelector('details[data-testid="sql-query"]') as HTMLDetailsElement;
+    details.open = false;
+    await chips[0]!.trigger('click');
+    expect(card!.classList.contains('evidence-highlight')).toBe(true);
+    expect(details.open).toBe(true);
+  });
+  it('clicking an inline answer ref highlights the same SQL card', async () => {
+    const { result, queryId } = answeredWithSql();
+    const wrapper = mount(AskResult, { props: { result }, attachTo: document.body });
+    await wrapper.get('.cite-link').trigger('click');
+    expect(document.getElementById(`ev-sql-${queryId}`)!.classList.contains('evidence-highlight')).toBe(true);
+  });
+  it('aligns oversized evidence cards to their head and centers short ones', async () => {
+    const { result, queryId } = answeredWithSql();
+    const wrapper = mount(AskResult, { props: { result }, attachTo: document.body });
+    const card = document.getElementById(`ev-sql-${queryId}`)!;
+    const realRect = card.getBoundingClientRect.bind(card);
+    const realScroll = Element.prototype.scrollIntoView;
+    const alignments: Array<string | undefined> = [];
+    Element.prototype.scrollIntoView = function (options?: boolean | ScrollIntoViewOptions) {
+      alignments.push(typeof options === 'object' ? options?.block : undefined);
+    };
+    try {
+      card.getBoundingClientRect = () => ({ height: window.innerHeight * 2 } as DOMRect);
+      await wrapper.get('.cite-link').trigger('click');
+      card.getBoundingClientRect = () => ({ height: 120 } as DOMRect);
+      await wrapper.get('.cite-link').trigger('click');
+      expect(alignments).toEqual(['start', 'center']);
+    } finally {
+      Element.prototype.scrollIntoView = realScroll;
+      card.getBoundingClientRect = realRect;
+    }
+  });
+  it('renders no citation bar when the response carries no evidence', () => {
+    const result = business('insufficient_evidence');
+    delete result.response.sql_results;
+    delete result.response.documents;
+    delete result.response.metric_definitions;
+    const wrapper = mount(AskResult, { props: { result } });
+    expect(wrapper.find('[data-testid="citation-bar"]').exists()).toBe(false);
+    expect(wrapper.findAll('.cite-link')).toHaveLength(0);
+  });
+  it('leads with the conclusion and demotes source boilerplate to notes below it', () => {
+    const { result, queryId } = answeredWithSql();
+    result.response.answer = `来源：真实 Chinook 样例库 + 大模型生成 SQL；候选经 C 只读安全校验后执行。\n查询结果：销售额 112.86 USD\n来源：SQL ${queryId}。展示 SQL 为 C 已接受候选；C 执行前会校验并规范化，不是逐字驱动语句。`;
+    const wrapper = mount(AskResult, { props: { result }, attachTo: document.body });
+    expect(wrapper.get('[data-testid="answer-conclusion"]').text()).toBe('查询结果：销售额 112.86 USD');
+    expect(wrapper.get('[data-testid="answer-notes"]').text().split('\n')).toHaveLength(2);
+    expect(wrapper.get('[data-testid="answer-note-ref-1"]').text()).toBe(queryId);
+    const answerPosition = wrapper.get('[data-testid="answer"]').element.compareDocumentPosition(wrapper.get('.result-meta').element);
+    expect(answerPosition & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+  it('keeps the full answer as conclusion when every line is boilerplate', () => {
+    const { result } = answeredWithSql();
+    result.response.answer = '来源：SQL 甲。\n来源：真实 乙。';
+    const wrapper = mount(AskResult, { props: { result } });
+    expect(wrapper.get('[data-testid="answer-conclusion"]').text()).toBe(result.response.answer);
+    expect(wrapper.find('[data-testid="answer-notes"]').exists()).toBe(false);
+  });
+  it('offers copy buttons for the whole answer and the candidate SQL', async () => {
+    const { result } = answeredWithSql();
+    const writeText = vi.fn(async (_text: string) => undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    const wrapper = mount(AskResult, { props: { result } });
+    const answerCopy = wrapper.get('[data-testid="answer-conclusion"] .icon-button');
+    expect(answerCopy.attributes('aria-label')).toBe('复制答案');
+    await answerCopy.trigger('click');
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(result.response.answer));
+    const sqlCopy = wrapper.get('[data-testid="sql-query"] .icon-button');
+    expect(sqlCopy.attributes('aria-label')).toBe('复制 SQL');
+    await sqlCopy.trigger('click');
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledTimes(2));
+    expect(writeText.mock.calls[1]![0]).toBe(result.response.sql_results![0]!.sql);
   });
 });

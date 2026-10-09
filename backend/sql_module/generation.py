@@ -53,18 +53,16 @@ class HTTPJSONModel:
 
     @classmethod
     def from_env(cls):
-        endpoint=os.environ.get('C_SQL_MODEL_ENDPOINT')
-        model=os.environ.get('C_SQL_MODEL_NAME')
-        key=os.environ.get('C_SQL_MODEL_API_KEY')
-        if not endpoint or not model or not key:
-            raise unavailable('CONFIG_MISSING','模型未配置；需服务端 C_SQL_MODEL_ENDPOINT/NAME/API_KEY，或显式离线演示')
-        parts=urlsplit(endpoint)
-        if parts.scheme!='https' or not parts.hostname or parts.username or parts.password or parts.query or parts.fragment:
-            raise unavailable('MODEL_CONFIG_INVALID','模型端点必须为无凭据/查询参数的 HTTPS 完整 URL')
-        return cls(endpoint,model,key)
+        from services.agent_api.app.core.model_config import ModelConfig, ModelConfigurationError
+        try:
+            config = ModelConfig.from_env()
+        except ModelConfigurationError as exc:
+            raise unavailable(exc.reason, '模型配置不可用；请设置 LLM_BASE_URL、LLM_MODEL 和 LLM_API_KEY') from None
+        params = config.c_http_parameters()
+        return cls(params["endpoint"], params["model"], params["api_key"])
 
     def generate_json(self, messages, output_schema, deadline):
-        timeout=min(20,deadline-time.monotonic())
+        timeout=min(60,deadline-time.monotonic())
         if timeout<=0: raise model_error('MODEL_TIMEOUT','模型调用预算已耗尽')
         body=json.dumps(dict(model=self._model,messages=messages,temperature=0,
                              response_format={'type':'json_object'},max_tokens=2048)).encode('utf-8')
@@ -101,6 +99,46 @@ class DemoJSONModel:
             '有哪些音乐类型':{'sql':'SELECT GenreId, Name FROM main.Genre ORDER BY GenreId','params':{}},
             '美国客户数量是多少':{'sql':'SELECT COUNT(*) AS customer_count FROM main.Customer WHERE Country=:country','params':{'country':'USA'}}
         }
+        question_lower = question.casefold()
+        if ('销售额' in question or '目标' in question or '增长' in question) and ('rock' in question_lower or '摇滚' in question):
+            start, end = ('2025-07-01', '2025-10-01') if ('第三季度' in question or 'q3' in question_lower) else ('2025-04-01', '2025-07-01')
+            if '增长' in question or '环比' in question:
+                examples[question] = {
+                    'sql': (
+                        "SELECT 'current' AS period, COALESCE(SUM(il.UnitPrice * il.Quantity), 0) AS sales_amount "
+                        "FROM main.InvoiceLine il JOIN main.Invoice i ON i.InvoiceId=il.InvoiceId JOIN main.Track t ON t.TrackId=il.TrackId "
+                        "WHERE i.InvoiceDate >= :current_start AND i.InvoiceDate < :current_end AND t.GenreId=:genre_id AND t.MediaTypeId IN (1,2,4,5) "
+                        "UNION ALL SELECT 'previous' AS period, COALESCE(SUM(il.UnitPrice * il.Quantity), 0) AS sales_amount "
+                        "FROM main.InvoiceLine il JOIN main.Invoice i ON i.InvoiceId=il.InvoiceId JOIN main.Track t ON t.TrackId=il.TrackId "
+                        "WHERE i.InvoiceDate >= :previous_start AND i.InvoiceDate < :previous_end AND t.GenreId=:genre_id AND t.MediaTypeId IN (1,2,4,5)"
+                    ),
+                    'params': {'current_start': start, 'current_end': end, 'previous_start': '2025-04-01', 'previous_end': '2025-07-01', 'genre_id': 1},
+                }
+            else:
+                examples[question] = {
+                'sql': (
+                    'SELECT COALESCE(SUM(il.UnitPrice * il.Quantity), 0) AS sales_amount '
+                    'FROM main.InvoiceLine il JOIN main.Invoice i ON i.InvoiceId=il.InvoiceId '
+                    'JOIN main.Track t ON t.TrackId=il.TrackId '
+                    'WHERE i.InvoiceDate >= :start_date AND i.InvoiceDate < :end_date '
+                    'AND t.GenreId=:genre_id AND t.MediaTypeId IN (1,2,4,5)'
+                ),
+                    'params': {'start_date': start, 'end_date': end, 'genre_id': 1},
+                }
+        if all(term in question for term in ('销售额', '销量', '订单数', '购买客户数')):
+            examples[question] = {
+                'sql': (
+                    'SELECT ROUND(COALESCE(SUM(il.UnitPrice * il.Quantity), 0), 2) AS sales_amount, '
+                    'COALESCE(SUM(il.Quantity), 0) AS units_sold, '
+                    'COUNT(DISTINCT i.InvoiceId) AS order_count, '
+                    'COUNT(DISTINCT i.CustomerId) AS purchasing_customers '
+                    'FROM main.InvoiceLine il JOIN main.Invoice i ON i.InvoiceId=il.InvoiceId '
+                    'JOIN main.Track t ON t.TrackId=il.TrackId '
+                    'WHERE i.InvoiceDate >= :start_date AND i.InvoiceDate < :end_date '
+                    'AND t.MediaTypeId IN (1,2,4,5)'
+                ),
+                'params': {'start_date': '2025-07-01', 'end_date': '2025-10-01'},
+            }
         if question not in examples:
             raise ModuleError('UNSUPPORTED_CAPABILITY','离线演示仅支持文档列出的固定问法')
         return json.dumps(examples[question],ensure_ascii=False)

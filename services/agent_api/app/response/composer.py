@@ -44,6 +44,8 @@ class SourcePolicy:
     profile_id: str
     database_name: str | None = None
     documents: tuple[DocumentSnapshot, ...] = ()
+    allow_business_calculation: bool = False
+    model_mode: str = "offline"
 
 
 BANNERS = {
@@ -52,6 +54,7 @@ BANNERS = {
     "offline_sql_d12_integration": "来源：真实 Chinook 样例库 + A 的 D12 V1.0 Markdown；仅有限问法，没有真实业务计算器。",
     "calculation_fixture": "人工测试来源：SQL 行、目标及公式文档是 fixture；仅 LocalCalculator 实际计算，不能当作真实销售或企业达标结论。",
 }
+LIVE_SQL_BANNER = "来源：真实 Chinook 样例库 + 大模型生成 SQL；候选经 C 只读安全校验后执行。"
 
 # Match exactly C's accepted offline candidate shapes, not arbitrary SQL text.
 SQL_SHAPES = {
@@ -60,6 +63,7 @@ SQL_SHAPES = {
     "有哪些音乐类型": ("SELECT GenreId, Name FROM main.Genre ORDER BY GenreId", {}, ["main.Genre"]),
 }
 SQL_NOTE = "展示 SQL 为 C 已接受候选；C 执行前会校验并规范化，不是逐字驱动语句。"
+RAG_NOTE = "以上为知识库检索到的原文片段，未改写、未推断；请结合来源文档核对完整上下文。"
 
 
 def question_key(value: str) -> str:
@@ -68,6 +72,30 @@ def question_key(value: str) -> str:
 
 def number(value: Decimal) -> str:
     return format(value, "f")
+
+
+# 直接以自身列名出现在结果里的度量指标。
+MEASURE_COLUMNS = frozenset({
+    "customer_count", "sales_amount", "units_sold", "order_count", "purchasing_customers",
+})
+
+
+def expected_result_evidence(metric_ids):
+    """Map registered metrics to the result columns that must evidence them.
+
+    A grouping metric such as genre_sales is answered by its measure column plus a
+    dimension column, never by a column named after the metric itself.
+    """
+    expected, grouped = set(), False
+    for metric in metric_ids:
+        if metric in MEASURE_COLUMNS:
+            expected.add(metric)
+        elif metric.endswith("_sales") or metric == "playlist_track_count":
+            expected.add("sales_amount" if metric.endswith("_sales") else "playlist_track_count")
+            grouped = True
+        else:
+            expected.add(metric)
+    return expected, grouped
 
 
 class FormalResponseComposer:
@@ -80,13 +108,20 @@ class FormalResponseComposer:
             raise ValueError("real D12 needs an already verified immutable catalog")
         if policy.execution_mode != "offline_sql_d12_integration" and policy.documents:
             raise ValueError("D12 catalog is not available in this source strategy")
+        if policy.model_mode not in {"offline", "live"}:
+            raise ValueError("unknown model mode")
         self.policy = policy
         self.execution_mode = policy.execution_mode
-        self.source_banner = BANNERS[self.execution_mode]
+        self.source_banner = (
+            LIVE_SQL_BANNER
+            if policy.model_mode == "live" and self.execution_mode.startswith("offline_sql")
+            else BANNERS[self.execution_mode]
+        )
 
     @classmethod
     def for_sql(cls, profile):
-        return cls(SourcePolicy("offline_sql_integration", profile.profile_id, profile.sql_backend.display_name))
+        return cls(SourcePolicy("offline_sql_integration", profile.profile_id,
+            profile.sql_backend.display_name, model_mode=profile.sql_backend.model_mode))
 
     @classmethod
     def for_sql_d12(cls, profile, index):
@@ -96,7 +131,21 @@ class FormalResponseComposer:
         records = tuple(DocumentSnapshot(item.record.chunk_id, doc.doc_id, doc.title, item.record.section,
             item.record.text, f"{SOURCE_PREFIX}{doc.path}#L{item.record.line_start}-L{item.record.line_end}", doc.version)
             for item in index.chunks)
-        return cls(SourcePolicy("offline_sql_d12_integration", profile.profile_id, profile.sql_backend.display_name, records))
+        return cls(SourcePolicy("offline_sql_d12_integration", profile.profile_id,
+            profile.sql_backend.display_name, records, model_mode=profile.sql_backend.model_mode))
+
+    @classmethod
+    def for_sql_knowledge(cls, profile, index):
+        records = tuple(
+            DocumentSnapshot(
+                item.record.chunk_id, item.record.doc_id, item.record.title,
+                item.record.section or "正文", item.record.text,
+                item.record.source_uri, item.record.version,
+            )
+            for item in index.chunks
+        )
+        return cls(SourcePolicy("offline_sql_d12_integration", profile.profile_id,
+            profile.sql_backend.display_name, records, True, profile.sql_backend.model_mode))
 
     @classmethod
     def for_calculation_fixture(cls, profile):
@@ -135,17 +184,26 @@ class FormalResponseComposer:
                 if real:
                     snapshots = {item.chunk_id: item for item in self.policy.documents}
                     item = snapshots.get(chunk.chunk_id)
-                    if item is None or (chunk.doc_id, chunk.title, chunk.section, chunk.text, chunk.source_uri, chunk.doc_type, chunk.page, chunk.bbox) != (item.doc_id, item.title, item.section, item.text, item.source_uri, "markdown", None, None):
+                    if item is None or (chunk.doc_id, chunk.title, chunk.section, chunk.text, chunk.source_uri) != (item.doc_id, item.title, item.section, item.text, item.source_uri):
                         raise SourceMismatch()
                 elif self.execution_mode in {"fixture", "calculation_fixture"} and (chunk.doc_type != "fixture" or not chunk.doc_id.startswith("fixture-") or not chunk.source_uri.startswith("fixture://")):
                     raise SourceMismatch()
-        if context.calculations and self.execution_mode not in {"fixture", "calculation_fixture"}:
+        if context.calculations and self.execution_mode not in {"fixture", "calculation_fixture"} and not self.policy.allow_business_calculation:
             raise SourceMismatch()  # Real business calculation is not installed.
 
     def _sql_answer(self, context):
         task, sql = context.task, context.sql
         key = question_key(task.normalized_question)
-        if key not in SQL_SHAPES or task.needs_calculation or task.time_range or task.slots or context.rag or not sql or sql.status != "success":
+        fixed_shape = False
+        if key in SQL_SHAPES and sql and sql.status == "success":
+            candidate, params, tables = SQL_SHAPES[key]
+            fixed_shape = bool(sql.sql_results) and all(
+                result.sql == candidate and result.params == params and result.source.tables == tables
+                for result in sql.sql_results
+            )
+        if not fixed_shape:
+            return self._generic_sql_answer(context)
+        if task.needs_calculation or task.time_range or task.slots or context.rag:
             raise EvidenceGap()
         candidate, params, tables = SQL_SHAPES[key]
         expected_entities = [{"type": "country", "id": "Country:USA", "label": "美国"}] if key == "美国客户数量是多少" else []
@@ -183,6 +241,79 @@ class FormalResponseComposer:
         scope = "Country=USA 的登记客户记录数" if params else "登记客户记录数"
         return f"Chinook 样例库中，{scope}为 {values[0][1]} 条。这里统计 Customer 表记录，不等同于筛选交易范围后的购买客户数。\n来源：" + "、".join(f"SQL {ref}" for ref, _ in values) + f"。{SQL_NOTE}"
 
+    def _generic_document_answer(self, context, limit: int = 3):
+        """Render retrieved passages verbatim instead of a single arbitrary chunk."""
+        documents = context.rag.chunks if context.rag else []
+        if not documents:
+            raise EvidenceGap()
+        seen, blocks = set(), []
+        for chunk in documents:
+            if chunk.chunk_id in seen:
+                continue
+            seen.add(chunk.chunk_id)
+            where = f" / {chunk.section}" if chunk.section else ""
+            blocks.append(f"【{chunk.doc_id}《{chunk.title}》{where}】\n{chunk.text}\n来源：{chunk.source_uri}")
+        doc_ids = sorted({chunk.doc_id for chunk in documents})
+        lead = f"从 {'、'.join(doc_ids)} 检索到 {len(blocks)} 段相关原文，按相关度展示前 {min(limit, len(blocks))} 段："
+        return lead + "\n\n" + "\n\n".join(blocks[:limit]) + "\n" + RAG_NOTE
+
+    def _generic_sql_answer(self, context):
+        task, sql = context.task, context.sql
+        if task.needs_calculation or context.rag or not sql or sql.status != "success" or not sql.sql_results:
+            raise EvidenceGap()
+        labels = {
+            "customer_count": "客户数量",
+            "sales_amount": "销售额",
+            "units_sold": "销量",
+            "order_count": "订单数",
+            "purchasing_customers": "购买客户数",
+            "genre": "品类",
+            "billing_country": "账单国家",
+            "TrackId": "商品 ID",
+            "AlbumId": "专辑 ID",
+            "ArtistId": "艺术家 ID",
+            "MediaTypeId": "媒体类型 ID",
+            "Name": "名称",
+            "Title": "标题",
+        }
+        units = {
+            "customer_count": "人",
+            "sales_amount": "USD",
+            "units_sold": "件",
+            "order_count": "单",
+            "purchasing_customers": "人",
+        }
+        expected, grouped = expected_result_evidence(task.business_metric_ids)
+        rendered_results = []
+        for result in sql.sql_results:
+            if (not result.sql or not result.source.tables or result.row_count != len(result.rows)
+                    or not result.rows or len(result.columns) != len(set(result.columns))
+                    or any(set(row) != set(result.columns) for row in result.rows)):
+                raise EvidenceGap()
+            returned_columns = set(result.columns)
+            if expected and not expected <= returned_columns:
+                raise EvidenceGap()
+            # 分组指标必须真的带出维度列，否则退化成一行合计，不能当作分组答案。
+            if grouped and not returned_columns - expected:
+                raise EvidenceGap()
+
+            def render_row(row):
+                return "；".join(
+                    f"{labels.get(name, name)} {row[name]}{(' ' + units[name]) if name in units else ''}"
+                    for name in result.columns
+                )
+
+            if len(result.rows) == 1:
+                rendered = render_row(result.rows[0])
+            else:
+                rendered = "\n" + "\n".join(
+                    f"{index}. {render_row(row)}" for index, row in enumerate(result.rows, 1)
+                )
+            if result.truncated:
+                rendered += f"\n结果按本轮上限截断，仅展示前 {result.row_count} 行。"
+            rendered_results.append(f"{rendered}\n来源：SQL {result.query_id}。")
+        return "查询结果：" + "\n".join(rendered_results) + SQL_NOTE
+
     def _d12_answer(self, context):
         task, rag = context.task, context.rag
         if task.intent != "document_rule" or task.needs_calculation or context.sql or not rag or rag.status != "success" or task.time_range or task.entities or any(key not in {"media_ids", "target_metric"} for key in task.slots) or "media_ids" in task.slots and task.slots["media_ids"] != [1, 2, 4, 5]:
@@ -212,23 +343,43 @@ class FormalResponseComposer:
             authorized = authorize_calculation(bundle, task=context.task, sql=context.sql, rag=context.rag,
                 profile=context.profile, context=ToolContext(request_id=context.request_id, session_id=context.session_id,
                     profile_id=context.profile.profile_id, available_source_refs=context.available_source_refs),
-                calculation_id=calc.calculation_id, expected_mode="fixture")
+                calculation_id=calc.calculation_id,
+                expected_mode="verified_business" if self.policy.allow_business_calculation else "fixture")
             request = authorized.request
             expected_inputs = list(dict.fromkeys([request.formula_ref, *(item.source_ref for item in request.operands.values())]))
             if request != context.binding or calc.calculation_id not in self._tool_refs(context, "calculator.calculate") or calc.formula != FORMULAS[request.function] or calc.inputs != expected_inputs or calc.unit != request.result_unit or type(calc.result) not in (int, float) or Decimal(str(calc.result)) != calculate_decimal(request):
                 raise EvidenceGap()
         except Exception:
             raise EvidenceGap() from None
-        labels = {"actual": "人工实际值", "target": "人工目标", "current": "人工本期值", "previous": "人工基期值"}
+        verified_business = self.policy.allow_business_calculation
+        labels = (
+            {"actual": "实际值", "target": "目标值", "current": "本期值", "previous": "基期值"}
+            if verified_business else
+            {"actual": "人工实际值", "target": "人工目标", "current": "人工本期值", "previous": "人工基期值"}
+        )
         rows = []
         for role, operand in request.operands.items():
             period = bundle.operands[role].period
             rows.append(f"{labels[role]} {number(operand.value)} {operand.unit}，周期 [{period.start}, {period.end})，来源 {operand.source_ref}")
         function = {"difference": "目标差额", "attainment_rate": "达成率", "growth_rate": "增长率"}[request.function]
         scope = bundle.formula.scope
-        scope_text = f"指标 {bundle.formula.metric_id}；媒体 {scope.media_ids}；品类 {scope.genre_ids}；地区 {scope.country_ids or '全部'}"
+        entity_labels = {
+            item.get("id"): item.get("label")
+            for item in context.task.entities
+            if item.get("id") and item.get("label")
+        }
+        genres = [
+            f"{entity_labels.get(value, value)}（{value}）" for value in scope.genre_ids
+        ]
+        scope_text = f"指标 {bundle.formula.metric_id}；媒体 {scope.media_ids}；品类 {genres or '全部'}；地区 {scope.country_ids or '全部'}"
+        result_prefix = "计算" if verified_business else "人工测试"
+        conclusion = (
+            "结果由本轮已验证 SQL、文档目标与公式绑定后计算。"
+            if verified_business else
+            "这仅验证算术与绑定，不能当作真实销售、达标或增长结论。"
+        )
         return "\n".join([*rows, scope_text, f"命名函数 {request.function}；公式 {calc.formula}；公式来源 {request.formula_ref}（{bundle.formula.locator.version}）。",
-            f"人工测试{function}：{calc.result:.2f} {calc.unit}；Decimal 计算，ROUND_HALF_UP 保留两位小数。", f"计算来源：{calc.calculation_id}。这仅验证算术与绑定，不能当作真实销售、达标或增长结论。"])
+            f"{result_prefix}{function}：{calc.result:.2f} {calc.unit}；Decimal 计算，ROUND_HALF_UP 保留两位小数。", f"计算来源：{calc.calculation_id}。{conclusion}"])
 
     def compose(self, context: ComposeContext) -> AskResponse:
         status, answer, error = context.status, None, context.error
@@ -262,8 +413,22 @@ class FormalResponseComposer:
                     answer = self._calculation_answer(context)
                 elif context.route == "sql":
                     answer = self._sql_answer(context)
+                elif context.route == "cross_source" and self.policy.allow_business_calculation:
+                    answer = self._calculation_answer(context)
                 elif context.route == "rag" and self.execution_mode == "offline_sql_d12_integration":
-                    answer = self._d12_answer(context)
+                    if not documents:
+                        raise EvidenceGap()
+                    if context.task.intent == "document_rule" and all(item.doc_id == "D12" for item in documents):
+                        try:
+                            answer = self._d12_answer(context)
+                        except EvidenceConflict:
+                            raise
+                        except EvidenceGap:
+                            # 专用文案只覆盖已确认的固定问法；其余 D12 命中按原文渲染，
+                            # 不能因为文案没有配置就把已经检索到的证据判成不足。
+                            answer = self._generic_document_answer(context)
+                    else:
+                        answer = self._generic_document_answer(context)
                 else:
                     raise EvidenceGap()
             except EvidenceConflict as conflict:

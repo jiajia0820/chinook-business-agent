@@ -47,7 +47,7 @@
 
 ## special-multimodal-004
 
-问题：目标表中9月全音频销售额和销量计划是多少？
+问题：目标表中2025年9月全音频销售额和销量计划是多少？
 
 难度：medium　能力：pdf_table_reading
 

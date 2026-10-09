@@ -85,7 +85,7 @@
 
 ## special-formula-006
 
-问题：第三季度全音频月度销售额计划合计是多少？
+问题：2025年第三季度全音频月度销售额计划合计是多少？
 
 难度：easy　能力：monthly_plan_comparison
 

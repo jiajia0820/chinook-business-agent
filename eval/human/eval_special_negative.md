@@ -61,7 +61,7 @@
 
 ## special-negative-005
 
-问题：能按SupportRep给员工做销售额排名吗？
+问题：能按SupportRep给员工做2025年销售额排名吗？
 
 难度：easy　能力：unsupported_employee_sales
 

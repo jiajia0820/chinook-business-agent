@@ -37,8 +37,8 @@ function normalize(payload: AskRequest): AskRequest {
 
 export function createAskClient(settings: AskClientSettings = {}): AskClient {
   const fetcher = settings.fetch ?? globalThis.fetch.bind(globalThis);
-  const timeoutMs = settings.timeoutMs ?? 70_000;
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 120_000) {
+  const timeoutMs = settings.timeoutMs ?? 190_000;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 240_000) {
     throw new Error('Invalid frontend request timeout.');
   }
 

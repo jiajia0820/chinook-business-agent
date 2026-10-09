@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { JsonValue } from '../src/contracts';
-import { cellText, hasFixtureSources, jsonText, sqlShapeNotes } from '../src/components/evidence/format';
+import { answerSegments, cellText, citationTargets, hasFixtureSources, jsonText, splitAnswer, sqlRowsToCsv, sqlShapeNotes } from '../src/components/evidence/format';
+import { highlightSql } from '../src/components/evidence/sqlHighlight';
 import { copySample } from './recorded-http';
 import { recordedCalculations, sqlResult } from './evidence-fixtures';
 
@@ -48,6 +49,12 @@ describe('pure display formatting, not a calculator or semantic validator', () =
     expect(notes.join(' ')).toContain('完整原始行');
     expect(sql).toEqual(before);
   });
+  it('csv export quotes separators and mirrors the displayed cell text', () => {
+    expect(sqlRowsToCsv(['a', 'b'], [{ a: 'x,y', b: 'say "hi"' }])).toBe('a,b\r\n"x,y","say ""hi"""');
+    expect(sqlRowsToCsv(['a'], [{ b: 1 }])).toBe('a\r\n（缺失字段）');
+    expect(sqlRowsToCsv(['a'], [{ a: 'line1\nline2' }])).toBe('a\r\n"line1\nline2"');
+    expect(sqlRowsToCsv(['a'], [])).toBe('a');
+  });
   it('keeps genuine sample SQL/D12 separate from artificial calculation sources', () => {
     expect(hasFixtureSources(copySample())).toBe(false);
     for (const record of recordedCalculations) expect(hasFixtureSources(record)).toBe(true);
@@ -62,5 +69,60 @@ describe('pure display formatting, not a calculator or semantic validator', () =
     if (location === 'calculation_refs') response.calculations = [{ calculation_id: 'test', formula: '1', result: 1, unit: '', inputs: ['fixture:value'] }];
     if (location === 'trace_refs') response.trace = [{ step: 1, tool: 'test', status: 'test', duration_ms: 0, source_refs: ['fixture:value'] }];
     expect(hasFixtureSources(response)).toBe(true);
+  });
+});
+
+describe('citation helpers map evidence to answer anchors', () => {
+  it('builds one target per SQL/document/metric item with stable element IDs', () => {
+    const response = copySample();
+    const targets = citationTargets(response);
+    expect(targets).toHaveLength((response.sql_results?.length ?? 0) + (response.documents?.length ?? 0) + (response.metric_definitions?.length ?? 0));
+    const sql = response.sql_results![0]!;
+    expect(targets[0]).toEqual({ refId: `ev-sql-${sql.query_id}`, token: sql.query_id, label: `SQL · ${sql.query_id}`, kind: 'sql' });
+    expect(new Set(targets.map((target) => target.refId)).size).toBe(targets.length);
+  });
+  it('splits the answer around evidence IDs while preserving the exact text', () => {
+    const targets = citationTargets(copySample());
+    const queryId = targets[0]!.token;
+    const answer = `客户数量为 59。来源：SQL ${queryId}。`;
+    const segments = answerSegments(answer, targets);
+    expect(segments.map((segment) => segment.text).join('')).toBe(answer);
+    expect(segments.filter((segment) => segment.refId === `ev-sql-${queryId}`)).toHaveLength(1);
+  });
+  it('does not link metric tokens inside the answer and keeps tokenless answers intact', () => {
+    const targets = [{ refId: 'ev-metric-units_sold', token: 'units_sold', label: '口径 · 销量', kind: 'metric' as const }];
+    expect(answerSegments('units_sold 410 件', targets)).toEqual([{ text: 'units_sold 410 件', refId: null }]);
+    expect(answerSegments('', targets)).toEqual([{ text: '', refId: null }]);
+  });
+  it('escapes regex metacharacters in evidence tokens', () => {
+    const targets = [{ refId: 'ev-doc-a.b(c)', token: 'a.b(c)', label: '文档 · x', kind: 'document' as const }];
+    const segments = answerSegments('xa(b)y a.b(c) z', targets);
+    expect(segments).toEqual([{ text: 'xa(b)y ', refId: null }, { text: 'a.b(c)', refId: 'ev-doc-a.b(c)' }, { text: ' z', refId: null }]);
+  });
+  it('separates source-banner and provenance lines from the conclusion', () => {
+    const answer = '来源：真实 Chinook 样例库 + 大模型生成 SQL；候选经 C 只读安全校验后执行。\n查询结果：销售额 112.86 USD\n结果按本轮上限截断，仅展示前 50 行。\n来源：SQL sql-1。展示 SQL 为 C 已接受候选；C 执行前会校验并规范化，不是逐字驱动语句。';
+    expect(splitAnswer(answer)).toEqual({
+      conclusion: '查询结果：销售额 112.86 USD\n结果按本轮上限截断，仅展示前 50 行。',
+      notes: '来源：真实 Chinook 样例库 + 大模型生成 SQL；候选经 C 只读安全校验后执行。\n来源：SQL sql-1。展示 SQL 为 C 已接受候选；C 执行前会校验并规范化，不是逐字驱动语句。',
+    });
+  });
+  it('keeps answers without boilerplate lines wholly in the conclusion', () => {
+    expect(splitAnswer('客户数量为 59。')).toEqual({ conclusion: '客户数量为 59。', notes: '' });
+    expect(splitAnswer('来源：SQL 甲。')).toEqual({ conclusion: '来源：SQL 甲。', notes: '' });
+  });
+  it('classifies SQL keywords, functions, literals and params while preserving the exact text', () => {
+    const sql = "SELECT SUM(line.UnitPrice * line.Quantity) AS sales_amount FROM main.InvoiceLine line WHERE line.UnitPrice > 1.5 AND line.Name = 'it''s' AND line.Id IN (:start_date, 2)";
+    const tokens = highlightSql(sql);
+    expect(tokens.map((token) => token.text).join('')).toBe(sql);
+    expect(tokens.filter((token) => token.cls !== null).map((token) => [token.text, token.cls])).toEqual([
+      ['SELECT', 'tok-kw'], ['SUM', 'tok-fn'], ['AS', 'tok-kw'], ['FROM', 'tok-kw'], ['WHERE', 'tok-kw'],
+      ['1.5', 'tok-num'], ['AND', 'tok-kw'], ["'it''s'", 'tok-str'], ['AND', 'tok-kw'], ['IN', 'tok-kw'],
+      [':start_date', 'tok-param'], ['2', 'tok-num'],
+    ]);
+  });
+  it('highlights lowercase keywords and line comments too', () => {
+    const tokens = highlightSql('select a -- note\nfrom t');
+    expect(tokens[0]).toEqual({ text: 'select', cls: 'tok-kw' });
+    expect(tokens.some((token) => token.cls === 'tok-comment' && token.text === '-- note')).toBe(true);
   });
 });

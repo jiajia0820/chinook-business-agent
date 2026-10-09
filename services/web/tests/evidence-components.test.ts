@@ -26,8 +26,22 @@ describe('SQL evidence and dynamic rows', () => {
     expect(wrapper.findAll('thead th').map((cell) => cell.text())).toEqual(result.columns);
     expect(wrapper.findAll('tbody tr')).toHaveLength(result.rows!.length);
     expect(wrapper.get('[data-testid="candidate-sql"]').text()).toBe(result.sql);
+    expect(wrapper.get('[data-testid="sql-legend"]').text()).toContain('关键字');
+    expect(wrapper.findAll('[data-testid="sql-legend"] .chip')).toHaveLength(3);
     expect(wrapper.text()).toContain('不是逐字驱动 SQL');
-    expect(wrapper.findAll('input, textarea, button, a')).toHaveLength(0);
+    // Copy and CSV export are the only interactive elements allowed inside an evidence card.
+    expect(wrapper.findAll('input, textarea, a')).toHaveLength(0);
+    expect(wrapper.findAll('button').map((button) => button.attributes('aria-label'))).toEqual(['复制 SQL', '导出 CSV']);
+    expect(wrapper.findAll('.cell-origin')).toHaveLength(0);
+  });
+  it('marks the cells the answer quotes as raw origin', () => {
+    const response = actualResponse('客户数量是多少？');
+    const result = response.sql_results![0]!;
+    const wrapper = mount(SqlEvidence, { props: { result, answerText: response.answer } });
+    const marked = wrapper.findAll('tbody td.cell-origin');
+    expect(marked.length).toBeGreaterThan(0);
+    for (const cell of marked) expect(response.answer).toContain(cell.text());
+    expect(wrapper.get('caption').text()).toContain('原始出处');
   });
   it('shows Genre limit as a returned subset, never total number of genres', () => {
     const result = actualResponse('有哪些音乐类型？', 1).sql_results![0]!;
@@ -100,6 +114,39 @@ describe('SQL evidence and dynamic rows', () => {
     expect(wrapper.find('table').exists()).toBe(false);
     expect(wrapper.get('[data-testid="sql-raw-rows"]').text()).toContain('customer_count');
   });
+  it('exports exactly the visible table as a UTF-8 BOM CSV download', async () => {
+    const result = actualResponse('客户数量是多少？').sql_results![0]!;
+    const blobs: Blob[] = [];
+    const downloads: string[] = [];
+    const createObjectURL = URL.createObjectURL;
+    const revokeObjectURL = URL.revokeObjectURL;
+    const anchorClick = HTMLAnchorElement.prototype.click;
+    URL.createObjectURL = (blob: Blob) => { blobs.push(blob); return 'blob:test'; };
+    URL.revokeObjectURL = () => {};
+    HTMLAnchorElement.prototype.click = function (this: HTMLAnchorElement) { downloads.push(this.download); };
+    try {
+      const wrapper = mount(SqlEvidence, { props: { result } });
+      await wrapper.get('[data-testid="export-csv"]').trigger('click');
+      expect(downloads).toEqual([`sql-result-${result.query_id}.csv`]);
+      expect(blobs).toHaveLength(1);
+      // Blob.text() strips a leading BOM by spec, so assert the raw bytes instead.
+      const bytes = new Uint8Array(await blobs[0]!.arrayBuffer());
+      expect([bytes[0], bytes[1], bytes[2]]).toEqual([0xEF, 0xBB, 0xBF]);
+      const text = await blobs[0]!.text();
+      expect(text.split('\r\n')[0]).toBe(result.columns!.join(','));
+      expect(text).toContain(String(result.rows![0]!.customer_count));
+    } finally {
+      URL.createObjectURL = createObjectURL;
+      URL.revokeObjectURL = revokeObjectURL;
+      HTMLAnchorElement.prototype.click = anchorClick;
+    }
+  });
+  it('offers no export when there is no visible table', () => {
+    const result = sqlResult();
+    result.rows = [];
+    const wrapper = mount(SqlEvidence, { props: { result } });
+    expect(wrapper.find('[data-testid="export-csv"]').exists()).toBe(false);
+  });
 });
 
 describe('D12 documents, metric definitions and safe locators', () => {
@@ -163,6 +210,24 @@ describe('D12 documents, metric definitions and safe locators', () => {
     expect(wrapper.text()).toContain('未提供口径来源引用');
     expect(wrapper.find('a').exists()).toBe(false);
   });
+  it('turns source refs into jump links only when the chunk is in this round', async () => {
+    const metrics = copySample().metric_definitions!;
+    const present = metrics[0]!.source_refs![0]!;
+    metrics[0]!.source_refs = [present, 'D99'];
+    const chunkId = `${present}@deadbeef:L1-L2:P1:cafe`;
+    const wrapper = mount(MetricDefinitions, { props: { metrics, availableDocIds: [chunkId] } });
+    await wrapper.get(`[data-testid="metric-ref-${present}"]`).trigger('click');
+    expect(wrapper.emitted('focus-ref')?.[0]).toEqual([`ev-doc-${chunkId}`]);
+    expect(wrapper.get('.ref-missing').text()).toBe('D99');
+  });
+  it('bubbles metric ref jumps through the evidence panel', async () => {
+    const response = copySample();
+    const ref = response.metric_definitions![0]!.source_refs![0]!;
+    response.documents = [{ ...documentChunk(), chunk_id: `${ref}@deadbeef:L1-L2:P1:cafe` }];
+    const wrapper = panel(response);
+    await wrapper.get(`[data-testid="metric-ref-${ref}"]`).trigger('click');
+    expect(wrapper.emitted('focus-ref')?.[0]).toEqual([`ev-doc-${ref}@deadbeef:L1-L2:P1:cafe`]);
+  });
 });
 
 describe('calculation/trace display and current response identity', () => {
@@ -187,7 +252,8 @@ describe('calculation/trace display and current response identity', () => {
     const wrapper = mount(CalculationEvidence, { props: { calculations: [{ calculation_id: 'test', formula: 'test', result: 0, unit: '%' }], fixtureSources: false } });
     expect(wrapper.get('[data-testid="calculation-value"]').text()).toContain('0 · 单位：%');
     const empty = mount(CalculationEvidence, { props: { calculations: [], fixtureSources: false } });
-    expect(empty.get('[data-testid="calculation-empty"]').text()).toContain('未启用真实业务计算器');
+    expect(empty.get('[data-testid="calculation-empty"]').text()).toBe('计算记录：本轮无');
+    expect(empty.get('[data-testid="calculation-empty"]').attributes('title')).toContain('未启用真实业务计算器');
     expect(empty.find('[data-testid="calculation-value"]').exists()).toBe(false);
   });
   it('keeps backend trace order/step numbers/source references instead of sorting or summing', () => {
@@ -198,13 +264,15 @@ describe('calculation/trace display and current response identity', () => {
     expect(items[1]!.text()).toContain('步骤 2');
     expect(wrapper.text()).toContain('doc:test');
     expect(wrapper.text()).toContain('1.5 ms');
+    expect((wrapper.get('[data-testid="trace-details"]').element as HTMLDetailsElement).open).toBe(true);
     expect(wrapper.text()).toContain('不是模型思维链');
     expect(wrapper.text()).not.toContain('总耗时');
   });
   it.each([false, true, null])('empty trace with requested=%s does not invent tools or timings', (requested) => {
     const wrapper = mount(TraceEvidence, { props: { steps: [], showTraceRequested: requested } });
     expect(wrapper.find('[data-testid="trace-not-requested"]').exists()).toBe(requested === false);
-    expect(wrapper.get('[data-testid="trace-empty"]').text()).toContain('不能据此推断工具未运行');
+    expect(wrapper.get('[data-testid="trace-empty"]').text()).toContain('执行轨迹：本轮无');
+    expect(wrapper.get('[data-testid="trace-empty"]').attributes('title')).toContain('不能据此推断工具未运行');
     expect(wrapper.find('[data-testid="trace-step"]').exists()).toBe(false);
   });
   it('shows actual parsed time/entities but does not fill an absent year', () => {
@@ -221,8 +289,9 @@ describe('calculation/trace display and current response identity', () => {
     delete response.sql_results; delete response.documents; delete response.calculations; delete response.metric_definitions; delete response.trace; delete response.entities;
     const wrapper = panel(response);
     expect(wrapper.findAll('[data-testid="sql-evidence"], [data-testid="document-evidence"], [data-testid="calculation-record"], [data-testid="trace-step"]')).toHaveLength(0);
-    expect(wrapper.text()).toContain('本轮未返回文档片段');
-    expect(wrapper.text()).toContain('本轮未返回指标定义');
+    expect(wrapper.text()).toContain('文档片段：本轮无');
+    expect(wrapper.text()).toContain('指标口径：本轮无');
+    expect(wrapper.findAll('h4')).toHaveLength(0);
     expect(wrapper.find('[data-testid="fixture-warning"]').exists()).toBe(false);
   });
   it.each(recordedBusiness.map((record, index) => [index, record.body as AskResponse] as const))('all five status branches retain available evidence in response %i', (_index, response) => {
@@ -232,17 +301,18 @@ describe('calculation/trace display and current response identity', () => {
     expect(wrapper.findAll('[data-testid="calculation-record"]')).toHaveLength(response.calculations?.length ?? 0);
     expect(wrapper.get('[data-testid="evidence-panel"]').attributes('data-request-id')).toBe(response.request_id);
   });
-  it('new request identity resets native expansion state, even for repeated evidence IDs', async () => {
+  it('new request identity resets expansion state to the default open SQL, even for repeated evidence IDs', async () => {
     const first = copySample();
     const result = { kind: 'business' as const, httpStatus: 200 as const, requestId: first.request_id, response: first };
     const wrapper = mount(AskResult, { props: { result } });
     const oldDetails = wrapper.get('[data-testid="sql-query"]').element as HTMLDetailsElement;
-    oldDetails.open = true;
+    expect(oldDetails.open).toBe(true);
+    oldDetails.open = false;
     const second = structuredClone(first);
     second.request_id = 'req-synthetic-next';
     await wrapper.setProps({ result: { ...result, requestId: second.request_id, response: second } });
     const nextDetails = wrapper.get('[data-testid="sql-query"]').element as HTMLDetailsElement;
     expect(nextDetails).not.toBe(oldDetails);
-    expect(nextDetails.open).toBe(false);
+    expect(nextDetails.open).toBe(true);
   });
 });

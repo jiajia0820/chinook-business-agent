@@ -13,6 +13,23 @@ class ModelConfigurationError(ValueError):
         super().__init__("model configuration unavailable: " + reason)
 
 
+def normalize_chat_endpoint(value: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ModelConfigurationError("ENDPOINT_INVALID")
+    endpoint = value.strip().rstrip("/")
+    try:
+        parts = urlsplit(endpoint)
+        port = parts.port
+    except (ValueError, TypeError):
+        raise ModelConfigurationError("ENDPOINT_INVALID") from None
+    if parts.scheme != "https" or not parts.hostname or parts.username or parts.password or parts.query or parts.fragment or port is not None and not 1 <= port <= 65535:
+        raise ModelConfigurationError("ENDPOINT_INVALID")
+    path = parts.path.rstrip("/")
+    if not path.endswith("/chat/completions"):
+        path += "/chat/completions"
+    return parts._replace(path=path).geturl()
+
+
 @dataclass(frozen=True, slots=True, repr=False)
 class ModelConfig:
     # All values kept out of repr; this object is never added to Settings/API.
@@ -26,15 +43,10 @@ class ModelConfig:
     def __post_init__(self):
         if not isinstance(self.endpoint, str):
             raise ModelConfigurationError("ENDPOINT_INVALID")
-        try:
-            parts = urlsplit(self.endpoint)
-            port = parts.port
-        except (ValueError, TypeError):
-            raise ModelConfigurationError("ENDPOINT_INVALID") from None
-        if parts.scheme != "https" or not parts.hostname or parts.username or parts.password or parts.query or parts.fragment or port is not None and not 1 <= port <= 65535 or any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in self.endpoint):
+        normalized = normalize_chat_endpoint(self.endpoint)
+        object.__setattr__(self, "endpoint", normalized)
+        if any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in normalized):
             raise ModelConfigurationError("ENDPOINT_INVALID")
-        if not parts.path.rstrip("/").endswith("/chat/completions"):
-            raise ModelConfigurationError("ENDPOINT_NOT_COMPLETE")
         if not isinstance(self.model_name, str) or not self.model_name.strip() or len(self.model_name) > 128 or any(char in self.model_name for char in "\r\n\x00"):
             raise ModelConfigurationError("MODEL_NAME_INVALID")
         if not isinstance(self.api_key, SecretStr):
@@ -49,7 +61,7 @@ class ModelConfig:
         endpoint, model, key = (os.getenv(name) for name in ("LLM_BASE_URL", "LLM_MODEL", "LLM_API_KEY"))
         if not all((endpoint, model, key)):
             raise ModelConfigurationError("CONFIG_MISSING")
-        return cls(endpoint=endpoint.strip(), model_name=model.strip(), api_key=SecretStr(key))
+        return cls(endpoint=normalize_chat_endpoint(endpoint), model_name=model.strip(), api_key=SecretStr(key))
 
     def c_http_parameters(self):
         """Trusted future C constructor mapping, not a log/JSON/export method.
