@@ -3,6 +3,7 @@ import { computed } from 'vue';
 import type { AskClientResult } from '../api/client';
 import type { AskOptions, AskStatus, Route } from '../contracts';
 import EvidencePanel from './evidence/EvidencePanel.vue';
+import { answerSegments, citationTargets } from './evidence/format';
 
 const props = withDefaults(defineProps<{ result: AskClientResult; choicesDisabled?: boolean; requestOptions?: AskOptions | null }>(), { choicesDisabled: false, requestOptions: null });
 defineEmits<{ clarification: [text: string] }>();
@@ -14,6 +15,19 @@ const titles: Record<AskStatus, string> = {
   insufficient_evidence: '证据不足', unsupported: '当前能力不支持', error: '业务处理出错',
 };
 const routes: Record<Route, string> = { sql: '数据库问数', rag: '文档检索', cross_source: '跨源', clarification: '澄清', unsupported: '不支持' };
+const citations = computed(() => business.value ? citationTargets(business.value) : []);
+const segments = computed(() => business.value?.answer != null ? answerSegments(business.value.answer, citations.value) : []);
+// Citation click: expand, scroll to and briefly highlight the referenced evidence card.
+function focusEvidence(refId: string) {
+  const element = document.getElementById(refId);
+  if (!element) return;
+  element.querySelectorAll('details').forEach((details) => { details.open = true; });
+  // Cards taller than the viewport must keep their head (SQL text, metric definition) on screen, so align those to the top.
+  const block = element.getBoundingClientRect().height > window.innerHeight * 0.8 ? 'start' : 'center';
+  element.scrollIntoView?.({ behavior: 'smooth', block });
+  element.classList.add('evidence-highlight');
+  window.setTimeout(() => element.classList.remove('evidence-highlight'), 2400);
+}
 </script>
 
 <template>
@@ -27,7 +41,11 @@ const routes: Record<Route, string> = { sql: '数据库问数', rag: '文档检�
         <div><dt>业务路由</dt><dd>{{ routes[business.route] }} · {{ business.route }}</dd></div>
         <div><dt>请求 ID</dt><dd>{{ result.requestId }}</dd></div>
       </dl>
-      <p v-if="business.answer !== null" class="answer-text" data-testid="answer">{{ business.answer }}</p>
+      <p v-if="business.answer !== null" class="answer-text" data-testid="answer"><template v-for="(segment, index) in segments" :key="index"><button v-if="segment.refId" type="button" class="cite-link" :data-testid="`answer-ref-${index}`" @click="focusEvidence(segment.refId)">{{ segment.text }}</button><template v-else>{{ segment.text }}</template></template></p>
+      <div v-if="citations.length" class="citation-bar" data-testid="citation-bar" aria-label="回答引用">
+        <span class="citation-bar-label">回答引用</span>
+        <button v-for="(target, index) in citations" :key="`${target.refId}-${index}`" type="button" class="citation-chip" :data-kind="target.kind" :data-testid="`citation-chip-${index}`" :title="target.label" @click="focusEvidence(target.refId)">{{ target.label }}</button>
+      </div>
       <div v-if="business.status === 'error' && business.error" class="error-message" role="alert">
         <p>{{ business.error.code }}：{{ business.error.message }}</p>
         <p>{{ business.error.retryable ? '可手动重试，不会自动重发。' : '请依据提示修改问题或检查能力范围。' }}</p>

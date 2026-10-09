@@ -4,6 +4,7 @@ import { enableAutoUnmount, mount } from '@vue/test-utils';
 import AskResult from '../src/components/AskResult.vue';
 import type { AskResponse } from '../src/contracts';
 import { recordedBusiness } from './recorded-http';
+import { actualResponse } from './evidence-fixtures';
 import { apiError, business, requestError } from './workspace-fixtures';
 
 enableAutoUnmount(afterEach);
@@ -87,5 +88,73 @@ describe('retained 4B result branches alongside 4C evidence', () => {
     expect(wrapper.text()).toContain(result.error.message);
     expect(wrapper.find('svg').exists()).toBe(false);
     expect(wrapper.text()).not.toContain('PRIVATE_TEST_DETAIL');
+  });
+});
+
+describe('answer-to-evidence citation linking', () => {
+  function answeredWithSql() {
+    const response = actualResponse('客户数量是多少？');
+    const queryId = response.sql_results![0]!.query_id;
+    response.answer = `客户数量为 59。来源：SQL ${queryId}。`;
+    return { result: { kind: 'business' as const, response, requestId: response.request_id, httpStatus: 200 as const }, queryId };
+  }
+  it('turns evidence IDs inside the answer into clickable refs without altering text', () => {
+    const { result, queryId } = answeredWithSql();
+    const wrapper = mount(AskResult, { props: { result } });
+    const refs = wrapper.findAll('.cite-link');
+    expect(refs).toHaveLength(1);
+    expect(refs[0]!.text()).toBe(queryId);
+    expect(wrapper.get('[data-testid="answer"]').text()).toBe(result.response.answer);
+  });
+  it('lists SQL/document/metric citations and focuses the target card on click', async () => {
+    const { result, queryId } = answeredWithSql();
+    const wrapper = mount(AskResult, { props: { result }, attachTo: document.body });
+    const chips = wrapper.findAll('[data-testid="citation-bar"] .citation-chip');
+    expect(chips.length).toBeGreaterThanOrEqual(2);
+    expect(chips[0]!.text()).toContain(queryId);
+    expect(chips.some((chip) => chip.attributes('data-kind') === 'metric')).toBe(true);
+    const card = document.getElementById(`ev-sql-${queryId}`);
+    expect(card).not.toBeNull();
+    const details = card!.querySelector('details[data-testid="sql-query"]') as HTMLDetailsElement;
+    details.open = false;
+    await chips[0]!.trigger('click');
+    expect(card!.classList.contains('evidence-highlight')).toBe(true);
+    expect(details.open).toBe(true);
+  });
+  it('clicking an inline answer ref highlights the same SQL card', async () => {
+    const { result, queryId } = answeredWithSql();
+    const wrapper = mount(AskResult, { props: { result }, attachTo: document.body });
+    await wrapper.get('.cite-link').trigger('click');
+    expect(document.getElementById(`ev-sql-${queryId}`)!.classList.contains('evidence-highlight')).toBe(true);
+  });
+  it('aligns oversized evidence cards to their head and centers short ones', async () => {
+    const { result, queryId } = answeredWithSql();
+    const wrapper = mount(AskResult, { props: { result }, attachTo: document.body });
+    const card = document.getElementById(`ev-sql-${queryId}`)!;
+    const realRect = card.getBoundingClientRect.bind(card);
+    const realScroll = Element.prototype.scrollIntoView;
+    const alignments: Array<string | undefined> = [];
+    Element.prototype.scrollIntoView = function (options?: boolean | ScrollIntoViewOptions) {
+      alignments.push(typeof options === 'object' ? options?.block : undefined);
+    };
+    try {
+      card.getBoundingClientRect = () => ({ height: window.innerHeight * 2 } as DOMRect);
+      await wrapper.get('.cite-link').trigger('click');
+      card.getBoundingClientRect = () => ({ height: 120 } as DOMRect);
+      await wrapper.get('.cite-link').trigger('click');
+      expect(alignments).toEqual(['start', 'center']);
+    } finally {
+      Element.prototype.scrollIntoView = realScroll;
+      card.getBoundingClientRect = realRect;
+    }
+  });
+  it('renders no citation bar when the response carries no evidence', () => {
+    const result = business('insufficient_evidence');
+    delete result.response.sql_results;
+    delete result.response.documents;
+    delete result.response.metric_definitions;
+    const wrapper = mount(AskResult, { props: { result } });
+    expect(wrapper.find('[data-testid="citation-bar"]').exists()).toBe(false);
+    expect(wrapper.findAll('.cite-link')).toHaveLength(0);
   });
 });

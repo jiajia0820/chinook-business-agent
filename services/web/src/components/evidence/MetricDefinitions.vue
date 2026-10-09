@@ -7,7 +7,7 @@ defineProps<{ metrics: MetricDefinition[] }>();
   <section class="evidence-section" aria-label="指标口径" data-testid="metric-definitions">
     <h4>指标口径</h4>
     <p v-if="!metrics.length">本轮未返回指标定义，不代表已确认口径。</p>
-    <article v-for="(metric, index) in metrics" :key="`${metric.metric_id}-${index}`" class="evidence-card">
+    <article v-for="(metric, index) in metrics" :id="`ev-metric-${metric.metric_id}`" :key="`${metric.metric_id}-${index}`" class="evidence-card">
       <h5>{{ metric.name }} · {{ metric.metric_id }}</h5>
       <p class="answer-text" data-testid="metric-definition">{{ metric.definition }}</p>
       <p>单位：{{ metric.unit }}</p>

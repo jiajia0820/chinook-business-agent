@@ -1,5 +1,29 @@
 import type { AskResponse, JsonValue, SqlQueryResponse } from '../../contracts';
 
+export type CitationKind = 'sql' | 'document' | 'metric';
+export interface CitationTarget { refId: string; token: string; label: string; kind: CitationKind }
+export interface AnswerSegment { text: string; refId: string | null }
+
+/** Evidence anchors for the current response: SQL queries, document chunks, metric definitions. */
+export function citationTargets(response: AskResponse): CitationTarget[] {
+  const targets: CitationTarget[] = [];
+  for (const sql of response.sql_results ?? []) targets.push({ refId: `ev-sql-${sql.query_id}`, token: sql.query_id, label: `SQL · ${sql.query_id}`, kind: 'sql' });
+  for (const document of response.documents ?? []) targets.push({ refId: `ev-doc-${document.chunk_id}`, token: document.chunk_id, label: `文档 · ${document.title}`, kind: 'document' });
+  for (const metric of response.metric_definitions ?? []) targets.push({ refId: `ev-metric-${metric.metric_id}`, token: metric.metric_id, label: `口径 · ${metric.name}`, kind: 'metric' });
+  return targets;
+}
+
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Split the answer into plain text and clickable evidence-ID segments; text content is preserved verbatim. */
+export function answerSegments(answer: string, targets: CitationTarget[]): AnswerSegment[] {
+  const tokenMap = new Map(targets.filter((target) => target.kind !== 'metric' && target.token).map((target) => [target.token, target.refId]));
+  if (!answer || tokenMap.size === 0) return [{ text: answer, refId: null }];
+  const tokens = [...tokenMap.keys()].sort((a, b) => b.length - a.length);
+  const pattern = new RegExp(`(${tokens.map(escapeRegExp).join('|')})`, 'g');
+  return answer.split(pattern).filter((part) => part !== '').map((part) => ({ text: part, refId: tokenMap.get(part) ?? null }));
+}
+
 export function jsonText(value: JsonValue | undefined): string {
   return value === undefined ? '（未提供）' : JSON.stringify(value, null, 2);
 }

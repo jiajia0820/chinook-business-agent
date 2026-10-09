@@ -232,17 +232,18 @@ describe('calculation/trace display and current response identity', () => {
     expect(wrapper.findAll('[data-testid="calculation-record"]')).toHaveLength(response.calculations?.length ?? 0);
     expect(wrapper.get('[data-testid="evidence-panel"]').attributes('data-request-id')).toBe(response.request_id);
   });
-  it('new request identity resets native expansion state, even for repeated evidence IDs', async () => {
+  it('new request identity resets expansion state to the default open SQL, even for repeated evidence IDs', async () => {
     const first = copySample();
     const result = { kind: 'business' as const, httpStatus: 200 as const, requestId: first.request_id, response: first };
     const wrapper = mount(AskResult, { props: { result } });
     const oldDetails = wrapper.get('[data-testid="sql-query"]').element as HTMLDetailsElement;
-    oldDetails.open = true;
+    expect(oldDetails.open).toBe(true);
+    oldDetails.open = false;
     const second = structuredClone(first);
     second.request_id = 'req-synthetic-next';
     await wrapper.setProps({ result: { ...result, requestId: second.request_id, response: second } });
     const nextDetails = wrapper.get('[data-testid="sql-query"]').element as HTMLDetailsElement;
     expect(nextDetails).not.toBe(oldDetails);
-    expect(nextDetails.open).toBe(false);
+    expect(nextDetails.open).toBe(true);
   });
 });

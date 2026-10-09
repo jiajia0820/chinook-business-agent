@@ -8,7 +8,7 @@ const statuses = { success: '查询成功', failed: '查询失败', rejected: '�
 </script>
 
 <template>
-  <article class="evidence-card" data-testid="sql-evidence" aria-label="SQL 证据">
+  <article class="evidence-card" :id="`ev-sql-${result.query_id}`" data-testid="sql-evidence" aria-label="SQL 证据">
     <h5>SQL · {{ result.query_id }}</h5>
     <p class="evidence-status" :data-sql-status="result.status">{{ statuses[result.status] }} · {{ result.status }}</p>
     <dl class="evidence-meta">
@@ -24,8 +24,8 @@ const statuses = { success: '查询成功', failed: '查询失败', rejected: '�
       <p>{{ result.error?.code }}：{{ result.error?.message }}</p>
       <p>查询未成功，不能把空行解释成业务数值为 0。</p>
     </div>
-    <details data-testid="sql-query">
-      <summary>查看候选 SQL 与参数</summary>
+    <details data-testid="sql-query" open>
+      <summary>候选 SQL 与参数</summary>
       <p class="helper">当前默认离线实例中的 SQL 字段为 C 已接受候选；执行前会校验和规范化，不是逐字驱动 SQL。这里只读展示，未提供时不生成语句，也不提供执行入口。</p>
       <pre v-if="result.sql != null && result.sql.trim()" data-testid="candidate-sql">{{ result.sql }}</pre>
       <p v-else>未提供候选 SQL 语句。</p>

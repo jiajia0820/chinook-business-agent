@@ -5,7 +5,7 @@ defineProps<{ document: DocumentChunk }>();
 </script>
 
 <template>
-  <article class="evidence-card" data-testid="document-evidence" aria-label="文档证据">
+  <article class="evidence-card" :id="`ev-doc-${document.chunk_id}`" data-testid="document-evidence" aria-label="文档证据">
     <h5>{{ document.title }}</h5>
     <p v-if="document.doc_type.toLowerCase() === 'fixture' || /^fixture:\/\//i.test(document.source_uri)" class="evidence-warning">人工测试文档来源，不是生产业务资料。</p>
     <dl class="evidence-meta">

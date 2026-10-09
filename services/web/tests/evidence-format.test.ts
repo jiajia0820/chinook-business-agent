@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { JsonValue } from '../src/contracts';
-import { cellText, hasFixtureSources, jsonText, sqlShapeNotes } from '../src/components/evidence/format';
+import { answerSegments, cellText, citationTargets, hasFixtureSources, jsonText, sqlShapeNotes } from '../src/components/evidence/format';
 import { copySample } from './recorded-http';
 import { recordedCalculations, sqlResult } from './evidence-fixtures';
 
@@ -62,5 +62,34 @@ describe('pure display formatting, not a calculator or semantic validator', () =
     if (location === 'calculation_refs') response.calculations = [{ calculation_id: 'test', formula: '1', result: 1, unit: '', inputs: ['fixture:value'] }];
     if (location === 'trace_refs') response.trace = [{ step: 1, tool: 'test', status: 'test', duration_ms: 0, source_refs: ['fixture:value'] }];
     expect(hasFixtureSources(response)).toBe(true);
+  });
+});
+
+describe('citation helpers map evidence to answer anchors', () => {
+  it('builds one target per SQL/document/metric item with stable element IDs', () => {
+    const response = copySample();
+    const targets = citationTargets(response);
+    expect(targets).toHaveLength((response.sql_results?.length ?? 0) + (response.documents?.length ?? 0) + (response.metric_definitions?.length ?? 0));
+    const sql = response.sql_results![0]!;
+    expect(targets[0]).toEqual({ refId: `ev-sql-${sql.query_id}`, token: sql.query_id, label: `SQL · ${sql.query_id}`, kind: 'sql' });
+    expect(new Set(targets.map((target) => target.refId)).size).toBe(targets.length);
+  });
+  it('splits the answer around evidence IDs while preserving the exact text', () => {
+    const targets = citationTargets(copySample());
+    const queryId = targets[0]!.token;
+    const answer = `客户数量为 59。来源：SQL ${queryId}。`;
+    const segments = answerSegments(answer, targets);
+    expect(segments.map((segment) => segment.text).join('')).toBe(answer);
+    expect(segments.filter((segment) => segment.refId === `ev-sql-${queryId}`)).toHaveLength(1);
+  });
+  it('does not link metric tokens inside the answer and keeps tokenless answers intact', () => {
+    const targets = [{ refId: 'ev-metric-units_sold', token: 'units_sold', label: '口径 · 销量', kind: 'metric' as const }];
+    expect(answerSegments('units_sold 410 件', targets)).toEqual([{ text: 'units_sold 410 件', refId: null }]);
+    expect(answerSegments('', targets)).toEqual([{ text: '', refId: null }]);
+  });
+  it('escapes regex metacharacters in evidence tokens', () => {
+    const targets = [{ refId: 'ev-doc-a.b(c)', token: 'a.b(c)', label: '文档 · x', kind: 'document' as const }];
+    const segments = answerSegments('xa(b)y a.b(c) z', targets);
+    expect(segments).toEqual([{ text: 'xa(b)y ', refId: null }, { text: 'a.b(c)', refId: 'ev-doc-a.b(c)' }, { text: ' z', refId: null }]);
   });
 });
