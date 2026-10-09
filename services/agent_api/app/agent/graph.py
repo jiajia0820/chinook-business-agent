@@ -140,6 +140,9 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
         if "partial_data_coverage" in parsed.rules:
             profile = profiles.get(state["profile_id"])
             limitations = [*limitations, f"请求周期超出样例数据实际覆盖 {profile.data_start} 至 {profile.data_end}，仅代表已有数据，不能声称完整周期统计。"]
+        year_assumed = (parsed.task.slots or {}).get("year_assumed") if parsed.task else None
+        if year_assumed:
+            limitations = [*limitations, f"原问题未给年份，按经营资料锚定的 {year_assumed} 年口径声明后计算，未静默猜测。"]
         return mark(state, "validate_slots_and_capabilities", parsed=parsed.model_dump(mode="json"), status=statuses[parsed.decision], route=route, tool_plan=plan, limitations=limitations)
 
     def start_route(state):

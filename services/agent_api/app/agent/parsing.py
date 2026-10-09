@@ -26,6 +26,8 @@ SLOT_DESCRIPTIONS = {
 
 
 def clarify(task, missing, *, reused=False, rules=None, reason=None):
+    # 澄清是一次性打包的补充请求，不是多轮审讯；槽位上限 3 个。
+    missing = list(dict.fromkeys(missing))[:3]
     return ParsedTurn(
         decision="clarification", task=task, reused_context=reused,
         reason=reason, rules=rules or [],
@@ -39,6 +41,17 @@ def clarify(task, missing, *, reused=False, rules=None, reason=None):
 
 def _contains(question, terms):
     return any(term.casefold() in question.casefold() for term in terms)
+
+
+def _anchor_year(profile):
+    """Year bound to the operating materials (targets/reviews/plans).
+
+    Used only to declare an assumed caliber for anchored intents; never a
+    silent guess for bare metric questions.
+    """
+    if profile.data_end:
+        return int(profile.data_end[:4])
+    return None
 
 
 # 数据范围词会插在指标词中间（“多少张音频订单”“购买音频的客户”），
@@ -237,6 +250,18 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
     elif not base:
         task.intent = "unknown"
 
+    # 三分法第二类：带明确季度但缺年份，且意图引用按年绑定的经营资料
+    # （目标/复盘/方案/增长对比）。年份由资料锚定，声明口径后直接答，不反问。
+    anchored_intents = {"target_attainment", "target_difference", "cross_source_query",
+                        "document_calculation", "growth_rate"}
+    if task.intent in anchored_intents and "quarter" in task.slots and "year" not in task.slots:
+        anchor = _anchor_year(profile)
+        if anchor:
+            task.slots["year"] = anchor
+            task.slots["year_assumed"] = anchor
+            if len(quarters) == 2:
+                task.slots.setdefault("comparison_period", {"year": anchor, "quarter": quarters[1]})
+
     if not task.business_metric_ids:
         task.business_metric_ids = list(rules.intent_default_metric_ids.get(task.intent, []))
         if task.business_metric_ids:
@@ -270,7 +295,10 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
     if re.search(r"第?(?:[五六七八九]|[5-9])季度", q) and not re.search(r"第?[一二三四1-4]季度", q):
         missing.append("time_range")
     if len(years) > 1 or len(quarters) > 1:
-        if task.intent != "growth_rate" or len(quarters) != 2 or len(years) > 2 or not any(term in q for term in ("对比", "相比")):
+        comparable = (task.intent in {"growth_rate", "cross_source_query", "document_calculation"}
+                      and len(quarters) == 2 and len(years) <= 2
+                      and any(term in q for term in ("对比", "相比", "比", "增长", "环比", "同比")))
+        if not comparable:
             missing.append("time_range")
     if task.intent != "unknown" and task.route != "rag" and profile.sql_backend.model_mode == "offline" and _unparsed_query_text(q, profile):
         missing.append("filter_scope")
