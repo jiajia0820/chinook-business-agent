@@ -117,12 +117,27 @@
     }
   ],
   "aliases": [
-    {"alias": "摇滚", "entity_type": "genre", "entity_id": "Genre:1", "label": "Rock"},
-    {"alias": "摇滚乐", "entity_type": "genre", "entity_id": "Genre:5", "label": "Rock And Roll"},
-    {"alias": "金属", "entity_type": "genre", "entity_id": "Genre:3", "label": "Metal"},
-    {"alias": "重金属", "entity_type": "genre", "entity_id": "Genre:13", "label": "Heavy Metal"},
-    {"alias": "美国", "entity_type": "country", "entity_id": "Country:USA", "label": "USA"}
+    {"alias": "摇滚", "entity_type": "genre", "entity_id": "Genre:1", "label": "Rock", "source_refs": ["D03"]},
+    {"alias": "摇滚乐", "entity_type": "genre", "entity_id": "Genre:5", "label": "Rock And Roll", "source_refs": ["D03"]},
+    {"alias": "金属", "entity_type": "genre", "entity_id": "Genre:3", "label": "Metal", "source_refs": ["D03"]},
+    {"alias": "重金属", "entity_type": "genre", "entity_id": "Genre:13", "label": "Heavy Metal", "source_refs": ["D03"]},
+    {"alias": "拉丁", "entity_type": "genre", "entity_id": "Genre:7", "label": "Latin", "source_refs": ["D03"]},
+    {"alias": "美国", "entity_type": "country", "entity_id": "Country:USA", "label": "USA", "source_refs": ["D04"]}
   ],
+  "document_metadata": {
+    "D01": {"topics": ["指标", "定义"], "answer_types": ["metric_definition", "formula"], "authority_scope": {"metric_definition": 100, "formula": 90}, "related_docs": ["D02", "D12"]},
+    "D02": {"topics": ["销售分析", "公式"], "answer_types": ["formula", "analysis_method"], "authority_scope": {"formula": 100}, "related_docs": ["D01", "D06", "D07", "D08"]},
+    "D03": {"topics": ["分类", "商品范围", "媒体范围"], "answer_types": ["alias_mapping", "classification_boundary", "media_scope"], "authority_scope": {"alias_mapping": 100, "classification_boundary": 100, "media_scope": 90}, "related_docs": ["D01", "D05", "D12"]},
+    "D04": {"topics": ["客户分层"], "answer_types": ["customer_segmentation"], "authority_scope": {"customer_segmentation": 100}, "related_docs": ["D09"]},
+    "D05": {"topics": ["选品", "商品推荐"], "answer_types": ["selection_rule"], "authority_scope": {"selection_rule": 100}, "related_docs": ["D03", "D09"]},
+    "D06": {"topics": ["经营目标", "目标表"], "answer_types": ["target_value", "table_cell"], "authority_scope": {"target_value": 100, "table_cell": 100}, "related_docs": ["D08"]},
+    "D07": {"topics": ["Q2经营复盘", "经营复盘"], "answer_types": ["review", "review_comparison"], "authority_scope": {"review": 100, "review_comparison": 90}, "related_docs": ["D08"]},
+    "D08": {"topics": ["Q3经营复盘", "经营复盘"], "answer_types": ["review", "review_comparison", "target_value"], "authority_scope": {"review": 100, "review_comparison": 90, "target_value": 90}, "related_docs": ["D06", "D07"]},
+    "D09": {"topics": ["品类运营"], "answer_types": ["operation_rule"], "authority_scope": {"operation_rule": 100}, "related_docs": ["D03", "D04"]},
+    "D10": {"topics": ["活动方案"], "answer_types": ["activity_plan"], "authority_scope": {"activity_plan": 100}, "related_docs": ["D11"]},
+    "D11": {"topics": ["活动海报", "报名"], "answer_types": ["poster", "activity_entity"], "authority_scope": {"poster": 100, "activity_entity": 100}, "related_docs": ["D10"]},
+    "D12": {"topics": ["FAQ", "默认口径"], "answer_types": ["faq", "definition"], "authority_scope": {"faq": 100, "definition": 60}, "related_docs": ["D01", "D03"]}
+  },
   "question_rules": {
     "document_queries": [
       {"canonical_question": "销售额指标定义是什么？", "aliases": ["销售额指标定义是什么", "销售额指标怎么定义", "指标销售额怎么计算", "销售额口径是什么", "销售额定义是什么", "销售额怎么计算"], "business_metric_ids": ["sales_amount"]},
@@ -173,7 +188,7 @@
       "target_attainment": ["达标", "达到目标", "和目标比", "目标完成率", "对比目标"],
       "growth_rate": ["增长率", "增长多少", "增长", "环比", "同比"],
       "document_rule": ["口径", "定义", "规则", "怎么计算", "公式", "怎么写", "包括哪些", "包含哪些",
-        "对应哪个", "对应什么", "通常对应", "默认按哪个", "是否应该", "如何归类", "怎么归类",
+        "对应哪个", "对应什么", "通常对应", "默认按哪个", "是否应该", "是否并入", "属于", "如何归类", "怎么归类",
         "是一个分类", "如何衔接", "怎么衔接", "是否一致", "范围差异", "核心结果", "如何结合",
         "如何影响", "怎么处理", "建议关注", "建议观察", "应使用哪个", "目标是多少"],
       "document_calculation": ["按文档计算", "根据文档计算"],

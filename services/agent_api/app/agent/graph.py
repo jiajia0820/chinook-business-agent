@@ -180,7 +180,26 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
         task = ParsedTurn.model_validate(state["parsed"]).task
         request = AskRequest.model_validate(state["request"])
         retrieval_query = task.original_question if task.route == "cross_source" else task.normalized_question
-        payload = RetrievalRequest(retrieval_id="retrieval-" + str(uuid.uuid4()), profile_id=state["profile_id"], query=retrieval_query, filters={"slots": task.slots, "business_metric_ids": task.business_metric_ids}, top_k=request.options.top_k)
+        profile = profiles.get(state["profile_id"])
+        filters = {"slots": task.slots, "business_metric_ids": task.business_metric_ids}
+        if task.entities and task.intent in {"document_rule", "multidoc_query"} and any(item.get("type") == "genre" for item in task.entities):
+            filters.update({"preferred_doc": "D03", "answer_type": "alias_mapping"})
+        question = task.original_question
+        if task.intent == "multidoc_query" or ("复盘" in question and any(term in question for term in ("比较", "变化", "对比"))):
+            required = []
+            if "二季度" in question or "Q2" in question:
+                required.append("D07")
+            if "三季度" in question or "Q3" in question:
+                required.append("D08")
+            if required:
+                filters.update({"required_sources": list(dict.fromkeys(required)), "answer_type": "review_comparison"})
+        if task.intent in {"target_difference", "target_attainment", "document_calculation"}:
+            filters.update({"required_sources": ["D06"], "preferred_doc": "D06", "answer_type": "target_value"})
+        if task.intent == "document_rule" and any(term in question for term in ("分类", "归类", "Genre", "重金属", "摇滚", "拉丁", "媒体")):
+            filters.update({"preferred_doc": "D03", "answer_type": "alias_mapping"})
+        if "活动" in question or "海报" in question:
+            filters.update({"required_sources": ["D10", "D11"], "answer_type": "activity_entity"})
+        payload = RetrievalRequest(retrieval_id="retrieval-" + str(uuid.uuid4()), profile_id=state["profile_id"], query=retrieval_query, filters=filters, top_k=request.options.top_k)
         outcome = await runtime.run("rag.retrieve", payload, context(state))
         return tool_update(state, "rag", outcome, "retrieval_outcome", list(outcome.source_refs))
 

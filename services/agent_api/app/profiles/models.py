@@ -51,6 +51,14 @@ class EntityAlias(InternalModel):
     entity_type: NonEmptyString
     entity_id: NonEmptyString
     label: NonEmptyString
+    source_refs: list[NonEmptyString] = Field(default_factory=list)
+
+
+class DocumentMetadata(InternalModel):
+    topics: list[NonEmptyString] = Field(default_factory=list)
+    answer_types: list[NonEmptyString] = Field(default_factory=list)
+    authority_scope: dict[str, int] = Field(default_factory=dict)
+    related_docs: list[NonEmptyString] = Field(default_factory=list)
 
 
 class OfflineQuery(InternalModel):
@@ -89,6 +97,7 @@ class BusinessProfile(InternalModel):
     catalogs: CatalogPaths = Field(default_factory=CatalogPaths)
     metric_definitions: list[MetricDefinition] = Field(default_factory=list)
     aliases: list[EntityAlias] = Field(default_factory=list)
+    document_metadata: dict[str, DocumentMetadata] = Field(default_factory=dict)
     question_rules: QuestionRules = Field(default_factory=QuestionRules)
     required_slots_by_intent: dict[str, list[NonEmptyString]] = Field(default_factory=dict)
     unsupported_metrics: list[NonEmptyString] = Field(default_factory=list)

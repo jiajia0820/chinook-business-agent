@@ -121,7 +121,7 @@ class KnowledgeIndex:
                 status="failed", error=ApiError(code="PROFILE_NOT_FOUND", message="该知识索引不属于请求 profile。", retryable=False),
             )
         filters = request.filters
-        if not set(filters) <= {"doc_id", "section", "business_metric_ids", "slots"}:
+        if not set(filters) <= {"doc_id", "section", "business_metric_ids", "slots", "required_sources", "preferred_doc", "answer_type", "query_terms"}:
             return self._failure(request, "INVALID_REQUEST", "检索筛选条件不受支持。")
         doc_id = filters.get("doc_id")
         if doc_id is not None and doc_id not in self.documents:
@@ -129,12 +129,34 @@ class KnowledgeIndex:
         metric_ids = filters.get("business_metric_ids", [])
         if not isinstance(metric_ids, list) or any(metric not in {item.metric_id for item in self.profile.metric_definitions} for metric in metric_ids):
             return self._failure(request, "INVALID_REQUEST", "指标提示不属于当前 profile。")
+        required_sources = filters.get("required_sources", [])
+        if not isinstance(required_sources, list) or any(source not in self.documents for source in required_sources):
+            return self._failure(request, "INVALID_REQUEST", "必要来源必须属于当前知识快照。")
+        preferred_doc = filters.get("preferred_doc")
+        if preferred_doc is not None and preferred_doc not in self.documents:
+            return self._failure(request, "INVALID_REQUEST", "首选来源必须属于当前知识快照。")
+        answer_type = filters.get("answer_type")
+        if answer_type is not None and not isinstance(answer_type, str):
+            return self._failure(request, "INVALID_REQUEST", "答案类型提示必须是字符串。")
+        requested_terms = filters.get("query_terms", [])
+        if not isinstance(requested_terms, list) or any(not isinstance(term, str) for term in requested_terms):
+            return self._failure(request, "INVALID_REQUEST", "查询扩展词必须是字符串列表。")
         query_terms = set(lexical_terms(request.query))
+        for term in requested_terms:
+            query_terms.update(lexical_terms(term))
         for metric_id in metric_ids:
             definition = self.profile.metric(metric_id)
             if definition:
                 query_terms.update(lexical_terms(definition.name))
                 query_terms.update(lexical_terms(definition.definition))
+        matching_aliases = [alias for alias in self.profile.aliases
+                            if normalize(alias.alias) in normalize(request.query)
+                            or normalize(alias.label) in normalize(request.query)
+                            or any(normalize(alias.alias) in normalize(term) or normalize(alias.label) in normalize(term)
+                                   for term in requested_terms)]
+        for alias in matching_aliases:
+            query_terms.update(lexical_terms(alias.alias))
+            query_terms.update(lexical_terms(alias.label))
         if not query_terms:
             return RetrievalResponse(retrieval_id=request.retrieval_id, profile_id=self.profile_id, status="success", chunks=[])
         section = filters.get("section")
@@ -147,7 +169,14 @@ class KnowledgeIndex:
             "活动方案": "D10", "报名截止": "D11", "海报": "D11", "FAQ": "D12",
             "默认音乐": "D12", "销售额口径": "D12",
         }
-        hinted_doc = next((value for key, value in hints.items() if key.casefold() in request.query.casefold()), None)
+        hinted_doc = preferred_doc or next((value for key, value in hints.items() if key.casefold() in request.query.casefold()), None)
+        if not hinted_doc and answer_type:
+            authority_candidates = [
+                (metadata.authority_scope.get(answer_type, 0), doc_id)
+                for doc_id, metadata in self.profile.document_metadata.items()
+                if answer_type in metadata.answer_types and metadata.authority_scope.get(answer_type, 0) > 0
+            ]
+            hinted_doc = max(authority_candidates, default=(0, None))[1]
         candidates = self.chunks if doc_id is None else self._document_chunks[doc_id]
         query_weight = sum(self._weight(term) for term in query_terms)
         for item in candidates:
@@ -167,12 +196,26 @@ class KnowledgeIndex:
                 # signal. Keep lexical scoring for chunks inside that document,
                 # but do not let a long recap win merely by repeating terms.
                 score += 1_000_000
+            metadata = self.profile.document_metadata.get(item.record.doc_id)
+            if metadata and answer_type:
+                score += float(metadata.authority_scope.get(answer_type, 0)) * 10
+            if required_sources and item.record.doc_id in required_sources:
+                score += 250.0
             if item.record.section and any(term in normalize(item.record.section) for term in query_terms):
                 score += 3.0
             if any(term in normalize(item.record.title) for term in query_terms):
                 score += 1.5
             ranked.append((float(score), item))
         ranked.sort(key=lambda pair: (-pair[0], pair[1].record.doc_id, pair[1].record.chunk_id))
+        selected_ranked: list[tuple[float, IndexedChunk]] = []
+        if required_sources:
+            for source in required_sources:
+                source_hits = [pair for pair in ranked if pair[1].record.doc_id == source]
+                if source_hits:
+                    selected_ranked.append(source_hits[0])
+            selected_ids = {item.record.chunk_id for _, item in selected_ranked}
+            selected_ranked.extend(pair for pair in ranked if pair[1].record.chunk_id not in selected_ids)
+            ranked = selected_ranked
         chunks = [
             DocumentChunk(
                 chunk_id=item.record.chunk_id, doc_id=item.record.doc_id,

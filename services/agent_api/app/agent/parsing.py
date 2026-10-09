@@ -250,6 +250,13 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
     elif not base:
         task.intent = "unknown"
 
+    # A comparison of multiple business documents is a RAG task. Keep it on
+    # the document route so the query planner can require each quarter's
+    # authoritative review instead of sending it to SQL.
+    if task.route == "rag" and task.intent == "document_rule" and (
+            len(quarters) >= 2 or ("复盘" in q and any(term in q for term in ("比较", "变化", "对比")))):
+        task.intent = "multidoc_query"
+
     # 三分法第二类：带明确季度但缺年份，且意图引用按年绑定的经营资料
     # （目标/复盘/方案/增长对比）。年份由资料锚定，声明口径后直接答，不反问。
     anchored_intents = {"target_attainment", "target_difference", "cross_source_query",
@@ -295,7 +302,7 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
     if re.search(r"第?(?:[五六七八九]|[5-9])季度", q) and not re.search(r"第?[一二三四1-4]季度", q):
         missing.append("time_range")
     if len(years) > 1 or len(quarters) > 1:
-        comparable = (task.intent in {"growth_rate", "cross_source_query", "document_calculation"}
+        comparable = (task.intent in {"growth_rate", "cross_source_query", "document_calculation", "multidoc_query"}
                       and len(quarters) == 2 and len(years) <= 2
                       and any(term in q for term in ("对比", "相比", "比", "增长", "环比", "同比")))
         if not comparable:
