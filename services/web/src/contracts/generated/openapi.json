@@ -843,6 +843,65 @@
         ]
       }
     },
+    "/api/v1/ask/stream": {
+      "post": {
+        "operationId": "ask_stream_api_v1_ask_stream_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AskRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "请求格式错误"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "服务内部异常"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "description": "Agent 服务尚未就绪"
+          }
+        },
+        "summary": "Ask Stream",
+        "tags": [
+          "question-answering"
+        ]
+      }
+    },
     "/health": {
       "get": {
         "operationId": "health_health_get",

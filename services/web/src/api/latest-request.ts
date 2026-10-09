@@ -1,5 +1,5 @@
 import type { AskRequest } from '../contracts';
-import type { AskClient, AskClientResult } from './client';
+import type { AskClient, AskClientResult, AskStage } from './client';
 
 export type LatestAskResult =
   | { kind: 'current'; sequence: number; result: AskClientResult }
@@ -10,13 +10,17 @@ export function createLatestAskRunner(client: AskClient) {
   let sequence = 0;
   let controller: AbortController | null = null;
   return {
-    async run(payload: AskRequest): Promise<LatestAskResult> {
+    async run(payload: AskRequest, onStage?: (stage: AskStage) => void): Promise<LatestAskResult> {
       const current = ++sequence;
       controller?.abort();
       const thisController = new AbortController();
       controller = thisController;
       try {
-        const result = await client.ask(payload, { signal: thisController.signal });
+        const options = { signal: thisController.signal };
+        // A client without the progress stream keeps working through the plain endpoint.
+        const result = client.askStream
+          ? await client.askStream(payload, options, onStage)
+          : await client.ask(payload, options);
         // Stale results do not expose response evidence to the rendering layer.
         return current === sequence
           ? { kind: 'current', sequence: current, result }

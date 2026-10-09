@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { effectScope } from 'vue';
-import type { AskClient, AskClientResult } from '../src/api/client';
+import type { AskClient, AskClientResult, AskStage } from '../src/api/client';
 import { CLARIFICATION_EXAMPLE, EXAMPLES, RESET_QUESTION, useAskWorkspace } from '../src/features/ask/use-ask-workspace';
 import { deferred } from './recorded-http';
 import { apiError, business, clarificationPair, requestError, resetResponse } from './workspace-fixtures';
@@ -279,5 +279,58 @@ describe('question/session state without a runtime fixture fallback', () => {
     await second.submit();
     expect(first.sessionId.value).toBe('first');
     expect(second.sessionId.value).toBe('second');
+  });
+});
+
+describe('live stage progress for the in-flight question', () => {
+  function streamingClient() {
+    const pending = deferred<AskClientResult>();
+    let emit: ((stage: AskStage) => void) | null = null;
+    const askStream = vi.fn<NonNullable<AskClient['askStream']>>((_payload, _options, onStage) => {
+      emit = onStage ?? null;
+      return pending.promise;
+    });
+    const ask = vi.fn<AskClient['ask']>();
+    return { client: { ask, askStream }, pending, ask, askStream, emit: () => emit };
+  }
+  it('records stages in order while waiting and exposes the latest one', async () => {
+    const fixture = streamingClient();
+    const state = workspace(fixture.client);
+    state.fillExample(EXAMPLES[0]!);
+    const work = state.submit();
+    expect(state.stages.value).toEqual([]);
+    expect(state.currentStage.value).toBeNull();
+    fixture.emit()?.({ node: 'parse', label: '意图与时间解析' });
+    fixture.emit()?.({ node: 'call_sql', label: 'SQL 生成与只读执行' });
+    expect(state.stages.value.map((stage) => stage.node)).toEqual(['parse', 'call_sql']);
+    expect(state.currentStage.value?.label).toBe('SQL 生成与只读执行');
+    fixture.pending.resolve(business());
+    expect(await work).toBe(true);
+    // Settled: late progress from the same stream must not extend the trail.
+    fixture.emit()?.({ node: 'compose', label: '答案与证据组装' });
+    expect(state.stages.value).toHaveLength(2);
+  });
+  it('drops progress after stopping and clears the trail', async () => {
+    const fixture = streamingClient();
+    const state = workspace(fixture.client);
+    state.fillExample(EXAMPLES[0]!);
+    const work = state.submit();
+    fixture.emit()?.({ node: 'parse', label: '意图与时间解析' });
+    expect(state.stages.value).toHaveLength(1);
+    state.stopWaiting();
+    expect(state.stages.value).toEqual([]);
+    fixture.emit()?.({ node: 'call_sql', label: 'SQL 生成与只读执行' });
+    expect(state.stages.value).toEqual([]);
+    fixture.pending.resolve(business());
+    expect(await work).toBe(false);
+    expect(state.phase.value).toBe('idle');
+  });
+  it('keeps a client without the progress stream working through the plain endpoint', async () => {
+    const ask = vi.fn<AskClient['ask']>().mockResolvedValue(business());
+    const state = workspace({ ask });
+    state.fillExample(EXAMPLES[0]!);
+    expect(await state.submit()).toBe(true);
+    expect(ask).toHaveBeenCalledTimes(1);
+    expect(state.stages.value).toEqual([]);
   });
 });

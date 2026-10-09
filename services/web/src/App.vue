@@ -6,7 +6,7 @@ import { CLARIFICATION_EXAMPLE, EXAMPLES, useAskWorkspace } from './features/ask
 // Explicit test dependency injection; main.ts always uses the real default client.
 const props = defineProps<{ client?: AskClient }>();
 const {
-  question, options, result, lastRequest, notice, busy,
+  question, options, result, lastRequest, notice, busy, stages,
   validationMessage, charCount, canSubmit, canRetry, canResetTask, canClarify,
   submit, fillExample, submitClarification, retry, resetTask, stopWaiting, newSession,
 } = useAskWorkspace(props.client);
@@ -52,7 +52,17 @@ function shortcut(event: KeyboardEvent) {
       <p class="helper">示例只填入问题，不自动发送。澄清示例补齐年份后仍可能 unsupported。</p>
     </section>
     <section class="response-area" aria-label="本轮响应" :aria-busy="busy" aria-live="polite">
-      <p v-if="busy" class="loading-message" role="status" data-testid="loading-message">正在等待 API 响应；不会自动重试。</p>
+      <section v-if="busy" class="stage-progress" data-testid="stage-progress" aria-label="本轮处理进度">
+        <p class="loading-message" role="status" data-testid="loading-message">正在等待 API 响应；不会自动重试。</p>
+        <ol v-if="stages.length" class="stage-list" data-testid="stage-list">
+          <li v-for="(stage, index) in stages" :key="`${stage.node}-${index}`" :data-testid="`stage-${index}`" :data-state="index === stages.length - 1 ? 'running' : 'done'">
+            <span class="stage-dot" aria-hidden="true"></span>
+            <span class="stage-label">{{ stage.label }}</span>
+            <code class="stage-node">{{ stage.node }}</code>
+          </li>
+        </ol>
+        <p v-else class="helper" data-testid="stage-idle">正在连接进度流…</p>
+      </section>
       <p v-if="notice" class="notice" role="status" data-testid="workspace-notice">{{ notice }}</p>
       <div v-if="lastRequest" class="last-request" data-testid="last-request">
         <p>本次发送：{{ lastRequest.question }}</p>

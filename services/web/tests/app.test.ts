@@ -208,9 +208,35 @@ describe('4B page interactions in simulated DOM (not live browser E2E)', () => {
     });
     const wrapper = mount(App, { props: { client: createAskClient({ fetch: fetcher }) } });
     await send(wrapper);
-    expect(fetcher.mock.calls[0]?.[0]).toBe('/api/v1/ask');
+    // The progress stream is tried first; this stub answers plain JSON there, which the client accepts as-is.
+    expect(fetcher.mock.calls[0]?.[0]).toBe('/api/v1/ask/stream');
     expect(wrapper.get(selector('answer')).text()).toContain('59');
     await send(wrapper, EXAMPLES[1]);
     expect(JSON.parse(fetcher.mock.calls[1]![1]!.body as string)).toMatchObject({ session_id: 'transport-test-session' });
+  });
+});
+
+describe('4B live stage progress rendering', () => {
+  it('shows the waiting placeholder, then the backend stage trail, then clears it', async () => {
+    const pending = deferred<AskClientResult>();
+    const askStream = vi.fn<NonNullable<AskClient['askStream']>>().mockReturnValue(pending.promise);
+    const wrapper = mount(App, { props: { client: { ask: vi.fn(), askStream } } });
+    await send(wrapper);
+    expect(wrapper.get(selector('stage-idle')).text()).toContain('正在连接进度流');
+    expect(wrapper.find('.stage-list').exists()).toBe(false);
+    askStream.mock.calls[0]?.[2]?.({ node: 'parse', label: '意图与时间解析' });
+    askStream.mock.calls[0]?.[2]?.({ node: 'call_sql', label: 'SQL 生成与只读执行' });
+    await flushPromises();
+    const items = wrapper.findAll('.stage-list li');
+    expect(items).toHaveLength(2);
+    expect(items[0]!.attributes('data-state')).toBe('done');
+    expect(items[1]!.attributes('data-state')).toBe('running');
+    expect(items[1]!.text()).toContain('SQL 生成与只读执行');
+    expect(items[1]!.text()).toContain('call_sql');
+    expect(wrapper.find(selector('loading-message')).exists()).toBe(true);
+    pending.resolve(business('answered', 'session-stages'));
+    await flushPromises();
+    expect(wrapper.find(selector('stage-progress')).exists()).toBe(false);
+    expect(wrapper.find(selector('answer')).exists()).toBe(true);
   });
 });
