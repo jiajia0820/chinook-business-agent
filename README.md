@@ -39,26 +39,6 @@ scripts/               索引构建、评测与校验脚本
 docs/                  接口契约、数据方案、赛题材料和设计文档
 ```
 
-## 开发基线
-
-统一接口契约见 [interface-contract.md](interface-contract.md)。
-
-C 模块的实现与测试见 `backend/` 与 `third_party/chinook_c/`，接口约定见 [interface-contract.md](interface-contract.md)。
-
-数据集与评测集方案见 [数据集与评测集方案.md](数据集与评测集方案.md)。
-
-第一轮先跑通三个问题：
-
-1. “2025 年 Rock 音乐销售额是多少？”
-2. “Rock 达到第三季度经营目标了吗？”
-3. “销售增长率是多少？”——系统需要主动澄清比较周期。
-
-## C 模块阶段交付
-
-阶段标签：`c-baseline-v0.1.0`。Chinook Schema 与只读 SQL 已完成本地验收；基础 NL2SQL 已接入真实模型。早期 10 题抽样为执行成功率 60%、数值匹配率 20%、严格业务正确率 10%。B 整体联调与 AdventureWorks 实库验证待完成。
-
-最新一轮全量评测见 [评测结果与优劣势分析-2026-10-09.md](docs/评测结果与优劣势分析-2026-10-09.md)：基础 NL2SQL 已 10/10，多表关联、公式计算、跨源问答和多轮会话仍为 0 分。交接与对外结论以该文档为准。
-
 ## 数据说明
 
 Chinook 是公开样例数据库，不是真实企业经营数据。销售额按 `InvoiceLine.UnitPrice * InvoiceLine.Quantity` 计算。当前数据不包含成本、利润、退款、库存、广告投放和播放日志，系统遇到这些问题应说明数据不支持。
