@@ -194,7 +194,7 @@ describe('typed API client', () => {
     await createAskClient({ fetch: responding(copySample()) }).ask(request);
     expect(vi.getTimerCount()).toBe(0);
   });
-  it.each([0, -1, NaN, Infinity, 120_001])('rejects invalid timeout setting %s', (timeoutMs) => {
+  it.each([0, -1, NaN, Infinity, 240_001])('rejects invalid timeout setting %s', (timeoutMs) => {
     expect(() => createAskClient({ timeoutMs })).toThrow('Invalid frontend request timeout.');
   });
 });

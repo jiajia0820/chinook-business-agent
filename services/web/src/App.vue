@@ -23,8 +23,8 @@ function shortcut(event: KeyboardEvent) {
     </header>
     <aside class="boundary" aria-label="当前能力范围">
       <strong>当前真实能力</strong>
-      <p>真实 Chinook 样例库＋大模型 NL2SQL 已启用；支持销售额、销量、订单数和客户数等已登记指标，SQL 经只读安全校验后执行。</p>
-      <p>D01-D12 知识检索与有证据绑定的目标、增长计算已启用；未登记指标或证据不足时会明确说明。</p>
+      <p>真实 Chinook 样例库＋大模型 NL2SQL 已启用；支持销售额、销量、订单数、购买客户数等已登记指标，以及按品类、商品、媒体类型、账单国家的分组与排名；SQL 经只读安全校验后执行。</p>
+      <p>D01-D12 知识检索支持自由问法，按相关度返回原文片段与来源；有证据绑定的目标达成与增长计算已启用；未登记指标或证据不足时会明确说明。</p>
     </aside>
     <section class="session-bar" aria-label="会话信息">
       <p>Profile：chinook-music</p>

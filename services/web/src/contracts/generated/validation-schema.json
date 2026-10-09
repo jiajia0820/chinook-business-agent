@@ -439,6 +439,17 @@
     "HealthResponse": {
       "additionalProperties": false,
       "properties": {
+        "model_mode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Model Mode"
+        },
         "service": {
           "title": "Service",
           "type": "string"

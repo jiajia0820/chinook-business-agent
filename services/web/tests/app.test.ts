@@ -28,7 +28,7 @@ describe('4B page interactions in simulated DOM (not live browser E2E)', () => {
     expect(wrapper.text()).toContain('仅本 worker');
     expect(wrapper.get(selector('submit-question')).attributes('disabled')).toBeDefined();
     expect(wrapper.get(selector('reset-task')).attributes('disabled')).toBeDefined();
-    expect(wrapper.findAll('.example-list button')).toHaveLength(8);
+    expect(wrapper.findAll('.example-list button')).toHaveLength(15);
     expect((wrapper.get(selector('max-rows')).element as HTMLInputElement).value).toBe('50');
     expect((wrapper.get(selector('top-k')).element as HTMLInputElement).value).toBe('5');
     expect(ask).not.toHaveBeenCalled();
