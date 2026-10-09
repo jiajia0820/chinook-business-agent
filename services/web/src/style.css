@@ -92,6 +92,8 @@ details[open] > .sql-summary::before { transform: rotate(90deg); }
 .sql-legend .chip-fn { background: #9fe6b0; }
 .sql-legend .chip-param { background: #ffc2dd; }
 .sql-legend .legend-plain { color: #8a97a1; }
+td.cell-origin { background: #ffe455; color: #513f00; font-weight: 700; }
+.caption-origin { color: #8a6d1f; }
 .cite-link { display: inline; padding: 0; border: none; background: none; font: inherit; color: #1d5b86; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 3px; cursor: pointer; overflow-wrap: anywhere; }
 .cite-link:hover { color: #164663; text-decoration-style: solid; }
 .citation-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }

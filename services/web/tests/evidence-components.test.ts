@@ -32,6 +32,16 @@ describe('SQL evidence and dynamic rows', () => {
     // The copy button is the only interactive element allowed inside an evidence card.
     expect(wrapper.findAll('input, textarea, a')).toHaveLength(0);
     expect(wrapper.findAll('button').map((button) => button.attributes('aria-label'))).toEqual(['复制 SQL']);
+    expect(wrapper.findAll('.cell-origin')).toHaveLength(0);
+  });
+  it('marks the cells the answer quotes as raw origin', () => {
+    const response = actualResponse('客户数量是多少？');
+    const result = response.sql_results![0]!;
+    const wrapper = mount(SqlEvidence, { props: { result, answerText: response.answer } });
+    const marked = wrapper.findAll('tbody td.cell-origin');
+    expect(marked.length).toBeGreaterThan(0);
+    for (const cell of marked) expect(response.answer).toContain(cell.text());
+    expect(wrapper.get('caption').text()).toContain('原始出处');
   });
   it('shows Genre limit as a returned subset, never total number of genres', () => {
     const result = actualResponse('有哪些音乐类型？', 1).sql_results![0]!;

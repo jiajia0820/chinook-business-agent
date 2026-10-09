@@ -32,7 +32,7 @@ const fixtureSources = computed(() => hasFixtureSources(props.response));
     </details>
     <section v-if="response.sql_results?.length" class="evidence-section" aria-label="SQL 与查询结果">
       <h4>SQL 与查询结果</h4>
-      <SqlEvidence v-for="(sql, index) in response.sql_results" :key="`${response.request_id}-${sql.query_id}-${index}`" :result="sql" />
+      <SqlEvidence v-for="(sql, index) in response.sql_results" :key="`${response.request_id}-${sql.query_id}-${index}`" :result="sql" :answer-text="response.answer" />
     </section>
     <p v-else class="evidence-empty" data-testid="sql-none" title="本轮未返回 SQL 结果，不代表业务数值为 0。">SQL 与查询结果：本轮无</p>
     <section v-if="response.documents?.length" class="evidence-section" aria-label="文档片段">

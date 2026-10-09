@@ -4,9 +4,31 @@ import type { SqlQueryResponse } from '../../contracts';
 import CopyButton from '../CopyButton.vue';
 import { cellText, jsonText, sqlShapeNotes } from './format';
 import { highlightSql } from './sqlHighlight';
-const props = defineProps<{ result: SqlQueryResponse }>();
+const props = defineProps<{ result: SqlQueryResponse; answerText?: string | null }>();
 const notes = computed(() => sqlShapeNotes(props.result));
 const sqlTokens = computed(() => highlightSql(props.result.sql ?? ''));
+// Cells whose value the answer actually quotes: the raw origin of the answer number.
+const originCells = computed(() => {
+  const answer = props.answerText ?? '';
+  const cells = new Set<string>();
+  const rows = props.result.rows;
+  const columns = props.result.columns;
+  if (!answer || !rows?.length || !columns?.length) return cells;
+  const answerNumbers = new Set(answer.match(/-?\d+(?:\.\d+)?/g) ?? []);
+  for (const row of rows) {
+    for (const column of columns) {
+      const text = cellText(row, column).trim();
+      if (!text) continue;
+      if (/^-?\d+(?:\.\d+)?$/.test(text)) {
+        if (/^(19|20)\d{2}$/.test(text)) continue; // year labels are context, not the answer value
+        if (answerNumbers.has(text)) cells.add(text);
+      } else if (text.length >= 2 && answer.includes(text)) {
+        cells.add(text);
+      }
+    }
+  }
+  return cells;
+});
 const statuses = { success: '查询成功', failed: '查询失败', rejected: '查询被拒绝' };
 </script>
 
@@ -41,9 +63,9 @@ const statuses = { success: '查询成功', failed: '查询失败', rejected: '�
     <ul v-if="notes.length" class="evidence-warning" data-testid="sql-shape-notes"><li v-for="(note, index) in notes" :key="index">{{ note }}</li></ul>
     <div v-if="result.columns?.length && result.rows?.length" class="table-scroll" role="region" aria-label="SQL 查询结果表" tabindex="0">
       <table data-testid="sql-table">
-        <caption>返回行明细 · {{ result.query_id }}（不是业务总量汇总）</caption>
+        <caption>返回行明细 · {{ result.query_id }}（不是业务总量汇总）<span v-if="originCells.size" class="caption-origin">；黄底单元格即答案数值的原始出处</span></caption>
         <thead><tr><th v-for="(column, index) in result.columns" :key="index" scope="col">{{ column }}</th></tr></thead>
-        <tbody><tr v-for="(row, rowIndex) in result.rows" :key="rowIndex"><td v-for="(column, columnIndex) in result.columns" :key="columnIndex">{{ cellText(row, column) }}</td></tr></tbody>
+        <tbody><tr v-for="(row, rowIndex) in result.rows" :key="rowIndex"><td v-for="(column, columnIndex) in result.columns" :key="columnIndex" :class="{ 'cell-origin': originCells.has(cellText(row, column).trim()) }">{{ cellText(row, column) }}</td></tr></tbody>
       </table>
     </div>
     <p v-else-if="result.status === 'success' && result.rows?.length === 0" data-testid="sql-empty">查询成功，本次返回 0 行；这不是经营指标值为 0 的结论。</p>
