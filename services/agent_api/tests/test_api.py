@@ -9,8 +9,6 @@ from httpx import ASGITransport, AsyncClient, Response
 from services.agent_api.app.contracts import AskRequest, AskResponse
 from services.agent_api.app.core.config import Settings
 from services.agent_api.app.main import create_app
-from services.agent_api.app.agent.graph import GRAPH_NODE_NAMES
-from services.agent_api.app.api.routes.ask import STAGE_LABELS
 
 
 class SuccessfulAskService:
@@ -35,28 +33,11 @@ class SuccessfulAskService:
             error=None,
         )
 
-    def ask_stream(self, payload: AskRequest, *, request_id: str):
-        async def events():
-            yield ("stage", "parse_question")
-            yield ("stage", "compose_response")
-            yield ("result", await self.ask(payload, request_id=request_id))
-
-        return events()
-
 
 class BrokenAskService:
     async def ask(self, payload: AskRequest, *, request_id: str) -> AskResponse:
         del payload, request_id
         raise RuntimeError("sensitive internal detail")
-
-    def ask_stream(self, payload: AskRequest, *, request_id: str):
-        del payload, request_id
-
-        async def events():
-            yield ("stage", "parse_question")
-            raise RuntimeError("sensitive internal detail")
-
-        return events()
 
 
 class ApiTests(unittest.IsolatedAsyncioTestCase):
@@ -139,50 +120,6 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["request_id"], "req-test-001")
         self.assertEqual(response.json()["status"], "answered")
-
-    async def test_ask_stream_emits_stage_labels_then_result(self) -> None:
-        response = await self.request(
-            self.create_app(SuccessfulAskService()),
-            "POST",
-            "/api/v1/ask/stream",
-            headers={"X-Request-ID": "req-test-stream-001"},
-            json={"question": "查询销售额", "profile_id": "chinook-ops"},
-        )
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.headers["content-type"].split(";")[0], "text/event-stream")
-        self.assertIn('event: stage\ndata: {"node": "parse_question", "label": "意图与时间解析"}', response.text)
-        self.assertIn("event: result", response.text)
-        self.assertIn("测试回答", response.text)
-
-    def test_stage_labels_cover_every_graph_node(self) -> None:
-        self.assertEqual(set(STAGE_LABELS), set(GRAPH_NODE_NAMES))
-        self.assertTrue(all(label.strip() for label in STAGE_LABELS.values()))
-
-    async def test_ask_stream_sanitizes_mid_stream_failure(self) -> None:
-        response = await self.request(
-            self.create_app(BrokenAskService()),
-            "POST",
-            "/api/v1/ask/stream",
-            raise_app_exceptions=False,
-            json={"question": "查询销售额", "profile_id": "chinook-ops"},
-        )
-
-        self.assertEqual(response.status_code, 200)
-        self.assertIn("event: error", response.text)
-        self.assertIn("STREAM_INTERRUPTED", response.text)
-        self.assertNotIn("sensitive", response.text)
-
-    async def test_ask_stream_unavailable_service_stays_plain_503(self) -> None:
-        response = await self.request(
-            self.create_app(),
-            "POST",
-            "/api/v1/ask/stream",
-            json={"question": "查询销售额", "profile_id": "chinook-ops"},
-        )
-
-        self.assertEqual(response.status_code, 503)
-        self.assertEqual(response.json()["code"], "PROFILE_UNAVAILABLE")
 
     async def test_unexpected_exception_is_sanitized(self) -> None:
         with self.assertLogs("agent_api", level="ERROR"):

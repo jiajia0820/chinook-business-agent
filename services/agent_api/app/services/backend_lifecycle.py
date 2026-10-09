@@ -47,24 +47,6 @@ class ManagedAskService:
         finally:
             self.active.discard(task)
 
-    def ask_stream(self, payload, *, request_id):
-        if not self.accepting:
-            return unavailable("SERVICE_STOPPING").ask_stream(payload, request_id=request_id)
-        if len(self.active) >= self.maximum:
-            return unavailable("CAPACITY_EXCEEDED", retryable=True).ask_stream(payload, request_id=request_id)
-        task = asyncio.current_task()
-        self.active.add(task)
-        inner = self.delegate.ask_stream(payload, request_id=request_id)
-
-        async def wrapped():
-            try:
-                async for item in inner:
-                    yield item
-            finally:
-                self.active.discard(task)
-
-        return wrapped()
-
     def stop_accepting(self):
         self.accepting = False
 

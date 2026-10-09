@@ -24,15 +24,6 @@ from .state import AgentState, BusinessTask, ParsedTurn, SessionMemory
 
 CalculationBinder = Callable[[BusinessTask, SqlTaskOutcome | None, RetrievalResponse | None, str], CalculationRequest | None]
 
-# Node names are streamed to clients as stage progress; display labels live in the API route.
-COMPOSE_NODE = "compose_response"
-TEST_COMPOSE_NODE = "compose_test_response"
-GRAPH_NODE_NAMES = (
-    "initialize_turn", "parse_question", "validate_slots_and_capabilities",
-    "sql", "rag", "calculate", "evidence_check",
-    COMPOSE_NODE, TEST_COMPOSE_NODE,
-)
-
 
 def _snapshot(outcome):
     data = outcome.data.model_dump(mode="json", exclude={"diagnostics"}) if outcome.data is not None else None
@@ -91,7 +82,7 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
         raise ValueError("3C-3 calculator requires explicit evidence resolver")
     if response_composer is not None and response_composer.execution_mode != execution_mode:
         raise ValueError("composer source strategy must match the server execution mode")
-    compose_node = COMPOSE_NODE if response_composer is not None else TEST_COMPOSE_NODE
+    compose_node = "compose_response" if response_composer is not None else "compose_test_response"
     source_banner = {
         "fixture": "3B 受控工具替身验证；结果不代表真实数据库、文档检索、模型或计算器输出。",
         "offline_sql_integration": "3C-1：固定离线模型 + 真实 Chinook 样例 SQL；未接 RAG、计算器或联网模型。",
@@ -329,7 +320,7 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
             clarification=clarification, error=ApiError.model_validate(state["error"]) if status == "error" else None,
             trace=events_to_trace(events, request_id=state["request_id"], session_id=state["session_id"], profile_id=state["profile_id"], show_trace=options.show_trace),
         )
-        return mark(state, TEST_COMPOSE_NODE, response=response.model_dump(mode="json"), memory=memory.model_dump(mode="json"))
+        return mark(state, "compose_test_response", response=response.model_dump(mode="json"), memory=memory.model_dump(mode="json"))
 
     builder = StateGraph(AgentState)
     for name, node in [

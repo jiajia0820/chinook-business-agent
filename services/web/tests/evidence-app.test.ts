@@ -117,8 +117,7 @@ describe('4C evidence integration, using explicit test transport only', () => {
     expect(wrapper.find('[data-testid="document-evidence"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="calculation-record"]').exists()).toBe(false);
     expect(fetcher).toHaveBeenCalledTimes(1);
-    // The progress stream is tried first; this stub answers plain JSON there, which the client accepts as-is.
-    expect(fetcher.mock.calls[0]?.[0]).toBe('/api/v1/ask/stream');
+    expect(fetcher.mock.calls[0]?.[0]).toBe('/api/v1/ask');
     expect(JSON.parse(fetcher.mock.calls[0]![1]!.body as string)).toEqual({ question: '默认音频范围是什么？', profile_id: 'chinook-music', options: { show_trace: true, max_rows: 50, top_k: 5 } });
   });
 });

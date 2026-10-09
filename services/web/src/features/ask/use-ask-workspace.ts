@@ -1,6 +1,6 @@
 import { computed, getCurrentScope, onScopeDispose, reactive, ref, shallowRef } from 'vue';
 import type { AskOptions, AskRequest } from '../../contracts';
-import { createAskClient, type AskClient, type AskClientResult, type AskStage } from '../../api/client';
+import { createAskClient, type AskClient, type AskClientResult } from '../../api/client';
 import { createLatestAskRunner } from '../../api/latest-request';
 
 export const PROFILE_ID = 'chinook-music';
@@ -52,8 +52,6 @@ export function useAskWorkspace(client: AskClient = createAskClient()) {
   const result = shallowRef<AskClientResult | null>(null);
   const lastRequest = shallowRef<AskRequest | null>(null);
   const notice = ref<string | null>(null);
-  // Live backend node progress for the in-flight question only; never persisted.
-  const stages = ref<AskStage[]>([]);
   const history = ref<HistoryEntry[]>([]);
   let historySeq = 0;
   let revision = 0;
@@ -90,14 +88,9 @@ export function useAskWorkspace(client: AskClient = createAskClient()) {
     phase.value = 'loading';
     result.value = null;
     notice.value = null;
-    stages.value = [];
     lastRequest.value = structuredClone(request);
     try {
-      const returned = await runner.run(request, (stage) => {
-        // Progress from a superseded, stopped or already settled request must not reach the UI.
-        if (disposed.value || current !== revision || phase.value !== 'loading') return;
-        stages.value = [...stages.value, stage];
-      });
+      const returned = await runner.run(request);
       if (disposed.value || current !== revision || returned.kind === 'stale') return false;
       result.value = returned.result;
       const settled = summarizeResult(returned.result);
@@ -149,7 +142,6 @@ export function useAskWorkspace(client: AskClient = createAskClient()) {
     runner.cancel();
     phase.value = 'idle';
     result.value = null;
-    stages.value = [];
     notice.value = '已停止前端等待；后端任务或 SQL 可能仍在执行，迟到响应不会显示。';
   }
   function newSession() {
@@ -162,7 +154,6 @@ export function useAskWorkspace(client: AskClient = createAskClient()) {
     lastRequest.value = null;
     history.value = [];
     phase.value = 'idle';
-    stages.value = [];
     notice.value = '已清空本地会话入口；下次不带旧会话 ID，这不会删除后端历史。';
   }
   function dispose() {
@@ -172,7 +163,6 @@ export function useAskWorkspace(client: AskClient = createAskClient()) {
     runner.cancel();
     phase.value = 'idle';
     result.value = null;
-    stages.value = [];
   }
   if (getCurrentScope()) onScopeDispose(dispose);
 
@@ -181,8 +171,6 @@ export function useAskWorkspace(client: AskClient = createAskClient()) {
     charCount: computed(() => Array.from(question.value.trim()).length),
     sessionId: computed(() => sessionId.value), phase: computed(() => phase.value),
     result: computed(() => result.value), notice: computed(() => notice.value),
-    stages: computed(() => stages.value),
-    currentStage: computed(() => stages.value[stages.value.length - 1] ?? null),
     history: computed(() => history.value),
     lastRequest: computed(() => {
       if (!lastRequest.value) return null;
