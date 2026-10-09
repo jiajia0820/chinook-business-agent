@@ -13,7 +13,7 @@ import unicodedata
 from ..contracts import ApiError, DocumentChunk, RetrievalRequest, RetrievalResponse
 from ..profiles.models import BusinessProfile
 from ..tools.models import InternalModel
-from .documents import ChunkRecord, DocumentProcessingError, read_document
+from .documents import ChunkRecord, DocumentProcessingError, StructuredRecord, extract_d06_structured_records, read_document
 
 
 ARCHIVE_SHA256 = "74748f209e042eab3bc446491e6b6ad7ccf5138e5dad93b79221dfa55541e27d"
@@ -82,7 +82,7 @@ def _manifest_json(path: Path) -> dict:
 
 class KnowledgeIndex:
     def __init__(self, manifest: KnowledgeManifest, chunks: tuple[ChunkRecord, ...],
-                 profile: BusinessProfile):
+                 profile: BusinessProfile, structured_records: tuple[StructuredRecord, ...] = ()):
         if manifest.profile_id != profile.profile_id:
             raise ValueError("knowledge/profile mismatch")
         self.profile_id = manifest.profile_id
@@ -90,6 +90,7 @@ class KnowledgeIndex:
         self.profile = profile.model_copy(deep=True)
         self.documents = {doc.doc_id: doc for doc in manifest.documents}
         self.chunks = tuple(IndexedChunk(item, normalize(item.text)) for item in chunks)
+        self.structured_records = tuple(structured_records)
         self._document_chunks = {
             doc_id: tuple(item for item in self.chunks if item.record.doc_id == doc_id)
             for doc_id in self.documents
@@ -157,6 +158,20 @@ class KnowledgeIndex:
         for alias in matching_aliases:
             query_terms.update(lexical_terms(alias.alias))
             query_terms.update(lexical_terms(alias.label))
+        structured_matches: tuple[StructuredRecord, ...] = ()
+        if answer_type in {"table_cell", "target_value"}:
+            slots = filters.get("slots", {})
+            if not isinstance(slots, dict):
+                return self._failure(request, "INVALID_REQUEST", "结构化检索槽位必须是对象。")
+            year = slots.get("year", 2025)
+            month = slots.get("month")
+            metric = slots.get("metric")
+            row_key = f"{year}-{int(month):02d}" if month is not None else None
+            if row_key is None and ("合计" in request.query or "季度" in request.query):
+                row_key = f"{year}-Q3"
+            structured_matches = tuple(item for item in self.structured_records
+                                       if (row_key is None or item.row_key == row_key)
+                                       and (metric is None or item.column_key == metric))
         if not query_terms:
             return RetrievalResponse(retrieval_id=request.retrieval_id, profile_id=self.profile_id, status="success", chunks=[])
         section = filters.get("section")
@@ -201,6 +216,8 @@ class KnowledgeIndex:
                 score += float(metadata.authority_scope.get(answer_type, 0)) * 10
             if required_sources and item.record.doc_id in required_sources:
                 score += 250.0
+            if structured_matches and item.record.source_uri == structured_matches[0].source_uri:
+                score += 2_000.0
             if item.record.section and any(term in normalize(item.record.section) for term in query_terms):
                 score += 3.0
             if any(term in normalize(item.record.title) for term in query_terms):
@@ -216,6 +233,18 @@ class KnowledgeIndex:
             selected_ids = {item.record.chunk_id for _, item in selected_ranked}
             selected_ranked.extend(pair for pair in ranked if pair[1].record.chunk_id not in selected_ids)
             ranked = selected_ranked
+        structured_data = None
+        if structured_matches:
+            record = structured_matches[0]
+            structured_data = {
+                "record_type": record.record_type,
+                "row_key": record.row_key,
+                "column_key": record.column_key,
+                "value": record.value,
+                "unit": record.unit,
+                "page": record.page,
+                "source_uri": record.source_uri,
+            }
         chunks = [
             DocumentChunk(
                 chunk_id=item.record.chunk_id, doc_id=item.record.doc_id,
@@ -224,6 +253,7 @@ class KnowledgeIndex:
                 section=item.record.section, text=item.record.text,
                 score=round(score, 6), source_uri=item.record.source_uri,
                 retrieval_id=request.retrieval_id,
+                structured_data=structured_data if structured_matches and item.record.source_uri == structured_matches[0].source_uri else None,
             )
             for score, item in ranked[:request.top_k]
         ]
@@ -259,7 +289,8 @@ def load_knowledge_index(root: Path, profile: BusinessProfile, *, max_chars: int
             chunks.extend(read_document(root, doc.model_dump(mode="python"), max_chars=max_chars))
         except DocumentProcessingError:
             raise
-    return KnowledgeIndex(manifest, tuple(chunks), profile)
+    structured_records = extract_d06_structured_records(tuple(chunks))
+    return KnowledgeIndex(manifest, tuple(chunks), profile, structured_records)
 
 
 def knowledge_snapshot_version(index: KnowledgeIndex) -> str:

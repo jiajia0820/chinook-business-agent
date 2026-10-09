@@ -40,6 +40,18 @@ class ChunkRecord:
     source_uri: str
 
 
+@dataclass(frozen=True)
+class StructuredRecord:
+    doc_id: str
+    record_type: str
+    row_key: str
+    column_key: str
+    value: float
+    unit: str
+    page: int | None
+    source_uri: str
+
+
 def _source_uri(doc: dict, suffix: str) -> str:
     return f"data/knowledge/{doc['path']}{suffix}"
 
@@ -192,3 +204,36 @@ def read_document(root: Path, doc: dict, *, max_chars: int = 1200) -> tuple[Chun
     if doc["doc_type"] == "png":
         return _read_png(path, doc, max_chars)
     raise DocumentProcessingError(doc["doc_id"], "UNSUPPORTED_DOCUMENT_TYPE")
+
+
+def extract_d06_structured_records(chunks: tuple[ChunkRecord, ...]) -> tuple[StructuredRecord, ...]:
+    """Extract the stable monthly target table from the D06 PDF text layer.
+
+    The original chunks remain the citation surface. These records provide a
+    typed lookup for month/metric questions and retain the page/source locator.
+    """
+    import re
+
+    d06 = [item for item in chunks if item.doc_id == "D06" and item.page == 2]
+    if not d06:
+        return ()
+    text = "".join(item.text for item in sorted(d06, key=lambda item: item.chunk_id))
+    marker = text.find("月度分解", max(0, len(text) // 2))
+    if marker < 0:
+        return ()
+    section = text[marker:]
+    records: list[StructuredRecord] = []
+    sales_match = re.search(r"全部音频\s*\n\s*([0-9]+(?:\.[0-9]+)?)\s*\n\s*([0-9]+(?:\.[0-9]+)?)\s*\n\s*([0-9]+(?:\.[0-9]+)?)\s*\n\s*([0-9]+(?:\.[0-9]+)?)", section)
+    units_marker = section.find("9月销量")
+    units_section = section[units_marker:] if units_marker >= 0 else ""
+    units_match = re.search(r"全部音频\s*\n\s*([0-9]+)\s*\n\s*([0-9]+)\s*\n\s*([0-9]+)\s*\n\s*([0-9]+)", units_section)
+    source = next((item for item in d06 if "38.00" in item.text and "42.00" in item.text), d06[0])
+    if sales_match:
+        for month, value in zip((7, 8, 9), sales_match.groups()[:3]):
+            records.append(StructuredRecord("D06", "target_value", f"2025-{month:02d}", "sales_amount", float(value), "USD", source.page, source.source_uri))
+        records.append(StructuredRecord("D06", "target_value", "2025-Q3", "sales_amount", float(sales_match.group(4)), "USD", source.page, source.source_uri))
+    if units_match:
+        for month, value in zip((7, 8, 9), units_match.groups()[:3]):
+            records.append(StructuredRecord("D06", "target_value", f"2025-{month:02d}", "units_sold", float(value), "件", source.page, source.source_uri))
+        records.append(StructuredRecord("D06", "target_value", "2025-Q3", "units_sold", float(units_match.group(4)), "件", source.page, source.source_uri))
+    return tuple(records)

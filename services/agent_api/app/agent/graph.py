@@ -197,6 +197,8 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
             filters.update({"required_sources": ["D06"], "preferred_doc": "D06", "answer_type": "target_value"})
         if task.intent == "document_rule" and any(term in question for term in ("分类", "归类", "Genre", "重金属", "摇滚", "拉丁", "媒体")):
             filters.update({"preferred_doc": "D03", "answer_type": "alias_mapping"})
+        if task.route == "rag" and (task.slots.get("month") or any(term in question for term in ("目标表", "月度", "计划"))):
+            filters.update({"preferred_doc": "D06", "answer_type": "table_cell"})
         if "活动" in question or "海报" in question:
             filters.update({"required_sources": ["D10", "D11"], "answer_type": "activity_entity"})
         payload = RetrievalRequest(retrieval_id="retrieval-" + str(uuid.uuid4()), profile_id=state["profile_id"], query=retrieval_query, filters=filters, top_k=request.options.top_k)

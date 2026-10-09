@@ -80,11 +80,14 @@ def _periods(question):
     quarters = [int(a or b) if (a or b).isdigit() else "一二三四".index(a) + 1
                 for a, b in re.findall(quarter_pattern, question, flags=re.I)]
     years = [int(year) for year in year_matches]
+    months = [int(month) for month in re.findall(r"(?<!\d)(1[0-2]|[1-9])\s*月", question)]
     slots = {}
     if years:
         slots["year"] = years[0]
     if quarters:
         slots["quarter"] = quarters[0]
+    if months:
+        slots["month"] = months[0]
     if len(quarters) == 2 and years:
         slots["comparison_period"] = {
             "year": years[1] if len(years) > 1 else years[0], "quarter": quarters[1],
@@ -119,6 +122,11 @@ def _time_range(slots):
     if year is None:
         return None
     quarter = slots.get("quarter")
+    month = slots.get("month")
+    if month:
+        start = date(year, month, 1)
+        end = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
+        return TimeRange(start=start.isoformat(), end=end.isoformat(), end_inclusive=False, label=f"{year}-{month:02d}")
     if quarter:
         month = (quarter - 1) * 3 + 1
         start = date(year, month, 1)
@@ -138,7 +146,7 @@ def _unparsed_query_text(question, profile):
     terms += profile.question_rules.ambiguous_scope_terms + profile.question_rules.query_fillers
     for term in sorted(set(terms), key=len, reverse=True):
         residue = re.sub(re.escape(term), "", residue, flags=re.I)
-    residue = re.sub(r"(?<!\d)\d{4}\s*年?|第?[一二三四1-4]季度|Q[1-4]|[\s，,。:：?？!！、]+", "", residue, flags=re.I)
+    residue = re.sub(r"(?<!\d)\d{4}\s*年?|第?[一二三四1-4]季度|Q[1-4]|(?<!\d)(1[0-2]|[1-9])\s*月|[\s，,。:：?？!！、]+", "", residue, flags=re.I)
     return residue
 
 
@@ -185,7 +193,7 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
     hits = {name: _contains(q, terms) for name, terms in rules.intent_terms.items()}
     followup = q.startswith(("换成", "改成", "那", "和目标比", "仅", "按", "对比", "环比", "同比"))
     # Slot-only responses are safe supplements; arbitrary text is not silently ignored.
-    stripped = re.sub(r"\d{4}\s*年?|第?[一二三四1234]季度|Q[1-4]|[\s，,。?？呢]+", "", q, flags=re.I)
+    stripped = re.sub(r"\d{4}\s*年?|第?[一二三四1234]季度|Q[1-4]|(?<!\d)(1[0-2]|[1-9])\s*月|[\s，,。?？呢]+", "", q, flags=re.I)
     slot_only = not stripped
     supplement = slot_only or q.startswith(("仅", "按", "全部音乐", "全部音频", "音频", "改成", "换成"))
     base = None
@@ -298,7 +306,8 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
         missing.append("genre_boundary")
     # Do not answer a narrower day/month question using a whole-quarter query.
     if re.search(r"\d{1,2}月|\d{1,2}日|最近|今年|去年|本季度|本月", q):
-        missing.append("time_range")
+        if "month" not in task.slots or "year" not in task.slots:
+            missing.append("time_range")
     if re.search(r"第?(?:[五六七八九]|[5-9])季度", q) and not re.search(r"第?[一二三四1-4]季度", q):
         missing.append("time_range")
     if len(years) > 1 or len(quarters) > 1:
