@@ -27,7 +27,9 @@ describe('SQL evidence and dynamic rows', () => {
     expect(wrapper.findAll('tbody tr')).toHaveLength(result.rows!.length);
     expect(wrapper.get('[data-testid="candidate-sql"]').text()).toBe(result.sql);
     expect(wrapper.text()).toContain('不是逐字驱动 SQL');
-    expect(wrapper.findAll('input, textarea, button, a')).toHaveLength(0);
+    // The copy button is the only interactive element allowed inside an evidence card.
+    expect(wrapper.findAll('input, textarea, a')).toHaveLength(0);
+    expect(wrapper.findAll('button').map((button) => button.attributes('aria-label'))).toEqual(['复制 SQL']);
   });
   it('shows Genre limit as a returned subset, never total number of genres', () => {
     const result = actualResponse('有哪些音乐类型？', 1).sql_results![0]!;
@@ -187,7 +189,8 @@ describe('calculation/trace display and current response identity', () => {
     const wrapper = mount(CalculationEvidence, { props: { calculations: [{ calculation_id: 'test', formula: 'test', result: 0, unit: '%' }], fixtureSources: false } });
     expect(wrapper.get('[data-testid="calculation-value"]').text()).toContain('0 · 单位：%');
     const empty = mount(CalculationEvidence, { props: { calculations: [], fixtureSources: false } });
-    expect(empty.get('[data-testid="calculation-empty"]').text()).toContain('未启用真实业务计算器');
+    expect(empty.get('[data-testid="calculation-empty"]').text()).toBe('计算记录：本轮无');
+    expect(empty.get('[data-testid="calculation-empty"]').attributes('title')).toContain('未启用真实业务计算器');
     expect(empty.find('[data-testid="calculation-value"]').exists()).toBe(false);
   });
   it('keeps backend trace order/step numbers/source references instead of sorting or summing', () => {
@@ -204,7 +207,8 @@ describe('calculation/trace display and current response identity', () => {
   it.each([false, true, null])('empty trace with requested=%s does not invent tools or timings', (requested) => {
     const wrapper = mount(TraceEvidence, { props: { steps: [], showTraceRequested: requested } });
     expect(wrapper.find('[data-testid="trace-not-requested"]').exists()).toBe(requested === false);
-    expect(wrapper.get('[data-testid="trace-empty"]').text()).toContain('不能据此推断工具未运行');
+    expect(wrapper.get('[data-testid="trace-empty"]').text()).toContain('执行轨迹：本轮无');
+    expect(wrapper.get('[data-testid="trace-empty"]').attributes('title')).toContain('不能据此推断工具未运行');
     expect(wrapper.find('[data-testid="trace-step"]').exists()).toBe(false);
   });
   it('shows actual parsed time/entities but does not fill an absent year', () => {
@@ -221,8 +225,9 @@ describe('calculation/trace display and current response identity', () => {
     delete response.sql_results; delete response.documents; delete response.calculations; delete response.metric_definitions; delete response.trace; delete response.entities;
     const wrapper = panel(response);
     expect(wrapper.findAll('[data-testid="sql-evidence"], [data-testid="document-evidence"], [data-testid="calculation-record"], [data-testid="trace-step"]')).toHaveLength(0);
-    expect(wrapper.text()).toContain('本轮未返回文档片段');
-    expect(wrapper.text()).toContain('本轮未返回指标定义');
+    expect(wrapper.text()).toContain('文档片段：本轮无');
+    expect(wrapper.text()).toContain('指标口径：本轮无');
+    expect(wrapper.findAll('h4')).toHaveLength(0);
     expect(wrapper.find('[data-testid="fixture-warning"]').exists()).toBe(false);
   });
   it.each(recordedBusiness.map((record, index) => [index, record.body as AskResponse] as const))('all five status branches retain available evidence in response %i', (_index, response) => {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { JsonValue } from '../src/contracts';
 import { answerSegments, cellText, citationTargets, hasFixtureSources, jsonText, splitAnswer, sqlShapeNotes } from '../src/components/evidence/format';
+import { highlightSql } from '../src/components/evidence/sqlHighlight';
 import { copySample } from './recorded-http';
 import { recordedCalculations, sqlResult } from './evidence-fixtures';
 
@@ -102,5 +103,20 @@ describe('citation helpers map evidence to answer anchors', () => {
   it('keeps answers without boilerplate lines wholly in the conclusion', () => {
     expect(splitAnswer('客户数量为 59。')).toEqual({ conclusion: '客户数量为 59。', notes: '' });
     expect(splitAnswer('来源：SQL 甲。')).toEqual({ conclusion: '来源：SQL 甲。', notes: '' });
+  });
+  it('classifies SQL keywords, functions, literals and params while preserving the exact text', () => {
+    const sql = "SELECT SUM(line.UnitPrice * line.Quantity) AS sales_amount FROM main.InvoiceLine line WHERE line.UnitPrice > 1.5 AND line.Name = 'it''s' AND line.Id IN (:start_date, 2)";
+    const tokens = highlightSql(sql);
+    expect(tokens.map((token) => token.text).join('')).toBe(sql);
+    expect(tokens.filter((token) => token.cls !== null).map((token) => [token.text, token.cls])).toEqual([
+      ['SELECT', 'tok-kw'], ['SUM', 'tok-fn'], ['AS', 'tok-kw'], ['FROM', 'tok-kw'], ['WHERE', 'tok-kw'],
+      ['1.5', 'tok-num'], ['AND', 'tok-kw'], ["'it''s'", 'tok-str'], ['AND', 'tok-kw'], ['IN', 'tok-kw'],
+      [':start_date', 'tok-param'], ['2', 'tok-num'],
+    ]);
+  });
+  it('highlights lowercase keywords and line comments too', () => {
+    const tokens = highlightSql('select a -- note\nfrom t');
+    expect(tokens[0]).toEqual({ text: 'select', cls: 'tok-kw' });
+    expect(tokens.some((token) => token.cls === 'tok-comment' && token.text === '-- note')).toBe(true);
   });
 });

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { enableAutoUnmount, mount } from '@vue/test-utils';
 import AskResult from '../src/components/AskResult.vue';
 import type { AskResponse } from '../src/contracts';
@@ -180,5 +180,20 @@ describe('answer-to-evidence citation linking', () => {
     const wrapper = mount(AskResult, { props: { result } });
     expect(wrapper.get('[data-testid="answer-conclusion"]').text()).toBe(result.response.answer);
     expect(wrapper.find('[data-testid="answer-notes"]').exists()).toBe(false);
+  });
+  it('offers copy buttons for the whole answer and the candidate SQL', async () => {
+    const { result } = answeredWithSql();
+    const writeText = vi.fn(async (_text: string) => undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    const wrapper = mount(AskResult, { props: { result } });
+    const answerCopy = wrapper.get('[data-testid="answer-conclusion"] .icon-button');
+    expect(answerCopy.attributes('aria-label')).toBe('复制答案');
+    await answerCopy.trigger('click');
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(result.response.answer));
+    const sqlCopy = wrapper.get('[data-testid="sql-query"] .icon-button');
+    expect(sqlCopy.attributes('aria-label')).toBe('复制 SQL');
+    await sqlCopy.trigger('click');
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledTimes(2));
+    expect(writeText.mock.calls[1]![0]).toBe(result.response.sql_results![0]!.sql);
   });
 });

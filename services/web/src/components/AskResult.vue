@@ -2,6 +2,7 @@
 import { computed } from 'vue';
 import type { AskClientResult } from '../api/client';
 import type { AskOptions, AskStatus, Route } from '../contracts';
+import CopyButton from './CopyButton.vue';
 import EvidencePanel from './evidence/EvidencePanel.vue';
 import { answerSegments, citationTargets, splitAnswer } from './evidence/format';
 
@@ -41,7 +42,7 @@ function focusEvidence(refId: string) {
         <span class="status-tag" :data-status="business.status">{{ business.status }}</span>
       </div>
       <div v-if="business.answer !== null" class="answer-block" data-testid="answer">
-        <p class="answer-conclusion" data-testid="answer-conclusion"><template v-for="(segment, index) in conclusionSegments" :key="index"><button v-if="segment.refId" type="button" class="cite-link" :data-testid="`answer-ref-${index}`" @click="focusEvidence(segment.refId)">{{ segment.text }}</button><template v-else>{{ segment.text }}</template></template></p>
+        <p class="answer-conclusion" data-testid="answer-conclusion"><CopyButton v-if="business.answer" class="answer-copy" :text="business.answer" label="复制答案" /><template v-for="(segment, index) in conclusionSegments" :key="index"><button v-if="segment.refId" type="button" class="cite-link" :data-testid="`answer-ref-${index}`" @click="focusEvidence(segment.refId)">{{ segment.text }}</button><template v-else>{{ segment.text }}</template></template></p>
         <p v-if="noteSegments.length" class="answer-notes" data-testid="answer-notes"><template v-for="(segment, index) in noteSegments" :key="`note-${index}`"><button v-if="segment.refId" type="button" class="cite-link" :data-testid="`answer-note-ref-${index}`" @click="focusEvidence(segment.refId)">{{ segment.text }}</button><template v-else>{{ segment.text }}</template></template></p>
       </div>
       <div v-if="citations.length" class="citation-bar" data-testid="citation-bar" aria-label="回答引用">
