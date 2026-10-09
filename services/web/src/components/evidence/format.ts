@@ -15,6 +15,17 @@ export function citationTargets(response: AskResponse): CitationTarget[] {
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+const ANSWER_NOTE_LINE = /^来源：(真实|SQL)/;
+
+/** Separate source-banner/provenance boilerplate lines from the substantive answer so the UI can lead with the conclusion. */
+export function splitAnswer(answer: string): { conclusion: string; notes: string } {
+  const conclusion: string[] = [];
+  const notes: string[] = [];
+  for (const line of answer.split('\n')) (ANSWER_NOTE_LINE.test(line.trim()) ? notes : conclusion).push(line);
+  if (conclusion.some((line) => line.trim())) return { conclusion: conclusion.join('\n'), notes: notes.join('\n') };
+  return { conclusion: answer, notes: '' };
+}
+
 /** Split the answer into plain text and clickable evidence-ID segments; text content is preserved verbatim. */
 export function answerSegments(answer: string, targets: CitationTarget[]): AnswerSegment[] {
   const tokenMap = new Map(targets.filter((target) => target.kind !== 'metric' && target.token).map((target) => [target.token, target.refId]));

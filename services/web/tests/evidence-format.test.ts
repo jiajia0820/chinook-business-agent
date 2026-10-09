@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { JsonValue } from '../src/contracts';
-import { answerSegments, cellText, citationTargets, hasFixtureSources, jsonText, sqlShapeNotes } from '../src/components/evidence/format';
+import { answerSegments, cellText, citationTargets, hasFixtureSources, jsonText, splitAnswer, sqlShapeNotes } from '../src/components/evidence/format';
 import { copySample } from './recorded-http';
 import { recordedCalculations, sqlResult } from './evidence-fixtures';
 
@@ -91,5 +91,16 @@ describe('citation helpers map evidence to answer anchors', () => {
     const targets = [{ refId: 'ev-doc-a.b(c)', token: 'a.b(c)', label: '文档 · x', kind: 'document' as const }];
     const segments = answerSegments('xa(b)y a.b(c) z', targets);
     expect(segments).toEqual([{ text: 'xa(b)y ', refId: null }, { text: 'a.b(c)', refId: 'ev-doc-a.b(c)' }, { text: ' z', refId: null }]);
+  });
+  it('separates source-banner and provenance lines from the conclusion', () => {
+    const answer = '来源：真实 Chinook 样例库 + 大模型生成 SQL；候选经 C 只读安全校验后执行。\n查询结果：销售额 112.86 USD\n结果按本轮上限截断，仅展示前 50 行。\n来源：SQL sql-1。展示 SQL 为 C 已接受候选；C 执行前会校验并规范化，不是逐字驱动语句。';
+    expect(splitAnswer(answer)).toEqual({
+      conclusion: '查询结果：销售额 112.86 USD\n结果按本轮上限截断，仅展示前 50 行。',
+      notes: '来源：真实 Chinook 样例库 + 大模型生成 SQL；候选经 C 只读安全校验后执行。\n来源：SQL sql-1。展示 SQL 为 C 已接受候选；C 执行前会校验并规范化，不是逐字驱动语句。',
+    });
+  });
+  it('keeps answers without boilerplate lines wholly in the conclusion', () => {
+    expect(splitAnswer('客户数量为 59。')).toEqual({ conclusion: '客户数量为 59。', notes: '' });
+    expect(splitAnswer('来源：SQL 甲。')).toEqual({ conclusion: '来源：SQL 甲。', notes: '' });
   });
 });

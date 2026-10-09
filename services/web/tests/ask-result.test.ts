@@ -14,7 +14,14 @@ describe('retained 4B result branches alongside 4C evidence', () => {
     expect(wrapper.get('.status-tag').attributes('data-status')).toBe(response.status);
     expect(wrapper.text()).toContain(response.route);
     expect(wrapper.text()).toContain(response.request_id);
-    if (response.answer !== null) expect(wrapper.get('[data-testid="answer"]').text()).toBe(response.answer.trim());
+    if (response.answer !== null) {
+      // The answer is regrouped (conclusion first, boilerplate as notes), so assert every source line survives verbatim.
+      const rendered = wrapper.get('[data-testid="answer"]').text().replace(/\s+/g, '');
+      for (const line of response.answer.trim().split('\n')) {
+        const compact = line.replace(/\s+/g, '');
+        if (compact) expect(rendered).toContain(compact);
+      }
+    }
     expect(wrapper.find('form').exists()).toBe(false);
     expect(wrapper.find('a').exists()).toBe(false);
     if (response.status !== 'answered') expect(wrapper.get('h2').text()).not.toBe('已回答');
@@ -156,5 +163,22 @@ describe('answer-to-evidence citation linking', () => {
     const wrapper = mount(AskResult, { props: { result } });
     expect(wrapper.find('[data-testid="citation-bar"]').exists()).toBe(false);
     expect(wrapper.findAll('.cite-link')).toHaveLength(0);
+  });
+  it('leads with the conclusion and demotes source boilerplate to notes below it', () => {
+    const { result, queryId } = answeredWithSql();
+    result.response.answer = `来源：真实 Chinook 样例库 + 大模型生成 SQL；候选经 C 只读安全校验后执行。\n查询结果：销售额 112.86 USD\n来源：SQL ${queryId}。展示 SQL 为 C 已接受候选；C 执行前会校验并规范化，不是逐字驱动语句。`;
+    const wrapper = mount(AskResult, { props: { result }, attachTo: document.body });
+    expect(wrapper.get('[data-testid="answer-conclusion"]').text()).toBe('查询结果：销售额 112.86 USD');
+    expect(wrapper.get('[data-testid="answer-notes"]').text().split('\n')).toHaveLength(2);
+    expect(wrapper.get('[data-testid="answer-note-ref-1"]').text()).toBe(queryId);
+    const answerPosition = wrapper.get('[data-testid="answer"]').element.compareDocumentPosition(wrapper.get('.result-meta').element);
+    expect(answerPosition & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+  it('keeps the full answer as conclusion when every line is boilerplate', () => {
+    const { result } = answeredWithSql();
+    result.response.answer = '来源：SQL 甲。\n来源：真实 乙。';
+    const wrapper = mount(AskResult, { props: { result } });
+    expect(wrapper.get('[data-testid="answer-conclusion"]').text()).toBe(result.response.answer);
+    expect(wrapper.find('[data-testid="answer-notes"]').exists()).toBe(false);
   });
 });

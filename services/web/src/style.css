@@ -63,6 +63,9 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 3px
 .result-meta div { display: grid; grid-template-columns: 80px minmax(0, 1fr); gap: 12px; }
 .result-meta dd { margin: 0; overflow-wrap: anywhere; }
 .answer-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.answer-block { margin: 2px 0 12px; }
+.answer-conclusion { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 17px; font-weight: 600; line-height: 1.7; color: #16303f; background: #f1f7fb; border-left: 3px solid #2f7bab; border-radius: 6px; padding: 12px 14px; }
+.answer-notes { margin-top: 8px; font-size: 12px; line-height: 1.6; color: #6d7d89; white-space: pre-wrap; overflow-wrap: anywhere; }
 .cite-link { display: inline; padding: 0; border: none; background: none; font: inherit; color: #1d5b86; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 3px; cursor: pointer; overflow-wrap: anywhere; }
 .cite-link:hover { color: #164663; text-decoration-style: solid; }
 .citation-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
