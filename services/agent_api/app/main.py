@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from time import perf_counter
 from uuid import uuid4
 
@@ -22,6 +23,29 @@ from .services.backend_lifecycle import BackendFactory, BackendLifecycle, create
 
 
 logger = logging.getLogger("agent_api")
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+
+def load_runtime_environment() -> None:
+    """Load .env before Settings.from_env so the API never silently falls back to offline.
+
+    `uv run` does not reliably export .env here, and a missing AGENT_MODEL_MODE used to
+    downgrade the whole product to the fixed-question demo model while the UI still
+    presented the result as a real database answer.
+    """
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        logger.warning("python-dotenv 不可用；本次仅使用进程环境变量")
+        return
+    for candidate in (PROJECT_ROOT / ".env", Path.cwd() / ".env"):
+        if candidate.is_file():
+            load_dotenv(candidate, override=False)
+            return
+
+
+load_runtime_environment()
 
 
 def _error_response(status_code: int, error: ApiError) -> JSONResponse:
@@ -48,6 +72,10 @@ def create_app(
     configuration_failed = False
     try:
         resolved_settings = settings if settings is not None else Settings.from_env()
+        logger.info(
+            "agent_api 配置 model_mode=%s backend_mode=%s sql_timeout_ms=%s",
+            resolved_settings.model_mode, resolved_settings.backend_mode, resolved_settings.sql_timeout_ms,
+        )
     except ValueError:
         # Keep HTTP liveness and structured 503 available; never log raw env.
         resolved_settings = Settings(backend_mode="unavailable")
@@ -88,6 +116,7 @@ def create_app(
     application.state.backend_owner = None
     application.state.backend_close_complete = None
     application.state.lifespan_active = False
+    application.state.settings = resolved_settings
 
     @application.middleware("http")
     async def request_context(request: Request, call_next):

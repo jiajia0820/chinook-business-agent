@@ -55,7 +55,9 @@ class SqlTaskRequest(InternalModel):
     reference_time: str | None = None
     max_rows: int = Field(default=50, ge=1, le=200)
     show_trace: bool = True
-    timeout_ms: int = Field(default=60000, ge=1, le=60000)
+    # 上限必须覆盖 C 的整轮预算（模型重试 + 受控降级），否则请求会在 C 降级前被切断，
+    # 慢模型只能返回超时错误，而不是退回确定性查询计划。
+    timeout_ms: int = Field(default=180000, ge=1, le=180000)
 
     @model_validator(mode="after")
     def validate_context(self) -> SqlTaskRequest:

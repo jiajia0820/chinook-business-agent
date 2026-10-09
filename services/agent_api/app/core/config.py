@@ -13,7 +13,8 @@ class Settings:
     app_name: str = "Explainable Data Agent API"
     cors_origins: tuple[str, ...] = ("http://localhost:5173",)
     backend_mode: Literal["offline_sql_d12", "unavailable"] = "offline_sql_d12"
-    model_mode: Literal["offline", "live"] = "offline"
+    # 默认使用真实模型：缺少 LLM 配置时启动即失败并给出提示，而不是静默退回离线替身。
+    model_mode: Literal["offline", "live"] = "live"
     enabled_profiles: tuple[str, ...] = ("chinook-music",)
     sql_workers: int = 2
     max_inflight_requests: int = 8
@@ -26,7 +27,9 @@ class Settings:
         # Never include environment values in validation errors or logs.
         if type(self.backend_mode) is not str or self.backend_mode not in {"offline_sql_d12", "unavailable"} or self.model_mode not in {"offline", "live"} or self.enabled_profiles != ("chinook-music",):
             raise ValueError("unsupported backend/profile configuration")
-        for value, maximum in [(self.sql_workers, 16), (self.max_inflight_requests, 64), (self.sql_timeout_ms, 60000), (self.rag_timeout_ms, 60000)]:
+        # sql_timeout_ms 上限要覆盖 C 的整轮预算（模型重试 + 受控降级 = 115 秒），
+        # 否则真实模型稍慢就会在降级前被切断，只能返回超时错误。
+        for value, maximum in [(self.sql_workers, 16), (self.max_inflight_requests, 64), (self.sql_timeout_ms, 180000), (self.rag_timeout_ms, 60000)]:
             if type(value) is not int or not 1 <= value <= maximum:
                 raise ValueError("invalid backend integer setting")
         for value, minimum in [(self.startup_timeout_seconds, 0.05), (self.shutdown_grace_seconds, 0.0)]:
@@ -42,7 +45,7 @@ class Settings:
         try:
             return cls(cors_origins=origins or ("http://localhost:5173",),
                 backend_mode=os.getenv("AGENT_BACKEND_MODE", "offline_sql_d12").strip(),
-                model_mode=os.getenv("AGENT_MODEL_MODE", "offline").strip().lower(),
+                model_mode=os.getenv("AGENT_MODEL_MODE", "live").strip().lower(),
                 enabled_profiles=tuple(value.strip() for value in os.getenv("AGENT_ENABLED_PROFILES", "chinook-music").split(",") if value.strip()),
                 sql_workers=int(os.getenv("AGENT_SQL_WORKERS", "2")),
                 max_inflight_requests=int(os.getenv("AGENT_MAX_INFLIGHT_REQUESTS", "8")),

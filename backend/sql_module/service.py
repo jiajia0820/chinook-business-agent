@@ -45,6 +45,14 @@ MEASURE_EXPRESSIONS = {
     'purchasing_customers': 'COUNT(DISTINCT i.CustomerId) AS purchasing_customers',
 }
 LIMIT_PATTERN = re.compile(r'\blimit\s+(\d+)', re.I)
+# 只有模型调用本身的故障才降级到受控计划；配置缺失要如实报错，不能静默掩盖。
+MODEL_FAILURE_REASONS = frozenset({'MODEL_TIMEOUT', 'MODEL_HTTP_FAILED', 'MODEL_NETWORK_FAILED', 'MODEL_RESPONSE_INVALID'})
+# 真实模型单次调用与整轮预算。三者必须满足
+# MODEL_CALL_SECONDS * 2 < MODEL_TOTAL_SECONDS < ANSWER_BUDGET_SECONDS < B 的工具超时，
+# 否则 B 会先超时放弃，C 的受控降级永远来不及执行。
+MODEL_CALL_SECONDS = 45
+MODEL_TOTAL_SECONDS = 100
+ANSWER_BUDGET_SECONDS = 115
 
 
 def _media_scope_applies(metric_ids, slots):
@@ -232,7 +240,7 @@ class NLQueryService:
         response=dict(request_id=data.get('request_id'),profile_id=data.get('profile_id'),status='error',
                       sql_results=[],query_artifacts=[],metric_definitions=[],limitations=[],
                       clarification=None,trace=[],error=None)
-        deadline=time.monotonic()+60
+        deadline=time.monotonic()+ANSWER_BUDGET_SECONDS
         try:
             obj(request,['request_id','profile_id','question','context','options'],['request_id','profile_id','question'],'NL 请求')
             profile,_=self.registry.resolve(data['profile_id'],access)
@@ -271,14 +279,38 @@ class NLQueryService:
             model=self.model or HTTPJSONModel.from_env()
             if getattr(model,'is_demo',False):
                 response['limitations'].append('固定问法离线演示模型；不是实际模型调用或自由问法效果。')
-            model_deadline=min(deadline,time.monotonic()+50)
-            started=time.monotonic()
-            generated=decode_generated(model.generate_json(messages,OUTPUT_SCHEMA,model_deadline))
-            if time.monotonic()>=model_deadline:
-                raise ModuleError('SQL_EXECUTION_FAILED','模型调用预算已耗尽','MODEL_TIMEOUT')
-            generation_ms=round((time.monotonic()-started)*1000,3)
-            repaired=False
             max_rows=options.get('max_rows',50)
+            model_deadline=min(deadline,time.monotonic()+MODEL_TOTAL_SECONDS)
+            started=time.monotonic()
+            model_failure=None
+            generated=None
+            failures=[]
+            for attempt in (1,2):
+                try:
+                    call_deadline=min(model_deadline,time.monotonic()+MODEL_CALL_SECONDS)
+                    generated=decode_generated(model.generate_json(messages,OUTPUT_SCHEMA,call_deadline))
+                    if time.monotonic()>=model_deadline:
+                        raise ModuleError('SQL_EXECUTION_FAILED','模型调用预算已耗尽','MODEL_TIMEOUT')
+                    model_failure=None
+                    break
+                except ModuleError as exc:
+                    # 离线演示模式不重试也不降级：它的语义就是只支持文档列出的固定问法。
+                    if getattr(model,'is_demo',False) or exc.reason not in MODEL_FAILURE_REASONS:
+                        raise
+                    failures.append(exc.reason or exc.code)
+                    model_failure=exc
+                    generated=None
+                    if attempt>=2 or time.monotonic()>=model_deadline:
+                        break
+            if generated is None:
+                # 模型不稳定时，已登记指标 + 已确认槽位仍有确定性查询计划可用。
+                # 降级只覆盖已登记口径，不猜测语义，并在限制说明里如实标注来源。
+                generated=_controlled_query(context,metric_ids,max_rows=max_rows)
+                if generated is None:
+                    raise model_failure
+                response['limitations'].append('模型调用重试后仍未成功（%s）；本轮改用已登记指标的受控查询计划执行，未使用模型生成的 SQL。' % '、'.join(dict.fromkeys(failures)))
+            generation_ms=round((time.monotonic()-started)*1000,3)
+            repaired=model_failure is not None
             if not _candidate_covers_context(generated,context):
                 controlled=_controlled_query(context,metric_ids,candidate_sql=generated['sql'],max_rows=max_rows)
                 if controlled is None:
@@ -312,7 +344,8 @@ class NLQueryService:
             response['sql_results']=[result]
             if options.get('show_trace',True):
                 response['trace']=[dict(step=1,tool='sql.generate',status='success',source_refs=[],
-                    summary='生成 JSON 候选并校验业务筛选条件与输出列契约'+('；已切换受控查询计划' if repaired else ''),duration_ms=generation_ms),
+                    summary=('模型调用重试后仍未成功，改用受控查询计划' if model_failure is not None
+                             else '生成 JSON 候选并校验业务筛选条件与输出列契约'+('；已切换受控查询计划' if repaired else '')),duration_ms=generation_ms),
                     dict(step=2,tool='sql.query',status=result['status'],summary='校验并执行只读候选',source_refs=[query_id],duration_ms=result['execution_ms'])]
             if result['status']!='success':
                 original=result['error']

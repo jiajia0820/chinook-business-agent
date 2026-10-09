@@ -62,7 +62,7 @@ class HTTPJSONModel:
         return cls(params["endpoint"], params["model"], params["api_key"])
 
     def generate_json(self, messages, output_schema, deadline):
-        timeout=min(50,deadline-time.monotonic())
+        timeout=min(60,deadline-time.monotonic())
         if timeout<=0: raise model_error('MODEL_TIMEOUT','模型调用预算已耗尽')
         body=json.dumps(dict(model=self._model,messages=messages,temperature=0,
                              response_format={'type':'json_object'},max_tokens=2048)).encode('utf-8')
