@@ -58,6 +58,20 @@ describe('4B page interactions in simulated DOM (not live browser E2E)', () => {
     await send(wrapper, EXAMPLES[1]);
     expect(ask.mock.calls[1]?.[0].session_id).toBe('session-ui');
   });
+  it('lists this session history newest first and refills the question on click', async () => {
+    const ask = vi.fn<AskClient['ask']>().mockResolvedValue(business('answered', 'session-ui'));
+    const wrapper = makeApp(ask);
+    expect(wrapper.find(selector('session-history')).exists()).toBe(false);
+    await send(wrapper, EXAMPLES[0]);
+    await send(wrapper, EXAMPLES[1]);
+    const rows = wrapper.findAll(`${selector('session-history')} li`);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.text()).toContain(EXAMPLES[1]);
+    expect(rows[0]!.text()).toContain('已回答');
+    expect(rows[1]!.text()).toContain(EXAMPLES[0]);
+    await rows[1]!.get('button').trigger('click');
+    expect((wrapper.get(selector('question-input')).element as HTMLTextAreaElement).value).toBe(EXAMPLES[0]);
+  });
   it('keeps loading controls disabled and suppresses duplicate form submits', async () => {
     const pending = deferred<AskClientResult>();
     const ask = vi.fn<AskClient['ask']>().mockReturnValue(pending.promise);

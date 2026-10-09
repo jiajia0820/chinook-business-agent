@@ -58,6 +58,14 @@ export function sqlShapeNotes(result: SqlQueryResponse): string[] {
   if (rows.some((row) => Object.keys(row).some((key) => !columnSet.has(key)))) notes.push('部分行包含声明列之外的字段；请查看完整原始行。');
   return notes;
 }
+
+/** RFC-4180 CSV for one result table; the caller prepends the UTF-8 BOM for Excel. */
+export function sqlRowsToCsv(columns: string[], rows: Record<string, JsonValue>[]): string {
+  const field = (value: string) => (/[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value);
+  const lines = [columns.map(field).join(',')];
+  for (const row of rows) lines.push(columns.map((column) => field(cellText(row, column))).join(','));
+  return lines.join('\r\n');
+}
 const fixtureText = (value: string) => /fixture(?::|\/\/)|人工(?:测试|来源|资料|证据|计算| SQL)/i.test(value);
 export function hasFixtureSources(response: AskResponse): boolean {
   return fixtureText(response.answer ?? '') || (response.limitations ?? []).some(fixtureText)

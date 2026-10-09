@@ -9,7 +9,15 @@ const {
   question, options, result, lastRequest, notice, busy, stages,
   validationMessage, charCount, canSubmit, canRetry, canResetTask, canClarify,
   submit, fillExample, submitClarification, retry, resetTask, stopWaiting, newSession,
+  history,
 } = useAskWorkspace(props.client);
+const statusLabels: Record<string, string> = {
+  answered: '已回答', clarification_required: '需要补充条件', insufficient_evidence: '证据不足',
+  unsupported: '当前能力不支持', error: '业务处理出错', api_error: '接口错误',
+  invalid_request: '请求不合法', network: '连接失败', timeout: '等待超时',
+  cancelled: '已停止等待', invalid_response: '响应格式异常',
+};
+const clock = (ms: number) => new Date(ms).toLocaleTimeString('zh-CN', { hour12: false });
 function shortcut(event: KeyboardEvent) {
   if (!event.isComposing) void submit();
 }
@@ -74,6 +82,18 @@ function shortcut(event: KeyboardEvent) {
         <p class="helper">将发送上次问题/选项并保留当前会话；后端可能已执行，重试不保证无副作用。</p>
       </div>
       <p v-if="!busy && !result && !notice" class="empty-state">还没有本轮结果。输入问题或选择示例后发送；不会自动补数据或答案。</p>
+    </section>
+    <section v-if="history.length" class="session-history" aria-label="本次会话问答记录" data-testid="session-history">
+      <h2>本次会话问答记录</h2>
+      <ol class="history-list">
+        <li v-for="entry in history" :key="entry.id" :data-status="entry.status" :data-testid="`history-${entry.id}`">
+          <span class="history-time">{{ clock(entry.atMs) }}</span>
+          <button type="button" class="history-question" :disabled="busy" :title="`重新填入：${entry.question}`" @click="fillExample(entry.question)">{{ entry.question }}</button>
+          <span class="status-tag" :data-status="entry.status">{{ statusLabels[entry.status] ?? entry.status }}</span>
+          <span class="history-summary">{{ entry.summary }}</span>
+        </li>
+      </ol>
+      <p class="helper">仅存于本标签页内存，刷新或新会话即清空；点击问题可重新填入输入框。</p>
     </section>
   </main>
 </template>

@@ -11,6 +11,32 @@ export const EXAMPLES = [
 ];
 export const CLARIFICATION_EXAMPLE = '第三季度 Rock 达标了吗？';
 
+/** One settled question in this browser tab; newest first, never sent to the backend. */
+export interface HistoryEntry {
+  id: number;
+  question: string;
+  status: string;
+  summary: string;
+  atMs: number;
+}
+const HISTORY_LIMIT = 30;
+
+// Source banners are boilerplate; the timeline wants the first substantive line.
+function firstLine(text: string | null | undefined): string {
+  return (text ?? '').split('\n').map((line) => line.trim())
+    .find((line) => line.length > 0 && !line.startsWith('来源：')) ?? '';
+}
+function summarizeResult(returned: AskClientResult): { status: string; summary: string } {
+  if (returned.kind === 'business') {
+    const response = returned.response;
+    const summary = firstLine(response.clarification?.question) || firstLine(response.answer)
+      || firstLine(response.error?.message) || '（本轮没有文本结论）';
+    return { status: response.status, summary };
+  }
+  if (returned.kind === 'api_error') return { status: 'api_error', summary: firstLine(returned.error.message) };
+  return { status: returned.reason, summary: firstLine(returned.message) };
+}
+
 function textError(text: string): string | null {
   if (!text.trim()) return '请输入问题或补充条件。';
   if (Array.from(text.trim()).length > 4000) return '本阶段问题最多支持 4000 个字符，请缩短后发送。';
@@ -28,6 +54,8 @@ export function useAskWorkspace(client: AskClient = createAskClient()) {
   const notice = ref<string | null>(null);
   // Live backend node progress for the in-flight question only; never persisted.
   const stages = ref<AskStage[]>([]);
+  const history = ref<HistoryEntry[]>([]);
+  let historySeq = 0;
   let revision = 0;
   const disposed = ref(false);
 
@@ -72,6 +100,8 @@ export function useAskWorkspace(client: AskClient = createAskClient()) {
       });
       if (disposed.value || current !== revision || returned.kind === 'stale') return false;
       result.value = returned.result;
+      const settled = summarizeResult(returned.result);
+      history.value = [{ id: ++historySeq, question: request.question, status: settled.status, summary: settled.summary, atMs: Date.now() }, ...history.value].slice(0, HISTORY_LIMIT);
       if (returned.result.kind === 'business') {
         sessionId.value = returned.result.response.session_id;
         if (returned.result.response.intent.name === 'reset_context') question.value = '';
@@ -130,6 +160,7 @@ export function useAskWorkspace(client: AskClient = createAskClient()) {
     question.value = '';
     result.value = null;
     lastRequest.value = null;
+    history.value = [];
     phase.value = 'idle';
     stages.value = [];
     notice.value = '已清空本地会话入口；下次不带旧会话 ID，这不会删除后端历史。';
@@ -152,6 +183,7 @@ export function useAskWorkspace(client: AskClient = createAskClient()) {
     result: computed(() => result.value), notice: computed(() => notice.value),
     stages: computed(() => stages.value),
     currentStage: computed(() => stages.value[stages.value.length - 1] ?? null),
+    history: computed(() => history.value),
     lastRequest: computed(() => {
       if (!lastRequest.value) return null;
       const snapshot = structuredClone(lastRequest.value);

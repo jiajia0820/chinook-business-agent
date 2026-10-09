@@ -2,7 +2,7 @@
 import { computed } from 'vue';
 import type { SqlQueryResponse } from '../../contracts';
 import CopyButton from '../CopyButton.vue';
-import { cellText, jsonText, sqlShapeNotes } from './format';
+import { cellText, jsonText, sqlRowsToCsv, sqlShapeNotes } from './format';
 import { highlightSql } from './sqlHighlight';
 const props = defineProps<{ result: SqlQueryResponse; answerText?: string | null }>();
 const notes = computed(() => sqlShapeNotes(props.result));
@@ -30,6 +30,19 @@ const originCells = computed(() => {
   return cells;
 });
 const statuses = { success: '查询成功', failed: '查询失败', rejected: '查询被拒绝' };
+// Excel on Windows only detects UTF-8 CSV reliably with a BOM, so the export prepends one.
+function exportCsv() {
+  const columns = props.result.columns ?? [];
+  const rows = props.result.rows ?? [];
+  if (!columns.length || !rows.length) return;
+  const blob = new Blob(['\uFEFF' + sqlRowsToCsv(columns, rows)], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `sql-result-${props.result.query_id}.csv`;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
 </script>
 
 <template>
@@ -61,6 +74,10 @@ const statuses = { success: '查询成功', failed: '查询失败', rejected: '�
       <pre v-else data-testid="sql-params">{{ jsonText(result.params) }}</pre>
     </details>
     <ul v-if="notes.length" class="evidence-warning" data-testid="sql-shape-notes"><li v-for="(note, index) in notes" :key="index">{{ note }}</li></ul>
+    <div v-if="result.columns?.length && result.rows?.length" class="table-toolbar">
+      <button type="button" class="secondary" data-testid="export-csv" aria-label="导出 CSV" @click="exportCsv">导出 CSV</button>
+      <span class="helper">UTF-8 含 BOM，Excel 可直接打开</span>
+    </div>
     <div v-if="result.columns?.length && result.rows?.length" class="table-scroll" role="region" aria-label="SQL 查询结果表" tabindex="0">
       <table data-testid="sql-table">
         <caption>返回行明细 · {{ result.query_id }}（不是业务总量汇总）<span v-if="originCells.size" class="caption-origin">；黄底单元格即答案数值的原始出处</span></caption>

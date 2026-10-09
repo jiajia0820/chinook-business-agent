@@ -29,9 +29,9 @@ describe('SQL evidence and dynamic rows', () => {
     expect(wrapper.get('[data-testid="sql-legend"]').text()).toContain('关键字');
     expect(wrapper.findAll('[data-testid="sql-legend"] .chip')).toHaveLength(3);
     expect(wrapper.text()).toContain('不是逐字驱动 SQL');
-    // The copy button is the only interactive element allowed inside an evidence card.
+    // Copy and CSV export are the only interactive elements allowed inside an evidence card.
     expect(wrapper.findAll('input, textarea, a')).toHaveLength(0);
-    expect(wrapper.findAll('button').map((button) => button.attributes('aria-label'))).toEqual(['复制 SQL']);
+    expect(wrapper.findAll('button').map((button) => button.attributes('aria-label'))).toEqual(['复制 SQL', '导出 CSV']);
     expect(wrapper.findAll('.cell-origin')).toHaveLength(0);
   });
   it('marks the cells the answer quotes as raw origin', () => {
@@ -113,6 +113,39 @@ describe('SQL evidence and dynamic rows', () => {
     const wrapper = mount(SqlEvidence, { props: { result } });
     expect(wrapper.find('table').exists()).toBe(false);
     expect(wrapper.get('[data-testid="sql-raw-rows"]').text()).toContain('customer_count');
+  });
+  it('exports exactly the visible table as a UTF-8 BOM CSV download', async () => {
+    const result = actualResponse('客户数量是多少？').sql_results![0]!;
+    const blobs: Blob[] = [];
+    const downloads: string[] = [];
+    const createObjectURL = URL.createObjectURL;
+    const revokeObjectURL = URL.revokeObjectURL;
+    const anchorClick = HTMLAnchorElement.prototype.click;
+    URL.createObjectURL = (blob: Blob) => { blobs.push(blob); return 'blob:test'; };
+    URL.revokeObjectURL = () => {};
+    HTMLAnchorElement.prototype.click = function (this: HTMLAnchorElement) { downloads.push(this.download); };
+    try {
+      const wrapper = mount(SqlEvidence, { props: { result } });
+      await wrapper.get('[data-testid="export-csv"]').trigger('click');
+      expect(downloads).toEqual([`sql-result-${result.query_id}.csv`]);
+      expect(blobs).toHaveLength(1);
+      // Blob.text() strips a leading BOM by spec, so assert the raw bytes instead.
+      const bytes = new Uint8Array(await blobs[0]!.arrayBuffer());
+      expect([bytes[0], bytes[1], bytes[2]]).toEqual([0xEF, 0xBB, 0xBF]);
+      const text = await blobs[0]!.text();
+      expect(text.split('\r\n')[0]).toBe(result.columns!.join(','));
+      expect(text).toContain(String(result.rows![0]!.customer_count));
+    } finally {
+      URL.createObjectURL = createObjectURL;
+      URL.revokeObjectURL = revokeObjectURL;
+      HTMLAnchorElement.prototype.click = anchorClick;
+    }
+  });
+  it('offers no export when there is no visible table', () => {
+    const result = sqlResult();
+    result.rows = [];
+    const wrapper = mount(SqlEvidence, { props: { result } });
+    expect(wrapper.find('[data-testid="export-csv"]').exists()).toBe(false);
   });
 });
 

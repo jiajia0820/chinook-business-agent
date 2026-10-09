@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { JsonValue } from '../src/contracts';
-import { answerSegments, cellText, citationTargets, hasFixtureSources, jsonText, splitAnswer, sqlShapeNotes } from '../src/components/evidence/format';
+import { answerSegments, cellText, citationTargets, hasFixtureSources, jsonText, splitAnswer, sqlRowsToCsv, sqlShapeNotes } from '../src/components/evidence/format';
 import { highlightSql } from '../src/components/evidence/sqlHighlight';
 import { copySample } from './recorded-http';
 import { recordedCalculations, sqlResult } from './evidence-fixtures';
@@ -48,6 +48,12 @@ describe('pure display formatting, not a calculator or semantic validator', () =
     expect(notes.join(' ')).toContain('row_count=9');
     expect(notes.join(' ')).toContain('完整原始行');
     expect(sql).toEqual(before);
+  });
+  it('csv export quotes separators and mirrors the displayed cell text', () => {
+    expect(sqlRowsToCsv(['a', 'b'], [{ a: 'x,y', b: 'say "hi"' }])).toBe('a,b\r\n"x,y","say ""hi"""');
+    expect(sqlRowsToCsv(['a'], [{ b: 1 }])).toBe('a\r\n（缺失字段）');
+    expect(sqlRowsToCsv(['a'], [{ a: 'line1\nline2' }])).toBe('a\r\n"line1\nline2"');
+    expect(sqlRowsToCsv(['a'], [])).toBe('a');
   });
   it('keeps genuine sample SQL/D12 separate from artificial calculation sources', () => {
     expect(hasFixtureSources(copySample())).toBe(false);
