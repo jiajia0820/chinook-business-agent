@@ -56,6 +56,14 @@ class KnowledgeIndexTests(unittest.TestCase):
         self.assertEqual(response.status, "success")
         self.assertEqual({chunk.doc_id for chunk in response.chunks}, {"D07", "D08"})
 
+    def test_dense_retrieval_flag_can_fall_back_to_lexical(self):
+        response = self.index.retrieve(RetrievalRequest(
+            retrieval_id="retrieval-dense-fallback", profile_id="chinook-music",
+            query="经营表现核心结果",
+            filters={"dense_retrieval": False}, top_k=2,
+        ))
+        self.assertEqual(response.status, "success")
+
 
 if __name__ == "__main__":
     unittest.main()

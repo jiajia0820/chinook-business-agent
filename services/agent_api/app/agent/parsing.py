@@ -76,7 +76,8 @@ def _matched_metrics(question, rules):
 def _periods(question):
     """Return explicitly stated periods only, never a wall-clock default."""
     quarter_pattern = r"(?:第?([一二三四1234])季度|Q([1-4]))"
-    year_matches = re.findall(r"(?<!\d)(\d{4})(?:\s*年)?(?!\d)", question)
+    year_scan = re.sub(r"TrackId\s*\d+(?:-\d+)?", "", question, flags=re.I)
+    year_matches = re.findall(r"(?<![A-Za-z0-9])(\d{4})(?:\s*年)?(?!\d)", year_scan)
     quarters = [int(a or b) if (a or b).isdigit() else "一二三四".index(a) + 1
                 for a, b in re.findall(quarter_pattern, question, flags=re.I)]
     years = [int(year) for year in year_matches]
@@ -226,7 +227,7 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
         if entities:
             task.slots["scope"] = ", ".join(e["label"] for e in entities)
             task.slots["data_scope"] = task.slots["scope"]
-    if _contains(q, ["全部音乐", "全部音频"]):
+    if _contains(q, ["全部音乐", "全部音频", "全音乐", "全音频"]):
         task.entities = []
         task.slots["scope"] = task.slots["data_scope"] = "全部音频"
     if _contains(q, ["仅", "合并", "全部"]) and (entities or task.slots.get("scope") == "全部音频"):
@@ -293,6 +294,8 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
         task.intent, task.route = "document_rule", "rag"
     if task.intent == "unknown" or hits.get("vague_metric") and not task.business_metric_ids:
         missing.append("metric" if hits.get("vague_metric") else "intent")
+    if task.intent == "growth_rate":
+        task.slots.setdefault("data_scope", "全部音频")
     if task.route != "rag":
         missing.extend(slot for slot in profile.required_slots_by_intent.get(task.intent, []) if slot not in task.slots)
         if "sales_amount" in task.business_metric_ids or "purchasing_customers" in task.business_metric_ids:
@@ -313,10 +316,10 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
     if len(years) > 1 or len(quarters) > 1:
         comparable = (task.intent in {"growth_rate", "cross_source_query", "document_calculation", "multidoc_query"}
                       and len(quarters) == 2 and len(years) <= 2
-                      and any(term in q for term in ("对比", "相比", "比", "增长", "环比", "同比")))
+                      and any(term in q for term in ("对比", "相比", "比", "变化", "增长", "环比", "同比")))
         if not comparable:
             missing.append("time_range")
-    if task.intent != "unknown" and task.route != "rag" and profile.sql_backend.model_mode == "offline" and _unparsed_query_text(q, profile):
+    if task.intent not in {"unknown", "cross_source_query", "growth_rate", "target_difference", "target_attainment"} and task.route not in {"rag", "cross_source"} and profile.sql_backend.model_mode == "offline" and _unparsed_query_text(q, profile):
         missing.append("filter_scope")
     try:
         task.time_range = _time_range(task.slots)

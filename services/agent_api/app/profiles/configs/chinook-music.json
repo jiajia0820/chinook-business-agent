@@ -178,21 +178,23 @@
     "unsupported_terms": {
       "profit": ["利润", "profit"], "cost": ["成本"],
       "inventory": ["库存"], "refund": ["退款"],
-      "ad_impressions": ["广告曝光"], "play_count": ["播放量", "播放次数"]
+      "ad_impressions": ["广告曝光"], "play_count": ["播放量", "播放次数"],
+      "ad_conversion": ["点击和转化", "点击转化", "转化"],
+      "employee_sales_ranking": ["SupportRep", "员工销售额排名"]
     },
     "ambiguous_scope_terms": ["摇滚相关"],
     "intent_default_metric_ids": {"target_attainment": ["sales_amount"], "target_difference": ["sales_amount"], "growth_rate": ["sales_amount"]},
-    "query_fillers": ["请问", "请", "帮我", "查一下", "查询", "统计", "计算", "是多少", "多少", "是什么", "什么", "如何", "呢", "吗", "了", "的", "有", "在", "来自", "以及", "和", "与", "对比", "相比", "目标", "完成率", "音乐", "音频", "全部", "仅", "按", "换成", "改成", "更正", "全年", "各", "各项", "各个", "每个", "分别"],
+      "query_fillers": ["请问", "请", "帮我", "查一下", "查询", "统计", "计算", "是多少", "多少", "是什么", "什么", "如何", "呢", "吗", "了", "的", "有", "在", "来自", "以及", "和", "与", "对比", "相比", "目标", "完成率", "音乐", "音频", "全音频", "全部", "仅", "按", "换成", "改成", "更正", "全年", "各", "各项", "各个", "每个", "分别"],
     "intent_terms": {
-      "target_difference": ["目标差额", "与目标差多少", "目标差多少"],
+      "target_difference": ["目标差额", "与目标差多少", "目标差多少", "距离目标"],
       "target_attainment": ["达标", "达到目标", "和目标比", "目标完成率", "对比目标"],
       "growth_rate": ["增长率", "增长多少", "增长", "环比", "同比"],
       "document_rule": ["口径", "定义", "规则", "怎么计算", "公式", "怎么写", "包括哪些", "包含哪些",
         "对应哪个", "对应什么", "通常对应", "默认按哪个", "是否应该", "是否并入", "属于", "如何归类", "怎么归类",
-        "是一个分类", "如何衔接", "怎么衔接", "是否一致", "范围差异", "核心结果", "如何结合", "计划", "目标表", "月度",
+        "是一个分类", "如何衔接", "怎么衔接", "是否一致", "范围差异", "核心结果", "如何结合", "结合", "复盘", "变化", "目标完成了吗", "计划", "目标表", "目标", "月度",
         "如何影响", "怎么处理", "建议关注", "建议观察", "应使用哪个", "目标是多少"],
       "document_calculation": ["按文档计算", "根据文档计算"],
-      "cross_source": ["结合文档", "并解释口径", "同时说明口径"],
+      "cross_source": ["结合文档", "并解释口径", "同时说明口径", "运营手册", "A层", "重点维护", "活动方案", "海报", "建议关注", "建议观察", "D09", "销售额最高", "最高的品类", "成交", "实际销售额与目标计划"],
       "vague_metric": ["卖得怎么样", "销售情况"]
     }
   },
@@ -202,7 +204,7 @@
     "target_attainment": ["year", "quarter", "scope", "target_metric"],
     "growth_rate": ["comparison_period", "data_scope"]
   },
-  "unsupported_metrics": ["profit", "cost", "inventory", "refund", "ad_impressions", "play_count"],
+  "unsupported_metrics": ["profit", "cost", "inventory", "refund", "ad_impressions", "play_count", "ad_conversion", "employee_sales_ranking"],
   "default_media_ids": [1, 2, 4, 5],
   "data_start": "2021-01-01",
   "data_end": "2025-12-22",

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import re
 import unicodedata
@@ -91,6 +92,9 @@ class KnowledgeIndex:
         self.documents = {doc.doc_id: doc for doc in manifest.documents}
         self.chunks = tuple(IndexedChunk(item, normalize(item.text)) for item in chunks)
         self.structured_records = tuple(structured_records)
+        self._dense_vectors: dict[str, tuple[float, ...]] | None = None
+        self._dense_model = None
+        self._dense_failed = False
         self._document_chunks = {
             doc_id: tuple(item for item in self.chunks if item.record.doc_id == doc_id)
             for doc_id in self.documents
@@ -114,6 +118,34 @@ class KnowledgeIndex:
     def _weight(self, term: str) -> float:
         return self._idf.get(term, self._max_idf)
 
+    def _dense_scores(self, query: str) -> dict[str, float]:
+        """Optional local semantic recall; lexical retrieval remains the fallback."""
+        if self._dense_failed:
+            return {}
+        try:
+            if self._dense_vectors is None:
+                from fastembed import TextEmbedding
+                cache_dir = os.getenv("RAG_EMBEDDING_CACHE")
+                model_name = os.getenv("RAG_EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5")
+                model = TextEmbedding(model_name=model_name, cache_dir=cache_dir, threads=2)
+                vectors = list(model.embed([item.normalized_text for item in self.chunks]))
+                self._dense_vectors = {
+                    item.record.chunk_id: tuple(float(value) for value in vector)
+                    for item, vector in zip(self.chunks, vectors)
+                }
+                self._dense_model = model
+            query_vector = next(self._dense_model.embed([normalize(query)]))
+            query_values = tuple(float(value) for value in query_vector)
+            query_norm = math.sqrt(sum(value * value for value in query_values)) or 1.0
+            scores = {}
+            for chunk_id, vector in self._dense_vectors.items():
+                norm = math.sqrt(sum(value * value for value in vector)) or 1.0
+                scores[chunk_id] = sum(left * right for left, right in zip(query_values, vector)) / (query_norm * norm)
+            return scores
+        except Exception:
+            self._dense_failed = True
+            return {}
+
     def retrieve(self, request: RetrievalRequest) -> RetrievalResponse:
         request = RetrievalRequest.model_validate(request.model_dump(mode="python"), strict=True)
         if request.profile_id != self.profile_id:
@@ -122,7 +154,7 @@ class KnowledgeIndex:
                 status="failed", error=ApiError(code="PROFILE_NOT_FOUND", message="该知识索引不属于请求 profile。", retryable=False),
             )
         filters = request.filters
-        if not set(filters) <= {"doc_id", "section", "business_metric_ids", "slots", "required_sources", "preferred_doc", "answer_type", "query_terms"}:
+        if not set(filters) <= {"doc_id", "section", "business_metric_ids", "slots", "required_sources", "preferred_doc", "answer_type", "query_terms", "evidence_requirements", "dense_retrieval"}:
             return self._failure(request, "INVALID_REQUEST", "检索筛选条件不受支持。")
         doc_id = filters.get("doc_id")
         if doc_id is not None and doc_id not in self.documents:
@@ -142,6 +174,12 @@ class KnowledgeIndex:
         requested_terms = filters.get("query_terms", [])
         if not isinstance(requested_terms, list) or any(not isinstance(term, str) for term in requested_terms):
             return self._failure(request, "INVALID_REQUEST", "查询扩展词必须是字符串列表。")
+        evidence_requirements = filters.get("evidence_requirements", [])
+        if not isinstance(evidence_requirements, list) or any(not isinstance(item, str) for item in evidence_requirements):
+            return self._failure(request, "INVALID_REQUEST", "证据要求必须是字符串列表。")
+        dense_requested = filters.get("dense_retrieval", os.getenv("RAG_ENABLE_DENSE", "0") == "1")
+        if not isinstance(dense_requested, bool):
+            return self._failure(request, "INVALID_REQUEST", "语义检索开关必须是布尔值。")
         query_terms = set(lexical_terms(request.query))
         for term in requested_terms:
             query_terms.update(lexical_terms(term))
@@ -194,6 +232,7 @@ class KnowledgeIndex:
             hinted_doc = max(authority_candidates, default=(0, None))[1]
         candidates = self.chunks if doc_id is None else self._document_chunks[doc_id]
         query_weight = sum(self._weight(term) for term in query_terms)
+        dense_scores = self._dense_scores(request.query) if dense_requested else {}
         for item in candidates:
             if section and not (item.record.section == section or (item.record.section or "").startswith(str(section) + " / ")):
                 continue
@@ -206,6 +245,7 @@ class KnowledgeIndex:
                 continue
             # 词频取对数，避免长段落靠重复高频词压过真正讲该主题的段落。
             score = sum(self._weight(term) * (1 + math.log(item.normalized_text.count(term))) for term in matched)
+            score += dense_scores.get(item.record.chunk_id, 0.0) * 10.0
             if hinted_doc and item.record.doc_id == hinted_doc:
                 # Configured whole-question vocabulary is a document-routing
                 # signal. Keep lexical scoring for chunks inside that document,
@@ -218,6 +258,8 @@ class KnowledgeIndex:
                 score += 250.0
             if structured_matches and item.record.source_uri == structured_matches[0].source_uri:
                 score += 2_000.0
+            if answer_type == "target_value" and "目标" in item.record.text:
+                score += 500.0
             if item.record.section and any(term in normalize(item.record.section) for term in query_terms):
                 score += 3.0
             if any(term in normalize(item.record.title) for term in query_terms):
