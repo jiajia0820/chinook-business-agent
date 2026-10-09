@@ -27,14 +27,17 @@
 ## 目录结构
 
 ```text
-data/chinook/       Chinook.db、SQL 建库脚本、README 和许可证
-data/knowledge/     自建经营知识文档（D01-D12）
-config/              字段字典、指标口径、实体别名和文档目录
-backend/             SQL、RAG、Agent 和 API 后端
-frontend/            网页端
-eval/                JSONL 评测题和评测脚本
-scripts/             启动、检查和打包脚本
-docs/                接口契约、数据方案、赛题材料和设计文档
+services/agent_api/    B 后端：FastAPI＋LangGraph 问数链路
+services/web/          B 前端：Vue 3＋Vite 问答工作台
+backend/               C 答卷代码：只读 SQL 与 NL2SQL 模块
+third_party/chinook_c/  vendored C 模块（含一份 Chinook.db）
+data/chinook/          Chinook.db、SQL 建库脚本、README 和许可证
+data/knowledge/        自建经营知识文档（D01-D12）
+config/                字段字典、指标口径、实体别名和文档目录
+profiles/              问数 profile 配置与示例
+eval/                  JSONL 评测题和评测脚本
+scripts/               索引构建、评测与校验脚本
+docs/                  接口契约、数据方案、赛题材料和设计文档
 ```
 
 ## 开发基线
@@ -64,3 +67,18 @@ Chinook 是公开样例数据库，不是真实企业经营数据。销售额按
 ## 本地启动约定
 
 当前仓库处于模块实现阶段。各模块先按接口契约独立开发，再通过 Pull Request 合并到 `main`。API Key 等敏感配置只放在本地 `.env`，不要提交到仓库；环境变量名称见 `.env.example`。
+
+## 队友环境搭建（新机器从零到跑通）
+
+前置：Python 3.10+ 与 [uv](https://docs.astral.sh/uv/)；Node 22 / 24 / 26 任一。
+
+1. 克隆仓库后安装依赖：后端在仓库根目录执行 `uv sync`；前端执行 `cd services/web` 后 `npm ci`。
+2. 复制 `.env.example` 为 `.env` 并填写 `LLM_API_KEY`、`LLM_BASE_URL`、`LLM_MODEL`。没有密钥时先保持 `AGENT_MODEL_MODE=offline`、`AGENT_BACKEND_MODE=offline_sql_d12` 跑离线链路。`.env` 已在 `.gitignore`，只留本地。
+3. 启动后端（端口 8000）：仓库根目录执行 `uv run uvicorn services.agent_api.app.main:app --host 127.0.0.1 --port 8000`。
+4. 启动前端（端口 5173）：`services/web` 下执行 `npm run dev`，浏览器打开 http://127.0.0.1:5173 即可提问。
+
+数据与索引都在库内，不需要额外下载或构建：`data/chinook/Chinook.db`、`data/knowledge/` 的 D01-D12 文档、`services/agent_api/app/knowledge/` 的知识索引快照。
+
+不在库内的内容及其来源：`.env` 每人自行填写密钥；`tmp/` 是评测与实验的本地产物，用 `scripts/run_agent_eval.py` 等脚本重新生成；`.venv`、`node_modules`、`dist` 由上面的安装命令生成。
+
+自检命令：后端 `uv sync --extra test` 后 `uv run pytest services/agent_api/tests/test_api.py -q`；前端 `services/web` 下 `npm run verify`。
