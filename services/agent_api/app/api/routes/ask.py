@@ -8,26 +8,27 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
 from ...contracts import ApiError, AskRequest, AskResponse
+from ...agent.graph import GRAPH_NODE_NAMES
 from ...services.ask_service import AskService, get_ask_service
 
 
 router = APIRouter(prefix="/api/v1", tags=["question-answering"])
 
-# Graph node names are stable internal identifiers; labels are display-only.
+# Keys must stay in sync with GRAPH_NODE_NAMES; labels are display-only.
 STAGE_LABELS = {
-    "initialize": "会话初始化",
-    "parse": "意图与时间解析",
-    "validate": "请求契约校验",
-    "start_route": "路由判定",
-    "context": "会话上下文装载",
-    "call_sql": "SQL 生成与只读执行",
-    "after_sql": "SQL 结果整理",
-    "call_rag": "文档片段检索",
-    "after_rag": "检索结果整理",
+    "initialize_turn": "会话初始化",
+    "parse_question": "意图与时间解析",
+    "validate_slots_and_capabilities": "能力与槽位校验",
+    "sql": "SQL 生成与只读执行",
+    "rag": "文档片段检索",
     "calculate": "业务计算",
     "evidence_check": "证据充分性校验",
-    "compose": "答案与证据组装",
+    "compose_response": "答案与证据组装",
+    "compose_test_response": "答案与证据组装",
 }
+
+# Fail fast at import time instead of silently degrading to raw node codes.
+assert set(STAGE_LABELS) == set(GRAPH_NODE_NAMES), "stage labels drifted from graph node names"
 
 
 @router.post(
