@@ -31,6 +31,7 @@ const statuses = { success: '查询成功', failed: '查询失败', rejected: '�
       <summary class="sql-summary"><span>候选 SQL 与参数</span><CopyButton v-if="result.sql != null && result.sql.trim()" :text="result.sql" label="复制 SQL" /></summary>
       <p class="helper">当前默认离线实例中的 SQL 字段为 C 已接受候选；执行前会校验和规范化，不是逐字驱动 SQL。这里只读展示，未提供时不生成语句，也不提供执行入口。</p>
       <pre v-if="result.sql != null && result.sql.trim()" class="sql-code" data-testid="candidate-sql"><span v-for="(token, index) in sqlTokens" :key="index" :class="token.cls ?? undefined">{{ token.text }}</span></pre>
+      <p v-if="result.sql != null && result.sql.trim()" class="sql-legend" data-testid="sql-legend"><span><i class="chip chip-kw"></i>关键字</span><span><i class="chip chip-fn"></i>函数</span><span><i class="chip chip-param"></i>绑定参数</span><span class="legend-plain">字符串/数字仅加粗变色，表名列名保持原色</span></p>
       <p v-else>未提供候选 SQL 语句。</p>
       <p>参数（独立于候选语句）</p>
       <p v-if="result.params == null">未提供参数。</p>

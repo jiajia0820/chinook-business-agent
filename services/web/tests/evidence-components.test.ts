@@ -26,6 +26,8 @@ describe('SQL evidence and dynamic rows', () => {
     expect(wrapper.findAll('thead th').map((cell) => cell.text())).toEqual(result.columns);
     expect(wrapper.findAll('tbody tr')).toHaveLength(result.rows!.length);
     expect(wrapper.get('[data-testid="candidate-sql"]').text()).toBe(result.sql);
+    expect(wrapper.get('[data-testid="sql-legend"]').text()).toContain('关键字');
+    expect(wrapper.findAll('[data-testid="sql-legend"] .chip')).toHaveLength(3);
     expect(wrapper.text()).toContain('不是逐字驱动 SQL');
     // The copy button is the only interactive element allowed inside an evidence card.
     expect(wrapper.findAll('input, textarea, a')).toHaveLength(0);
