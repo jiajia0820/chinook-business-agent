@@ -313,11 +313,17 @@ async def main():
     parser.add_argument("--files", help="逗号分隔的题库文件名（不含 .jsonl）")
     parser.add_argument("--all", action="store_true", help="运行 manifest 里的全部题库")
     parser.add_argument("--mode", default="live", choices=["live", "offline"], help="模型模式")
+    parser.add_argument("--model", default="", help="覆盖 LLM_MODEL，用于横向对比不同模型")
     parser.add_argument("--concurrency", type=int, default=3)
     parser.add_argument("--limit", type=int, default=0, help="每个题库最多跑几题，0 表示不限")
     parser.add_argument("--out", default="", help="JSON 报告输出路径")
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args()
+
+    if args.model:
+        # 必须在创建 integration 之前设置：C 的模型适配器在启动时读取一次环境变量。
+        os.environ["LLM_MODEL"] = args.model
+        os.environ["AGENT_MODEL_MODE"] = "live"
 
     manifest = json.load(io.open(EVAL_DIR / "eval_manifest.json", encoding="utf-8"))
     names = list(manifest["files"]) if args.all else (args.files or "eval_basic_nl2sql").split(",")
@@ -328,11 +334,12 @@ async def main():
     from services.agent_api.app.integrations.sql_d12 import create_canonical_knowledge_integration
 
     boot = time.monotonic()
-    integration = await create_canonical_knowledge_integration(model_mode=args.mode)
+    # 与 .env 的 AGENT_SQL_TIMEOUT_MS 保持一致；默认 60 秒会在 C 降级前先超时。
+    integration = await create_canonical_knowledge_integration(model_mode=args.mode, sql_timeout_ms=180000)
     service = integration.create_formal_graph_service()
     boot_ms = round((time.monotonic() - boot) * 1000)
     if not args.quiet:
-        print(f"模式={args.mode} 索引与后端启动耗时={boot_ms}ms")
+        print(f"模式={args.mode} 模型={args.model or os.environ.get('LLM_MODEL')} 启动耗时={boot_ms}ms")
 
     results, sessions = [], []
     semaphore = asyncio.Semaphore(max(1, args.concurrency))
@@ -367,7 +374,8 @@ async def main():
     passed = sum(1 for item in all_results if item["passed"])
     elapsed = [item["elapsed_ms"] for item in all_results if item.get("elapsed_ms")]
     report = {
-        "mode": args.mode, "files": names, "total": len(all_results), "passed": passed,
+        "mode": args.mode, "model": args.model or os.environ.get("LLM_MODEL"),
+        "files": names, "total": len(all_results), "passed": passed,
         "pass_rate": round(passed / len(all_results), 4) if all_results else 0,
         "boot_ms": boot_ms,
         "latency_ms": {"avg": round(sum(elapsed) / len(elapsed)) if elapsed else 0,
