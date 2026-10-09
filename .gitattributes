@@ -1,3 +1,6 @@
+# 统一换行：文本文件在仓库内与检出后一律 LF，避免不同机器的 core.autocrlf 造成字节差异。
+# 下面的 -text 规则按“最后匹配优先”覆盖本行，保持逐字节原样。
+* text=auto eol=lf
 third_party/chinook_c/** -text
 data/knowledge/D12_经营查询与数据使用FAQ.md -text
 services/web/src/contracts/generated/** -text

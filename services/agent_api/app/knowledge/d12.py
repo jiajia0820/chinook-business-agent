@@ -18,7 +18,7 @@ from .markdown import MarkdownChunk, chunk_markdown
 
 KNOWLEDGE_ROOT = Path(__file__).resolve().parents[4] / "data" / "knowledge"
 D12_FILENAME = "D12_经营查询与数据使用FAQ.md"
-D12_SHA256 = "f3de4cdba1af9dba25368e74ba381f99b93e18aace61da090e4a1292d99e8ce5"
+D12_SHA256 = "939adb9abd7ed425a682edd356292ce70141a93abd1632ab6ca3b064d5105a7e"
 ARCHIVE_SHA256 = "74748f209e042eab3bc446491e6b6ad7ccf5138e5dad93b79221dfa55541e27d"
 SOURCE_PREFIX = "data/knowledge/"
 STOP_PHRASES = ("请问", "请", "帮我", "解释一下", "说明一下", "是什么", "有什么区别", "什么区别", "怎么理解", "哪些", "如何", "多少", "的", "与", "和", "是", "吗", "呢")
@@ -216,7 +216,7 @@ def load_d12_index(root: Path, profile: BusinessProfile, *, max_chars: int = 100
         raise ValueError("D12 document missing")
     if manifest.archive_sha256 != ARCHIVE_SHA256 or manifest.source_archive != "chinook-business-agent-main.zip" or manifest.profile_id != profile.profile_id or profile.profile_id != "chinook-music":
         raise ValueError("knowledge version/profile mismatch")
-    if doc.path != D12_FILENAME or doc.doc_id != "D12" or doc.sha256 != D12_SHA256 or doc.size_bytes != 11095 or doc.doc_type != "markdown" or doc.title != "经营查询与数据使用 FAQ" or doc.version != "V1.0" or doc.document_number != "CHN-FAQ-12" or doc.effective_date != "2025-07-01" or doc.source_entry != "chinook-business-agent-main/data/knowledge/" + D12_FILENAME:
+    if doc.path != D12_FILENAME or doc.doc_id != "D12" or doc.sha256 != D12_SHA256 or doc.size_bytes != 10949 or doc.doc_type != "markdown" or doc.title != "经营查询与数据使用 FAQ" or doc.version != "V1.0" or doc.document_number != "CHN-FAQ-12" or doc.effective_date != "2025-07-01" or doc.source_entry != "chinook-business-agent-main/data/knowledge/" + D12_FILENAME:
         raise ValueError("knowledge metadata changed")
     path = (root / doc.path).resolve()
     path.relative_to(root)
