@@ -62,7 +62,7 @@ class HTTPJSONModel:
         return cls(params["endpoint"], params["model"], params["api_key"])
 
     def generate_json(self, messages, output_schema, deadline):
-        timeout=min(20,deadline-time.monotonic())
+        timeout=min(50,deadline-time.monotonic())
         if timeout<=0: raise model_error('MODEL_TIMEOUT','模型调用预算已耗尽')
         body=json.dumps(dict(model=self._model,messages=messages,temperature=0,
                              response_format={'type':'json_object'},max_tokens=2048)).encode('utf-8')
@@ -125,6 +125,20 @@ class DemoJSONModel:
                 ),
                     'params': {'start_date': start, 'end_date': end, 'genre_id': 1},
                 }
+        if all(term in question for term in ('销售额', '销量', '订单数', '购买客户数')):
+            examples[question] = {
+                'sql': (
+                    'SELECT ROUND(COALESCE(SUM(il.UnitPrice * il.Quantity), 0), 2) AS sales_amount, '
+                    'COALESCE(SUM(il.Quantity), 0) AS units_sold, '
+                    'COUNT(DISTINCT i.InvoiceId) AS order_count, '
+                    'COUNT(DISTINCT i.CustomerId) AS purchasing_customers '
+                    'FROM main.InvoiceLine il JOIN main.Invoice i ON i.InvoiceId=il.InvoiceId '
+                    'JOIN main.Track t ON t.TrackId=il.TrackId '
+                    'WHERE i.InvoiceDate >= :start_date AND i.InvoiceDate < :end_date '
+                    'AND t.MediaTypeId IN (1,2,4,5)'
+                ),
+                'params': {'start_date': '2025-07-01', 'end_date': '2025-10-01'},
+            }
         if question not in examples:
             raise ModuleError('UNSUPPORTED_CAPABILITY','离线演示仅支持文档列出的固定问法')
         return json.dumps(examples[question],ensure_ascii=False)

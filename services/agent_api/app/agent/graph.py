@@ -97,6 +97,12 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
 
     def initialize(state: AgentState):
         profile = profiles.get(state["profile_id"])
+        profile_limitations = list(profile.limitations)
+        if profile.sql_backend and profile.sql_backend.model_mode == "live":
+            profile_limitations = [
+                item for item in profile_limitations
+                if "离线模型" not in item and "固定问法" not in item
+            ]
         memory = state.get("memory")
         if not memory or memory["profile_id"] != profile.profile_id or memory["config_version"] != profile.config_version:
             memory = SessionMemory(profile_id=profile.profile_id, config_version=profile.config_version).model_dump(mode="json")
@@ -105,7 +111,7 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
             "tool_plan": [], "sql_outcome": None, "retrieval_outcome": None,
             "calculations": [], "calculation_binding": None, "calculation_evidence": None, "evidence_refs": [],
             "events": [], "node_path": ["initialize_turn"], "error": None, "response": None,
-            "limitations": [source_banner, "当前为有限规则解析，不支持任意自然语言；会话仅在本进程内保留。", *profile.limitations],
+            "limitations": [source_banner, "当前解析覆盖已登记的业务指标、时间和实体范围；会话仅在本进程内保留。", *profile_limitations],
         }
 
     def parse(state: AgentState):

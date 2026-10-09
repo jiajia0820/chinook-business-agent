@@ -19,15 +19,16 @@ async function send(wrapper: AppWrapper, question = EXAMPLES[0]!) {
 }
 
 describe('4B page interactions in simulated DOM (not live browser E2E)', () => {
-  it('mounts without requests and exposes real offline capabilities/defaults', () => {
+  it('mounts without requests and exposes the live SQL capabilities/defaults', () => {
     const ask = vi.fn<AskClient['ask']>();
     const wrapper = makeApp(ask);
     expect(wrapper.get('h1').text()).toBe('业务问答工作台');
-    expect(wrapper.text()).toContain('真实模型');
+    expect(wrapper.text()).toContain('大模型 NL2SQL 已启用');
+    expect(wrapper.text()).not.toContain('真实模型、销售自由问法和经营目标计算尚未启用');
     expect(wrapper.text()).toContain('仅本 worker');
     expect(wrapper.get(selector('submit-question')).attributes('disabled')).toBeDefined();
     expect(wrapper.get(selector('reset-task')).attributes('disabled')).toBeDefined();
-    expect(wrapper.findAll('.example-list button')).toHaveLength(6);
+    expect(wrapper.findAll('.example-list button')).toHaveLength(8);
     expect((wrapper.get(selector('max-rows')).element as HTMLInputElement).value).toBe('50');
     expect((wrapper.get(selector('top-k')).element as HTMLInputElement).value).toBe('5');
     expect(ask).not.toHaveBeenCalled();

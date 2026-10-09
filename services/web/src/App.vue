@@ -18,13 +18,13 @@ function shortcut(event: KeyboardEvent) {
 <template>
   <main class="workspace">
     <header class="page-heading">
-      <div><p class="eyebrow">CHINOOK · B 部分 / 4C</p><h1>业务问答工作台</h1><p class="intro">提问、澄清与证据展示 · 离线 SQL＋D12</p></div>
+      <div><p class="eyebrow">CHINOOK · 完整产品闭环</p><h1>业务问答工作台</h1><p class="intro">提问、澄清与证据展示 · 实时 NL2SQL＋D01-D12</p></div>
       <button type="button" class="secondary" data-testid="new-session" @click="newSession">新会话</button>
     </header>
     <aside class="boundary" aria-label="当前能力范围">
       <strong>当前真实能力</strong>
-      <p>Chinook 样例库固定三类 SQL 问数＋A 的 D12 有限原文解释。真实模型、销售自由问法和经营目标计算尚未启用。</p>
-      <p>填好澄清条件不等于业务已支持；页面不会用人工答案补成成功。</p>
+      <p>真实 Chinook 样例库＋大模型 NL2SQL 已启用；支持销售额、销量、订单数和客户数等已登记指标，SQL 经只读安全校验后执行。</p>
+      <p>D01-D12 知识检索与有证据绑定的目标、增长计算已启用；未登记指标或证据不足时会明确说明。</p>
     </aside>
     <section class="session-bar" aria-label="会话信息">
       <p>Profile：chinook-music</p>

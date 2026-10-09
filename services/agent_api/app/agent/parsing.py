@@ -41,6 +41,25 @@ def _contains(question, terms):
     return any(term.casefold() in question.casefold() for term in terms)
 
 
+# 数据范围词会插在指标词中间（“多少张音频订单”“购买音频的客户”），
+# 去掉后再匹配一次词典，避免把已登记的指标误判为需要澄清。
+METRIC_SCAN_NOISE = ("音频", "音乐", "视频", "全部", "各", "的")
+
+
+def _metric_scan_text(question):
+    text = question
+    for noise in METRIC_SCAN_NOISE:
+        text = text.replace(noise, "")
+    return text
+
+
+def _matched_metrics(question, rules):
+    """Return registered metric ids named by the question, in catalog order."""
+    scan = _metric_scan_text(question)
+    return [metric for metric, terms in rules.metric_terms.items()
+            if _contains(question, terms) or _contains(scan, terms)]
+
+
 def _periods(question):
     """Return explicitly stated periods only, never a wall-clock default."""
     quarter_pattern = r"(?:第?([一二三四1234])季度|Q([1-4]))"
@@ -149,7 +168,7 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
 
     explicit_slots, years, quarters = _periods(q)
     entities = _entities(q, profile)
-    metric_ids = [metric for metric, terms in rules.metric_terms.items() if _contains(q, terms)]
+    metric_ids = _matched_metrics(q, rules)
     hits = {name: _contains(q, terms) for name, terms in rules.intent_terms.items()}
     followup = q.startswith(("换成", "改成", "那", "和目标比", "仅", "按", "对比", "环比", "同比"))
     # Slot-only responses are safe supplements; arbitrary text is not silently ignored.

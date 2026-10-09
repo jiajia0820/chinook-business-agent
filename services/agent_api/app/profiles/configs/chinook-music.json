@@ -125,7 +125,7 @@
   ],
   "question_rules": {
     "document_queries": [
-      {"canonical_question": "销售额指标定义是什么？", "aliases": ["销售额指标定义是什么", "销售额指标怎么定义", "指标销售额怎么计算"], "business_metric_ids": ["sales_amount"]},
+      {"canonical_question": "销售额指标定义是什么？", "aliases": ["销售额指标定义是什么", "销售额指标怎么定义", "指标销售额怎么计算", "销售额口径是什么", "销售额定义是什么", "销售额怎么计算"], "business_metric_ids": ["sales_amount"]},
       {"canonical_question": "销售分析方法是什么？", "aliases": ["销售分析方法是什么", "销售分析怎么做"], "business_metric_ids": []},
       {"canonical_question": "音乐分类和商品范围是什么？", "aliases": ["音乐分类和商品范围是什么", "音乐分类范围是什么"], "business_metric_ids": []},
       {"canonical_question": "客户如何分层？", "aliases": ["客户如何分层", "客户分层规则是什么"], "business_metric_ids": []},
@@ -148,16 +148,16 @@
     "metric_terms": {
       "customer_count": ["客户数量", "客户总数", "登记客户数", "客户记录数", "多少客户", "客户有多少"],
       "sales_amount": ["销售额", "销售金额", "营收"],
-      "purchasing_customers": ["购买客户数", "购买人数"],
-      "units_sold": ["销量", "销售件数"],
-      "order_count": ["订单数", "订单数量"],
+      "purchasing_customers": ["购买客户数", "购买人数", "购买客户", "购买的客户", "购买过的客户", "多少位客户", "下单客户", "成交客户"],
+      "units_sold": ["销量", "销售件数", "销售量", "卖了多少件", "卖出多少件", "多少件", "件数"],
+      "order_count": ["订单数", "订单数量", "订单量", "订单张数", "多少张订单", "多少笔订单", "多少个订单", "订单有多少"],
       "average_order_value": ["客单价"],
-      "genre_sales": ["品类销售额", "分类销售额"],
-      "track_sales": ["商品销售额", "单曲销售额"],
+      "genre_sales": ["品类销售额", "分类销售额", "音乐分类", "各品类", "各分类"],
+      "track_sales": ["商品销售额", "单曲销售额", "音频商品", "各商品"],
       "album_sales": ["专辑销售额"],
       "artist_sales": ["艺术家销售额", "歌手销售额"],
-      "media_type_sales": ["媒体类型销售额"],
-      "billing_country_sales": ["账单国家销售额", "国家销售额"],
+      "media_type_sales": ["媒体类型销售额", "各媒体类型", "媒体类型的销售"],
+      "billing_country_sales": ["账单国家销售额", "国家销售额", "账单国家", "各国家"],
       "playlist_track_count": ["播放列表商品数", "播放列表收录数"]
     },
     "unsupported_terms": {
@@ -167,7 +167,7 @@
     },
     "ambiguous_scope_terms": ["摇滚相关"],
     "intent_default_metric_ids": {"target_attainment": ["sales_amount"], "target_difference": ["sales_amount"], "growth_rate": ["sales_amount"]},
-    "query_fillers": ["请问", "请", "帮我", "查一下", "查询", "统计", "计算", "是多少", "多少", "是什么", "什么", "如何", "呢", "吗", "了", "的", "有", "在", "来自", "以及", "和", "与", "对比", "相比", "目标", "完成率", "音乐", "音频", "全部", "仅", "按", "换成", "改成", "更正", "全年"],
+    "query_fillers": ["请问", "请", "帮我", "查一下", "查询", "统计", "计算", "是多少", "多少", "是什么", "什么", "如何", "呢", "吗", "了", "的", "有", "在", "来自", "以及", "和", "与", "对比", "相比", "目标", "完成率", "音乐", "音频", "全部", "仅", "按", "换成", "改成", "更正", "全年", "各", "各项", "各个", "每个", "分别"],
     "intent_terms": {
       "target_difference": ["目标差额", "与目标差多少", "目标差多少"],
       "target_attainment": ["达标", "达到目标", "和目标比", "目标完成率", "对比目标"],

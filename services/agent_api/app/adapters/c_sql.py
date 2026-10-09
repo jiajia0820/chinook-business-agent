@@ -39,6 +39,7 @@ class COptions(InternalModel):
 class CContext(InternalModel):
     resolved_slots: dict[str, JsonValue] = Field(default_factory=dict)
     metric_ids: list[NonEmptyString] = Field(default_factory=list)
+    entities: list[dict[str, JsonValue]] = Field(default_factory=list, max_length=20)
     business_context: list[BusinessContextItem] = Field(default_factory=list, max_length=20)
     reference_time: str | None = None
 
@@ -57,7 +58,10 @@ class CRequest(InternalModel):
     options: COptions = Field(default_factory=COptions)
 
     def payload(self) -> dict[str, JsonValue]:
-        return self.model_dump(mode="json", exclude_none=True)
+        payload = self.model_dump(mode="json", exclude_none=True)
+        if not self.context.entities:
+            payload["context"].pop("entities", None)
+        return payload
 
 
 class CError(InternalModel):
@@ -181,6 +185,7 @@ def build_c_request(task: SqlTaskRequest, *, request_id: str, profile: BusinessP
         context=CContext(
             resolved_slots=task.resolved_slots,
             metric_ids=task.metric_ids,
+            entities=task.entities if backend.model_mode == "live" else [],
             business_context=task.business_context,
             reference_time=task.reference_time,
         ),

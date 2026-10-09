@@ -149,7 +149,10 @@ class OfflineCSqlAdapter:
         request = build_c_request(task, request_id=context.request_id, profile=profile)
         raw = await self.executor.run(lambda: self._service.answer_sql(request.payload(), self._access), deadline=context.deadline)
         outcome = normalize_c_response(raw, task=task, request_id=context.request_id, profile=profile)
-        outcome.limitations.append("3C-1：C 离线固定三问 + 真实 Chinook 样例库；不是联网模型或完整自由问法能力。")
+        if profile.sql_backend.model_mode == "live":
+            outcome.limitations.append("C 使用已配置大模型生成 SQL；候选仍须通过只读、表字段与参数安全校验。")
+        else:
+            outcome.limitations.append("3C-1：C 离线固定三问 + 真实 Chinook 样例库；不是联网模型或完整自由问法能力。")
         if any(result.source.tables == ["main.Genre"] for result in outcome.sql_results):
             outcome.limitations.append("固定类型查询列出整个 Genre 表，含影视分类；不是仅音频可销售风格清单。")
         if outcome.status == "success":

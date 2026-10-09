@@ -37,6 +37,19 @@ class LiveNl2SqlParsingTests(unittest.TestCase):
         self.assertEqual(parsed.task.slots["media_ids"], [1, 2, 4, 5])
         self.assertEqual(parsed.task.original_question, question)
 
+    def test_live_common_metric_phrasings_enter_sql_route(self):
+        cases = [
+            ("2025年第三季度 Metal 卖了多少件？", ["units_sold"]),
+            ("2025年第三季度有多少张音频订单？", ["order_count"]),
+            ("2025年第三季度有多少位购买音频的客户？", ["purchasing_customers"]),
+        ]
+        for question, metric_ids in cases:
+            with self.subTest(question=question):
+                parsed = parse_question(question, self.profile, self.memory)
+                self.assertEqual(parsed.decision, "ready")
+                self.assertEqual(parsed.task.route, "sql")
+                self.assertEqual(parsed.task.business_metric_ids, metric_ids)
+
 
 if __name__ == "__main__":
     unittest.main()

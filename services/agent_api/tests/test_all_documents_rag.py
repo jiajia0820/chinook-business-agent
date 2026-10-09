@@ -46,6 +46,13 @@ class AllDocumentsRagTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, "insufficient_evidence")
         self.assertEqual(response.documents, [])
 
+    async def test_metric_definition_prioritizes_the_definition_document(self):
+        response = await self.ask("销售额口径是什么？")
+
+        self.assertEqual(response.status, "answered")
+        self.assertEqual(response.documents[0].doc_id, "D01")
+        self.assertIn("销售额", response.answer)
+
 
 if __name__ == "__main__":
     unittest.main()

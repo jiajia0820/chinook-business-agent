@@ -144,7 +144,10 @@ class KnowledgeIndex:
                 continue
             score = sum(1 + item.normalized_text.count(term) for term in matched)
             if hinted_doc and item.record.doc_id == hinted_doc:
-                score += 100
+                # Configured whole-question vocabulary is a document-routing
+                # signal. Keep lexical scoring for chunks inside that document,
+                # but do not let a long recap win merely by repeating terms.
+                score += 1_000_000
             if item.record.section and any(term in normalize(item.record.section) for term in query_terms):
                 score += 2
             ranked.append((float(score), item))

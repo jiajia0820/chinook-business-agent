@@ -54,3 +54,6 @@ coverage/
 .coverage
 *.tsbuildinfo
 .vitest/
+
+# Local agent workspace
+.workbuddy/
