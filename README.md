@@ -44,7 +44,7 @@ docs/                  接口契约、数据方案、赛题材料和设计文档
 
 统一接口契约见 [interface-contract.md](interface-contract.md)。
 
-C 模块已完成内容、当前限制、下一阶段任务与验收标准见 [C 模块阶段进展](docs/c-stage-progress.md)（2026-10-04 更新）。
+C 模块的实现与测试见 `backend/` 与 `third_party/chinook_c/`，接口约定见 [interface-contract.md](interface-contract.md)。
 
 数据集与评测集方案见 [数据集与评测集方案.md](数据集与评测集方案.md)。
 
@@ -56,7 +56,7 @@ C 模块已完成内容、当前限制、下一阶段任务与验收标准见 [C
 
 ## C 模块阶段交付
 
-阶段标签：`c-baseline-v0.1.0`。A、B 请先阅读 [阶段交付与协作说明](docs/C模块阶段交付与AB协作说明-2026-10-04.md)。Chinook Schema 与只读 SQL 已完成本地验收；基础 NL2SQL 已接入真实模型。本轮 10 题执行成功率 60%、数值匹配率 20%、严格业务正确率 10%，尚未达到稳定业务问数要求。B 整体联调与 AdventureWorks 实库验证待完成。
+阶段标签：`c-baseline-v0.1.0`。Chinook Schema 与只读 SQL 已完成本地验收；基础 NL2SQL 已接入真实模型。本轮 10 题执行成功率 60%、数值匹配率 20%、严格业务正确率 10%，尚未达到稳定业务问数要求。B 整体联调与 AdventureWorks 实库验证待完成。
 
 ## 数据说明
 
