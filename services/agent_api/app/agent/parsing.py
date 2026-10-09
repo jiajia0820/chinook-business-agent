@@ -245,7 +245,11 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
     if task.intent == "target_attainment" and not task.business_metric_ids:
         return clarify(task, ["target_metric"] + ([] if task.slots.get("year") else ["year"]), reused=reused, rules=["target_metric_not_inferred"])
     missing = []
-    if task.intent == "unknown" and profile.supports("rag") and not years and not quarters and not entities:
+    # 自由问法先交给多文档检索：检索不到证据时仍返回 insufficient_evidence，不会编造答案。
+    # offline 模式保持严格，只回答配置过的固定问法，避免把离线演示当成自由检索。
+    offline_backend = profile.sql_backend is not None and profile.sql_backend.model_mode == "offline"
+    if task.intent == "unknown" and profile.supports("rag") and (
+            not offline_backend or (not years and not quarters and not entities)):
         task.intent, task.route = "document_rule", "rag"
     if task.intent == "unknown" or hits.get("vague_metric") and not task.business_metric_ids:
         missing.append("metric" if hits.get("vague_metric") else "intent")

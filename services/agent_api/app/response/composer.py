@@ -63,6 +63,7 @@ SQL_SHAPES = {
     "有哪些音乐类型": ("SELECT GenreId, Name FROM main.Genre ORDER BY GenreId", {}, ["main.Genre"]),
 }
 SQL_NOTE = "展示 SQL 为 C 已接受候选；C 执行前会校验并规范化，不是逐字驱动语句。"
+RAG_NOTE = "以上为知识库检索到的原文片段，未改写、未推断；请结合来源文档核对完整上下文。"
 
 
 def question_key(value: str) -> str:
@@ -240,6 +241,22 @@ class FormalResponseComposer:
         scope = "Country=USA 的登记客户记录数" if params else "登记客户记录数"
         return f"Chinook 样例库中，{scope}为 {values[0][1]} 条。这里统计 Customer 表记录，不等同于筛选交易范围后的购买客户数。\n来源：" + "、".join(f"SQL {ref}" for ref, _ in values) + f"。{SQL_NOTE}"
 
+    def _generic_document_answer(self, context, limit: int = 3):
+        """Render retrieved passages verbatim instead of a single arbitrary chunk."""
+        documents = context.rag.chunks if context.rag else []
+        if not documents:
+            raise EvidenceGap()
+        seen, blocks = set(), []
+        for chunk in documents:
+            if chunk.chunk_id in seen:
+                continue
+            seen.add(chunk.chunk_id)
+            where = f" / {chunk.section}" if chunk.section else ""
+            blocks.append(f"【{chunk.doc_id}《{chunk.title}》{where}】\n{chunk.text}\n来源：{chunk.source_uri}")
+        doc_ids = sorted({chunk.doc_id for chunk in documents})
+        lead = f"从 {'、'.join(doc_ids)} 检索到 {len(blocks)} 段相关原文，按相关度展示前 {min(limit, len(blocks))} 段："
+        return lead + "\n\n" + "\n\n".join(blocks[:limit]) + "\n" + RAG_NOTE
+
     def _generic_sql_answer(self, context):
         task, sql = context.task, context.sql
         if task.needs_calculation or context.rag or not sql or sql.status != "success" or not sql.sql_results:
@@ -399,13 +416,19 @@ class FormalResponseComposer:
                 elif context.route == "cross_source" and self.policy.allow_business_calculation:
                     answer = self._calculation_answer(context)
                 elif context.route == "rag" and self.execution_mode == "offline_sql_d12_integration":
-                    if context.task.intent == "document_rule" and documents and all(item.doc_id == "D12" for item in documents):
-                        answer = self._d12_answer(context)
-                    elif documents:
-                        first = documents[0]
-                        answer = f"已从 {first.doc_id}《{first.title}》检索到相关原文：\n{first.text}\n来源：{first.source_uri}。"
-                    else:
+                    if not documents:
                         raise EvidenceGap()
+                    if context.task.intent == "document_rule" and all(item.doc_id == "D12" for item in documents):
+                        try:
+                            answer = self._d12_answer(context)
+                        except EvidenceConflict:
+                            raise
+                        except EvidenceGap:
+                            # 专用文案只覆盖已确认的固定问法；其余 D12 命中按原文渲染，
+                            # 不能因为文案没有配置就把已经检索到的证据判成不足。
+                            answer = self._generic_document_answer(context)
+                    else:
+                        answer = self._generic_document_answer(context)
                 else:
                     raise EvidenceGap()
             except EvidenceConflict as conflict:

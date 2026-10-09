@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 import unicodedata
@@ -97,6 +98,20 @@ class KnowledgeIndex:
             raise ValueError("knowledge manifest must contain D01-D12")
         if any(not self._document_chunks.get(doc_id) for doc_id in self.documents):
             raise ValueError("knowledge document has no chunks")
+        self._idf, self._max_idf = self._build_idf()
+
+    def _build_idf(self):
+        """Inverse document frequency over chunks, so rare terms outweigh repeated common ones."""
+        total = len(self.chunks)
+        frequency: dict[str, int] = {}
+        for item in self.chunks:
+            for term in set(lexical_terms(item.normalized_text)):
+                frequency[term] = frequency.get(term, 0) + 1
+        idf = {term: math.log(1 + total / (1 + count)) for term, count in frequency.items()}
+        return idf, math.log(2 + total)
+
+    def _weight(self, term: str) -> float:
+        return self._idf.get(term, self._max_idf)
 
     def retrieve(self, request: RetrievalRequest) -> RetrievalResponse:
         request = RetrievalRequest.model_validate(request.model_dump(mode="python"), strict=True)
@@ -134,22 +149,28 @@ class KnowledgeIndex:
         }
         hinted_doc = next((value for key, value in hints.items() if key.casefold() in request.query.casefold()), None)
         candidates = self.chunks if doc_id is None else self._document_chunks[doc_id]
+        query_weight = sum(self._weight(term) for term in query_terms)
         for item in candidates:
             if section and not (item.record.section == section or (item.record.section or "").startswith(str(section) + " / ")):
                 continue
             matched = [term for term in query_terms if term in item.normalized_text]
             if not matched:
                 continue
-            if not hinted_doc and len(matched) / len(query_terms) < 0.6:
+            # 覆盖率按 IDF 权重计算：长问题会切出大量高频碎片词，
+            # 用命中词数占比当门槛会让正常问法直接被筛空。
+            if not hinted_doc and query_weight and sum(self._weight(term) for term in matched) / query_weight < 0.35:
                 continue
-            score = sum(1 + item.normalized_text.count(term) for term in matched)
+            # 词频取对数，避免长段落靠重复高频词压过真正讲该主题的段落。
+            score = sum(self._weight(term) * (1 + math.log(item.normalized_text.count(term))) for term in matched)
             if hinted_doc and item.record.doc_id == hinted_doc:
                 # Configured whole-question vocabulary is a document-routing
                 # signal. Keep lexical scoring for chunks inside that document,
                 # but do not let a long recap win merely by repeating terms.
                 score += 1_000_000
             if item.record.section and any(term in normalize(item.record.section) for term in query_terms):
-                score += 2
+                score += 3.0
+            if any(term in normalize(item.record.title) for term in query_terms):
+                score += 1.5
             ranked.append((float(score), item))
         ranked.sort(key=lambda pair: (-pair[0], pair[1].record.doc_id, pair[1].record.chunk_id))
         chunks = [
