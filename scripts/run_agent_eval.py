@@ -434,5 +434,45 @@ async def main():
     return 0 if passed == len(all_results) else 1
 
 
+async def recorded_main():
+    """Direct live CLI keeps the same command and saves append-only evidence."""
+    probe = argparse.ArgumentParser(add_help=False)
+    probe.add_argument('--mode', default='offline')
+    probe.add_argument('--out', default='')
+    probe.add_argument('--concurrency', type=int, default=1)
+    args, _ = probe.parse_known_args()
+    if args.mode != 'live' or '--help' in sys.argv or '-h' in sys.argv:
+        return await main()
+    from scripts import stage2_eval as audit
+    argv = list(sys.argv[1:])
+    if args.out:
+        report_path = Path(args.out).resolve()
+        if report_path.exists():
+            raise SystemExit('输出已存在；请使用新的独立目录')
+        out = report_path.parent
+        out.mkdir(parents=True, exist_ok=True)
+        index = argv.index('--out')
+        del argv[index:index+2]
+    else:
+        out = audit.new_run('live')
+        report_path = out/'report.json'
+    if args.concurrency != 1:
+        raise SystemExit('完整模型调用审计要求 --concurrency 1，以精确绑定请求和调用')
+    for name in ('run-meta.json','responses.jsonl','model-calls.jsonl'):
+        if (out/name).exists():
+            raise SystemExit('证据目录已被使用；请使用新的独立目录')
+    meta = audit.metadata('live', argv)
+    meta['external_api_failure_budget'] = 1
+    audit.write(out/'run-meta.json', meta)
+    try:
+        return await audit.live(out, argv, failure_budget=1, report_path=report_path, strict_external=True)
+    finally:
+        final = audit.metadata('live', argv)
+        from datetime import datetime, timezone
+        meta['finished_at'] = datetime.now(timezone.utc).isoformat()
+        audit.write(out/'run-meta.json',meta)
+        audit.write(out/'end-fingerprint-check.json', {key: final[key] == meta[key] for key in ('code_sha256','scorer_sha256','dataset_sha256','data_sha256')})
+
+
 if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
+    sys.exit(asyncio.run(recorded_main()))

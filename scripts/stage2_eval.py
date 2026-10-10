@@ -54,7 +54,7 @@ def metadata(kind, argv):
         'git_status': subprocess.check_output(git + ['status', '--porcelain'], text=True),
         'code_sha256': fingerprint(code),
         'scorer_version': eval_scoring.VERSION,
-        'scorer_sha256': fingerprint([ROOT/'scripts/eval_scoring.py', ROOT/'scripts/run_agent_eval.py', ROOT/'scripts/stage2_cross_assertions.json']),
+        'scorer_sha256': fingerprint([ROOT/'scripts/eval_scoring.py', ROOT/'scripts/run_agent_eval.py', ROOT/'scripts/stage2_cross_assertions.json', ROOT/'scripts/stage2_eval.py', ROOT/'scripts/basic_nl2sql_extension.py']),
         'dataset_sha256': fingerprint((ROOT/'eval/agent').glob('*.json*')),
         'data_sha256': fingerprint([p for p in (ROOT/'data').rglob('*') if p.is_file() and p.suffix in ('.sqlite', '.db', '.pdf', '.png', '.md', '.json')]),
         'model': os.environ.get('LLM_MODEL'), 'endpoint': os.environ.get('LLM_BASE_URL'),
@@ -108,13 +108,33 @@ def historical(out):
     return report
 
 
-async def live(out, argv, failure_budget=0):
+def mark_pending_external(report, calls):
+    """Retain business scores while excluding unavailable live calls from passes."""
+    for item in report['results']:
+        events = [c for c in calls if c.get('request_id') == 'eval-' + item['id']]
+        pending = any(c['event'] == 'deferred_external_api' for c in events) or (
+            any(c.get('reason') in {'MODEL_TIMEOUT','MODEL_NETWORK_FAILED','MODEL_HTTP_FAILED'} for c in events)
+            and not any(c['event'] == 'model_attempt' and c.get('status') == 'success' for c in events))
+        item['business_passed'] = item['passed']
+        item['pending_external_api'] = pending
+        if pending:
+            item['passed'] = False
+            item['problems'].append('外部API未完成：待复测；受控本地结果不计作live通过')
+    report['business_passed'] = sum(r['business_passed'] for r in report['results'])
+    report['pending_external_api'] = sum(r['pending_external_api'] for r in report['results'])
+    report['passed'] = sum(r['passed'] for r in report['results'])
+    report['pass_rate'] = round(report['passed']/report['total'],4) if report['total'] else 0
+    return report
+
+
+async def live(out, argv, failure_budget=0, *, report_path=None, strict_external=False):
     from backend.sql_module.generation import HTTPJSONModel
     from backend.sql_module.errors import ModuleError
     from services.agent_api.app.services.graph_ask_service import GraphAskService
     lock = threading.Lock()
     attempts = {}
     external_failures = []
+    active_requests = set()
     original_ask, original_generate = GraphAskService.ask, HTTPJSONModel.generate_json
 
     def append(name, entry):
@@ -123,6 +143,8 @@ async def live(out, argv, failure_budget=0):
 
     async def record_ask(self, payload, *, request_id):
         started = time.monotonic()
+        with lock:
+            active_requests.add(request_id)
         try:
             response = await original_ask(self, payload, request_id=request_id)
             append('responses.jsonl', {'request_id': request_id, 'question': payload.question,
@@ -139,6 +161,9 @@ async def live(out, argv, failure_budget=0):
             append('responses.jsonl', {'request_id': request_id, 'question': payload.question,
                 'exception_type': type(exc).__name__, 'elapsed_ms': round((time.monotonic()-started)*1000)})
             raise
+        finally:
+            with lock:
+                active_requests.discard(request_id)
 
     def record_generate(self, messages, output_schema, deadline):
         started = time.monotonic()
@@ -149,6 +174,8 @@ async def live(out, argv, failure_budget=0):
         entry = {'event': 'model_attempt', 'question': payload.get('question'),
                  'model': os.environ.get('LLM_MODEL'), 'endpoint': os.environ.get('LLM_BASE_URL')}
         with lock:
+            if len(active_requests) == 1:
+                entry['request_id'] = next(iter(active_requests))
             attempts[entry['question']] = attempts.get(entry['question'], 0) + 1
             entry['question_attempt_ordinal'] = attempts[entry['question']]
         if failure_budget and len(external_failures) >= failure_budget:
@@ -158,6 +185,7 @@ async def live(out, argv, failure_budget=0):
         try:
             result = original_generate(self, messages, output_schema, deadline)
             entry['status'] = 'success'
+            entry['generated_json'] = result
             return result
         except Exception as exc:
             entry.update(status='error', error_type=type(exc).__name__, reason=getattr(exc, 'reason', None), code=getattr(exc, 'code', None))
@@ -171,12 +199,19 @@ async def live(out, argv, failure_budget=0):
     GraphAskService.ask, HTTPJSONModel.generate_json = record_ask, record_generate
     for name in ('responses.jsonl', 'model-calls.jsonl'):
         (out/name).touch(exist_ok=False)
-    sys.argv = [sys.argv[0], *argv, '--out', str(out/'report.json')]
+    report_path = report_path or out/'report.json'
+    sys.argv = [sys.argv[0], *argv, '--out', str(report_path)]
     try:
         exit_code = await evaluation.main()
     finally:
         GraphAskService.ask, HTTPJSONModel.generate_json = original_ask, original_generate
-    report = json.loads((out/'report.json').read_text(encoding='utf-8'))
+    report = json.loads(report_path.read_text(encoding='utf-8'))
+    if strict_external:
+        calls = [json.loads(line) for line in (out/'model-calls.jsonl').read_text(encoding='utf-8').splitlines()]
+        mark_pending_external(report, calls)
+        write(report_path, report)
+        exit_code = 0 if report['passed'] == report['total'] else 1
+        print(f"最终live判定：{report['passed']}/{report['total']}；外部待复测{report['pending_external_api']}题（不计通过）。",flush=True)
     summaries(out, report)
     return exit_code
 

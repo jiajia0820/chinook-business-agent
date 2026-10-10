@@ -5,7 +5,7 @@
   "database_sha256": "adb73b5b0ea57598926fa8a72ffb2848c64f7f17a4e57b5e0c04a182e24f565c",
   "profile_fixture": "eval/agent/interface_profile_fixture.json",
   "files": {
-    "eval_basic_nl2sql.jsonl": 10,
+    "eval_basic_nl2sql.jsonl": 15,
     "eval_basic_rag.jsonl": 10,
     "eval_special_clarification.jsonl": 8,
     "eval_special_alias_robustness.jsonl": 8,
@@ -17,7 +17,7 @@
     "eval_multidoc.jsonl": 5,
     "eval_multiturn.jsonl": 5
   },
-  "single_turn_total": 75,
+  "single_turn_total": 80,
   "multiturn_sessions": 5,
   "official_mapping": {
     "basic_nl2sql": "eval/agent/eval_basic_nl2sql.jsonl",

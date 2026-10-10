@@ -4,7 +4,8 @@ import json
 from pathlib import Path
 import re
 
-VERSION = 'stage2-policy-1.4'
+VERSION = 'stage2-policy-1.5'
+BASIC_EXTENSION_IDS = {f'basic-nl2sql-{i:03}' for i in range(11,16)}
 ALIASES = {
     'customer_count': ('customer_count', 'purchasing_customers'),
     'actual_sales': ('actual_sales', 'sales_amount'),
@@ -104,6 +105,22 @@ def compare_rows(case, response):
     actual = rows(response)
     if len(expected) != len(actual):
         return [f'结果行数 {len(actual)}，期望 {len(expected)}']
+    if case.get('id') in BASIC_EXTENSION_IDS:
+        # New questions explicitly require month/ID/tie order and cent-correct
+        # zeros. Historical 001-010 retain their existing scoring unchanged.
+        problems = []
+        for index, (want, got) in enumerate(zip(expected, actual), 1):
+            problems.extend(f'第{index}行：{p}' for p in row_problems(want, got))
+            for key in ('sales_amount', 'unit_price'):
+                if key in want:
+                    try:
+                        value = Decimal(str(got.get(key)))
+                        correct = not isinstance(got.get(key), bool) and value.is_finite() and abs(value-Decimal(str(want[key]))) <= Decimal('0.000001')
+                    except (InvalidOperation, TypeError, ValueError):
+                        correct = False
+                    if not correct:
+                        problems.append(f'第{index}行：{key}未达到标准金额精度，期望{want[key]}，实际{got.get(key)}')
+        return list(dict.fromkeys(problems))
     ordered = bool(re.search(r'ORDER\s+BY', case.get('gold_sql') or '', re.I)) and bool(re.search(r'最高|排名|前\s*\d|Top|五个|五位|五张', case.get('question', ''), re.I))
     if ordered:
         # Equal measure values allow permutation within a tied rank only.
@@ -168,6 +185,22 @@ def facts_missing(gold, response, prefix=''):
 
 def compare_answer(case, response):
     problems = []
+    if case['id'] in BASIC_EXTENSION_IDS:
+        expectation = case.get('interface_expectation', {})
+        for field in expectation.get('required_response_fields', []):
+            if not hasattr(response, field):
+                problems.append(f'缺少响应字段 {field}')
+        if str(response.route) != expectation.get('expected_route'):
+            problems.append(f'route: 期望sql，实际{response.route}')
+        for result in response.sql_results:
+            if str(result.status) != 'success' or result.truncated:
+                problems.append('SQL结果未成功完成或被截断')
+        period = getattr(response, 'time_range', None)
+        expected_period = None if case['id'].endswith('011') else (('2025-01-01','2026-01-01') if case['id'].endswith('012') else ('2025-07-01','2025-10-01'))
+        if expected_period is None and period is not None:
+            problems.append('商品编号属性查询不应被识别为年份期间')
+        elif expected_period is not None and (period is None or (period.start, period.end) != expected_period or period.end_inclusive):
+            problems.append(f'查询期间错误，期望左闭右开{expected_period}')
     text = response.answer or ''
     for alternatives in CONCEPTS.get(case['id'], []):
         if not any(term.casefold() in text.casefold() for term in alternatives):
