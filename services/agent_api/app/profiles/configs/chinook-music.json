@@ -11,7 +11,7 @@
       "customer_count", "sales_amount", "units_sold", "order_count",
       "purchasing_customers", "average_order_value", "genre_sales",
       "track_sales", "album_sales", "artist_sales", "media_type_sales",
-      "billing_country_sales", "playlist_track_count"
+      "billing_country_sales", "playlist_track_count", "mixed_order_count"
     ],
     "declared_slots": {
       "start_date": {"type": "string"},
@@ -115,6 +115,13 @@
       "definition": "按 PlaylistTrack 统计播放列表收录的去重 Track 数。",
       "unit": "件",
       "source_refs": ["D03", "D12"]
+    },
+    {
+      "metric_id": "mixed_order_count",
+      "name": "音视频混合订单数",
+      "definition": "同时包含音频与视频明细的订单去重计数；音频销售额仍按明细筛选。",
+      "unit": "单",
+      "source_refs": ["D01", "D03"]
     }
   ],
   "aliases": [

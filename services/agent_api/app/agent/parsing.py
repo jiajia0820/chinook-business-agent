@@ -6,7 +6,7 @@ import re
 from ..contracts import Clarification, MissingSlot, TimeRange
 from ..profiles.models import BusinessProfile
 from .state import BusinessTask, ParsedTurn, SessionMemory
-from backend.sql_module.query_intent import parse_query_intent
+from backend.sql_module.query_intent import parse_query_intent, DIMENSION_METRICS
 
 
 SLOT_DESCRIPTIONS = {
@@ -70,8 +70,20 @@ def _metric_scan_text(question):
 def _matched_metrics(question, rules):
     """Return registered metric ids named by the question, in catalog order."""
     scan = _metric_scan_text(question)
-    return [metric for metric, terms in rules.metric_terms.items()
+    metrics = [metric for metric, terms in rules.metric_terms.items()
             if _contains(question, terms) or _contains(scan, terms)]
+    intent = parse_query_intent(question, metrics)
+    if intent.get('operation') == 'mixed_media_orders':
+        return ['mixed_order_count']
+    grain = DIMENSION_METRICS.get(intent.get('dimension'))
+    if grain:
+        metrics = [m for m in metrics if m not in DIMENSION_METRICS.values() or m == grain]
+        if grain not in metrics:
+            metrics.append(grain)
+    for measure in intent.get('measures', []):
+        if measure not in metrics:
+            metrics.append(measure)
+    return metrics
 
 
 def _periods(question):

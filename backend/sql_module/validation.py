@@ -14,7 +14,7 @@ SAFE_FUNCTIONS = frozenset('COUNT SUM AVG MIN MAX ROUND ABS COALESCE NULLIF LOWE
     'TRIM LTRIM RTRIM CAST TRY_CAST CASE IF DATE DATETIME STRFTIME TIME_TO_STR TS_OR_DS_TO_TIMESTAMP '
     'TS_OR_DS_TO_DATE DATE_TRUNC EXTRACT'.split())
 STRUCTURES = frozenset('Select Union Intersect Except Subquery With CTE Table TableAlias Column Identifier '
-    'Literal Null Boolean Placeholder Star Alias From Join Where Group Having Order Ordered Limit Offset '
+    'Literal Null Boolean Placeholder Star Alias From Join Where Group Having Order Ordered Limit Offset DPipe '
     'Distinct Paren And Or Not EQ NEQ GT GTE LT LTE Add Sub Mul Div Mod Neg Between In Like ILike Is '
     'DataType DataTypeParam Tuple Exists Var'.split())
 CAST_TYPES = frozenset('INT BIGINT SMALLINT TINYINT FLOAT DOUBLE DECIMAL BOOLEAN TEXT VARCHAR CHAR '

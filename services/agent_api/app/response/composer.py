@@ -76,7 +76,7 @@ def number(value: Decimal) -> str:
 
 # 直接以自身列名出现在结果里的度量指标。
 MEASURE_COLUMNS = frozenset({
-    "customer_count", "sales_amount", "units_sold", "order_count", "purchasing_customers",
+    "customer_count", "sales_amount", "units_sold", "order_count", "purchasing_customers", "mixed_order_count",
 })
 
 
@@ -91,7 +91,10 @@ def expected_result_evidence(metric_ids):
         if metric in MEASURE_COLUMNS:
             expected.add(metric)
         elif metric.endswith("_sales") or metric == "playlist_track_count":
-            expected.add("sales_amount" if metric.endswith("_sales") else "playlist_track_count")
+            if metric == 'playlist_track_count':
+                expected.add('track_count')
+            elif not set(metric_ids) & MEASURE_COLUMNS:
+                expected.add('sales_amount')
             grouped = True
         else:
             expected.add(metric)
