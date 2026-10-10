@@ -27,6 +27,7 @@ class ComposeContext:
     calculations: tuple[Calculation, ...] = ()
     binding: CalculationRequest | None = None
     binding_audit: dict | None = None
+    calculation_audits: tuple[dict, ...] = ()
     available_source_refs: tuple[str, ...] = ()
     events: tuple[ToolEvent, ...] = ()
     limitations: tuple[str, ...] = ()

@@ -150,7 +150,7 @@ class OfflineCSqlAdapter:
         raw = await self.executor.run(lambda: self._service.answer_sql(request.payload(), self._access), deadline=context.deadline)
         outcome = normalize_c_response(raw, task=task, request_id=context.request_id, profile=profile)
         if profile.sql_backend.model_mode == "live":
-            outcome.limitations.append("C 使用已配置大模型生成 SQL；候选仍须通过只读、表字段与参数安全校验。")
+            outcome.limitations.append("C 配置为 live 模式；实际使用模型候选或受控修复的情况见本轮限制与工具追踪，接受的 SQL 须通过只读、表字段与参数安全校验。")
         else:
             outcome.limitations.append("3C-1：C 离线固定三问 + 真实 Chinook 样例库；不是联网模型或完整自由问法能力。")
         if any(result.source.tables == ["main.Genre"] for result in outcome.sql_results):

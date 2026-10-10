@@ -50,6 +50,8 @@ MEASURE_EXPRESSIONS = {
 DIMENSION_GRAINS = {'genre':'genre_sales','track':'track_sales','album':'album_sales','artist':'artist_sales',
     'media_type':'media_type_sales','billing_country':'billing_country_sales'}
 EXTRA_GRAINS = {
+    'month': dict(columns=[('month', "strftime('%Y-%m', i.InvoiceDate)")],
+        order_key="strftime('%Y-%m', i.InvoiceDate)", joins=[], group_by=["strftime('%Y-%m', i.InvoiceDate)"]),
     'customer': dict(columns=[('CustomerId','c.CustomerId'),('customer',"c.FirstName || ' ' || c.LastName")],
         order_key='c.CustomerId', joins=['JOIN main.Customer c ON c.CustomerId = i.CustomerId'], group_by=['c.CustomerId','c.FirstName','c.LastName']),
     'support_rep': dict(columns=[('support_rep',"e.FirstName || ' ' || e.LastName")],
@@ -103,7 +105,7 @@ def _output_contract(metric_ids, context=None):
         return ['mixed_order_count']
     if intent.get('dimension')=='playlist':
         return ['PlaylistId','Name','track_count']
-    measures = intent.get('measures') or [m for m in metric_ids if m in MEASURE_EXPRESSIONS]
+    measures = ['sales_amount','order_count'] if 'average_order_value' in metric_ids else (intent.get('measures') or [m for m in metric_ids if m in MEASURE_EXPRESSIONS])
     plan=_grain_plan(metric_ids, slots)
     if plan:
         return [name for name,_ in plan['columns']] + (measures or ['sales_amount'])
@@ -206,7 +208,7 @@ def _controlled_query(context, metric_ids, candidate_sql=None, max_rows=50):
         return {'sql':' UNION ALL '.join(branches),'params':params}
     if metric_ids==['customer_count']:
         return {'sql':'SELECT COUNT(*) AS customer_count FROM main.Customer','params':{}}
-    measures=intent.get('measures') or [m for m in metric_ids if m in MEASURE_EXPRESSIONS]
+    measures=['sales_amount','order_count'] if 'average_order_value' in metric_ids else (intent.get('measures') or [m for m in metric_ids if m in MEASURE_EXPRESSIONS])
     grains=[m for m in metric_ids if m in GRAIN_PLANS]
     if len(grains)>1 or not {'start_date','end_date'}<=set(slots):
         return None

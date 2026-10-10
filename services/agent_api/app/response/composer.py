@@ -1,7 +1,8 @@
 """Finite renderers backed by this-turn sources, not generated business claims."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
+import re
 import unicodedata
 
 from ..contracts import ApiError, AskResponse, Intent
@@ -10,6 +11,7 @@ from ..evidence.models import CalculationEvidenceBundle
 from ..knowledge.d12 import D12_SHA256, SOURCE_PREFIX
 from ..runtime import ToolContext, events_to_trace
 from ..tools.local_calculator import FORMULAS, calculate_decimal
+from ..tools.models import CalculationRequest
 from .models import ComposeContext, ExecutionMode
 
 
@@ -244,7 +246,7 @@ class FormalResponseComposer:
         scope = "Country=USA 的登记客户记录数" if params else "登记客户记录数"
         return f"Chinook 样例库中，{scope}为 {values[0][1]} 条。这里统计 Customer 表记录，不等同于筛选交易范围后的购买客户数。\n来源：" + "、".join(f"SQL {ref}" for ref, _ in values) + f"。{SQL_NOTE}"
 
-    def _generic_document_answer(self, context, limit: int = 3):
+    def _generic_document_answer(self, context, limit: int = 10):
         """Render retrieved passages verbatim instead of a single arbitrary chunk."""
         documents = context.rag.chunks if context.rag else []
         if not documents:
@@ -315,7 +317,36 @@ class FormalResponseComposer:
             if result.truncated:
                 rendered += f"\n结果按本轮上限截断，仅展示前 {result.row_count} 行。"
             rendered_results.append(f"{rendered}\n来源：SQL {result.query_id}。")
-        return "查询结果：" + "\n".join(rendered_results) + SQL_NOTE
+        scope = '；'.join(f"{entity['label']}（{entity['id']}）" for entity in task.entities)
+        period = task.time_range.label if task.time_range else ''
+        return f"查询口径：{period}；{scope or '当前确认范围'}。\n查询结果：" + "\n".join(rendered_results) + SQL_NOTE
+
+    def _cross_source_answer(self, context):
+        if context.task.needs_calculation or not context.rag or not context.rag.chunks:
+            raise EvidenceGap()
+        sql_answer = self._generic_sql_answer(replace(context, rag=None))
+        notes = []
+        monthly = {row['month']: Decimal(str(row['sales_amount']))
+            for result in context.sql.sql_results for row in result.rows
+            if isinstance(row.get('month'),str) and isinstance(row.get('sales_amount'),(int,float))}
+        if monthly:
+            from ..integrations.business_calculation import monthly_plan
+            from ..evidence.binding import task_scope
+            year = context.task.slots['year']
+            plans = monthly_plan(context.rag.chunks, task_scope(context.task))
+            if not plans:
+                raise EvidenceGap()
+            notes.extend(f'{year}-{month:02} 计划 {value} USD；来源 {chunk.source_uri}' for month,value,chunk,_,_ in plans)
+            for chunk in context.rag.chunks:
+                if chunk.doc_id != 'D08':
+                    continue
+                for match in re.finditer(r'(?m)^(\d{4})年(\d{1,2})月\n(\d+\.\d+)',chunk.text):
+                    key = f'{match[1]}-{int(match[2]):02}'
+                    claim = Decimal(match[3])
+                    if key in monthly and claim != monthly[key]:
+                        notes.append(f'来源冲突：{key}，D08文档写 {claim} USD，数据库为 {monthly[key]} USD。'
+                            f'月份及音频范围一致，数值不一致；保留双方来源，不能静默选择文档数值。文档季度合计需同步核对。来源 {chunk.source_uri}')
+        return sql_answer + '\n' + '\n'.join(notes) + '\n' + self._generic_document_answer(context)
 
     def _d12_answer(self, context):
         task, rag = context.task, context.rag
@@ -338,6 +369,17 @@ class FormalResponseComposer:
         return f"D12 原文：“{quote}”\n来源：{chunk.doc_id} {version}；{chunk.section}；{chunk.chunk_id}；{chunk.source_uri}。\n仅解释该条文档规则，不代表已查询销售或购买客户数，也不形成目标达成结论。"
 
     def _calculation_answer(self, context):
+        if context.calculation_audits:
+            if len(context.calculation_audits)!=len(context.calculations):
+                raise EvidenceGap()
+            parts=[]
+            for item,calc in zip(context.calculation_audits,context.calculations):
+                if item['calculation_id']!=calc.calculation_id:
+                    raise EvidenceGap()
+                from ..agent.state import BusinessTask
+                parts.append(self._calculation_answer(replace(context,task=BusinessTask.model_validate(item['task']),
+                    calculations=(calc,),binding=CalculationRequest.model_validate(item['binding']),binding_audit=item['audit'],calculation_audits=())))
+            return '\n\n'.join(parts)
         if not context.task.needs_calculation or len(context.calculations) != 1 or context.binding is None or context.binding_audit is None:
             raise EvidenceGap()
         calc = context.calculations[0]
@@ -363,8 +405,8 @@ class FormalResponseComposer:
         rows = []
         for role, operand in request.operands.items():
             period = bundle.operands[role].period
-            rows.append(f"{labels[role]} {number(operand.value)} {operand.unit}，周期 [{period.start}, {period.end})，来源 {operand.source_ref}")
-        function = {"difference": "目标差额", "attainment_rate": "达成率", "growth_rate": "增长率"}[request.function]
+            rows.append(f"{labels.get(role,{'sales':'销售额','orders':'订单数'}.get(role,role))} {number(operand.value)} {operand.unit}，周期 [{period.start}, {period.end})，来源 {operand.source_ref}")
+        function = {"difference": "目标差额", "attainment_rate": "达成率", "growth_rate": "增长率",'average_order_value':'客单价','sum':'月度计划合计'}[request.function]
         scope = bundle.formula.scope
         entity_labels = {
             item.get("id"): item.get("label")
@@ -381,6 +423,7 @@ class FormalResponseComposer:
             if verified_business else
             "这仅验证算术与绑定，不能当作真实销售、达标或增长结论。"
         )
+        conclusion += (' 未达标。' if calc.result<100 else ' 达标。') if request.function=='attainment_rate' else ''
         return "\n".join([*rows, scope_text, f"命名函数 {request.function}；公式 {calc.formula}；公式来源 {request.formula_ref}（{bundle.formula.locator.version}）。",
             f"{result_prefix}{function}：{calc.result:.2f} {calc.unit}；Decimal 计算，ROUND_HALF_UP 保留两位小数。", f"计算来源：{calc.calculation_id}。{conclusion}"])
 
@@ -395,7 +438,8 @@ class FormalResponseComposer:
                 banner = '来源：经快照验证的业务知识库文档，详见本轮引用。'
             else:
                 banner = '来源：当前业务配置与能力边界；本轮未形成数据库查询结论。'
-        limits = [banner, *context.limitations, *(context.sql.limitations if context.sql else [])]
+        inherited = [text for text in context.limitations if text != self.source_banner]
+        limits = [banner, *inherited, *(context.sql.limitations if context.sql else [])]
         sql_results = context.sql.sql_results if context.sql else []
         documents = context.rag.chunks if context.rag else []
         calculations = list(context.calculations)
@@ -423,10 +467,14 @@ class FormalResponseComposer:
                     answer = "旧 3B 固定结果替身完成；仅供历史流程验证，未形成真实业务结论。"
                 elif self.execution_mode == "calculation_fixture":
                     answer = self._calculation_answer(context)
+                elif context.task and context.task.needs_calculation:
+                    answer = self._calculation_answer(context)
+                    if context.route == 'cross_source':
+                        answer += '\n' + self._generic_document_answer(context)
                 elif context.route == "sql":
                     answer = self._sql_answer(context)
                 elif context.route == "cross_source" and self.policy.allow_business_calculation:
-                    answer = self._calculation_answer(context)
+                    answer = self._cross_source_answer(context)
                 elif context.route == "rag" and self.execution_mode == "offline_sql_d12_integration":
                     if not documents:
                         raise EvidenceGap()

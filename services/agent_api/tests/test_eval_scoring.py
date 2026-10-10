@@ -48,6 +48,16 @@ class ScoringTests(unittest.TestCase):
         r = response(route='cross_source', sql_results=[N(status='success', rows=[{'sales_amount': 2}])])
         self.assertEqual(judge(case, r), [])
 
+    def test_document_quote_cannot_substitute_for_database_fact(self):
+        case={'id':'test','expected_tables':['Invoice','InvoiceLine'],'gold_result':{'actual_sales':2},
+            'interface_expectation':{'expected_status':'answered','expected_route':'cross_source'}}
+        self.assertTrue(judge(case,response(answer='实际销售额2美元')))
+
+    def test_month_source_audit_does_not_require_arithmetic(self):
+        case={'id':'test','gold_calculation':{'database_monthly_actual':{'2026-04':1.25},'conflict':'来源冲突'}}
+        r=response(answer='2026-04，来源冲突',sql_results=[N(status='success',rows=[{'month':'2026-04','sales_amount':1.25}])])
+        self.assertEqual(judge(case,r),[])
+
 
 if __name__ == '__main__':
     unittest.main()

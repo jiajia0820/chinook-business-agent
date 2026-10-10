@@ -2,7 +2,7 @@
 from decimal import Decimal, InvalidOperation
 import re
 
-VERSION = 'stage2-policy-1'
+VERSION = 'stage2-policy-1.2'
 ALIASES = {
     'customer_count': ('customer_count', 'purchasing_customers'),
     'actual_sales': ('actual_sales', 'sales_amount'),
@@ -32,10 +32,10 @@ CONCEPTS = {
     'special-multimodal-002': [('商品内容', '品类运营'), ('商品清单',), ('选品理由',), ('页面文案',)],
     'special-multimodal-003': [('Metal',), ('销售额',), ('销量',)],
     'special-multimodal-004': [('销售额',), ('销量',)],
-    'special-multimodal-005': [('Rock',), ('Metal',), ('主',), ('附属', '补充'), ('专辑',)],
+    'special-multimodal-005': [('Rock',), ('Metal',), ('主',), ('附属', '补充', '延伸'), ('专辑',)],
     'special-alias-001': [('Rock',), ('Rock And Roll',), ('不', '分开')],
-    'special-alias-002': [('Rock And Roll',), ('Rock',), ('分开', '不同')],
-    'special-alias-003': [('Metal',), ('Heavy Metal',), ('单独', '分开')],
+    'special-alias-002': [('Rock And Roll',), ('Rock',), ('分开', '不同', '两个目录条目')],
+    'special-alias-003': [('Metal',), ('Heavy Metal',), ('单独', '分开', '另有')],
     'special-alias-004': [('Heavy Metal',), ('Metal',), ('不', '分开')],
     'special-alias-005': [('音频',), ('视频',), ('不', '排除', '单独')],
     'special-alias-006': [('全店',), ('音频',), ('视频',)],
@@ -176,9 +176,13 @@ def compare_answer(case, response):
     if not case.get('gold_result') and not case.get('gold_calculation'):
         # Match complete dates/time literally (space and Chinese date delimiters equivalent).
         compact = re.sub(r'\s+', '', text)
+        compact = re.sub(r'(\d{4})[.](\d{1,2})[.](\d{1,2})',lambda m:f'{m[1]}年{int(m[2])}月{int(m[3])}日',compact)
         for year, month, day in re.findall(r'(\d{4})年(\d{1,2})月(\d{1,2})日', gold):
             patterns = [f'{year}年{int(month)}月{int(day)}日', f'{year}-{int(month):02}-{int(day):02}']
-            if not any(token in compact for token in patterns):
+            # A poster may print the year on its activity date and omit it on
+            # the deadline. Require both the year and the complete month/day.
+            inherited_year = year in compact and f'{int(month)}月{int(day)}日' in compact
+            if not any(token in compact for token in patterns) and not inherited_year:
                 problems.append(f'答案缺少完整日期 {year}-{int(month):02}-{int(day):02}')
         for month, day in re.findall(r'(?<!\d)(\d{1,2})月(\d{1,2})日', gold):
             if not re.search(fr'(?:{int(month)}月{int(day)}日|(?:\d{{4}}-)?{int(month):02}-{int(day):02}|{int(month)}\.{int(day)})', compact):
@@ -186,7 +190,7 @@ def compare_answer(case, response):
         for token in re.findall(r'\d{4}-\d{2}-\d{2}|\d{1,2}:\d{2}', gold):
             if token not in compact:
                 problems.append(f'答案缺少日期/时间 {token}')
-        clean_gold = re.sub(r'\bD\d+\b|\d{4}[-年/]\d{1,2}(?:[-月/]\d{1,2}日?)?|\d{1,2}:\d{2}|Genre\s*[:：]\s*\d+', '', gold, flags=re.I)
+        clean_gold = re.sub(r'\bD\d+\b|\d{4}[-年/]\d{1,2}(?:[-月/]\d{1,2}日?)?|\d{1,2}月(?:\d{1,2}日)?|\d{1,2}:\d{2}|Genre\s*[:：]\s*\d+', '', gold, flags=re.I)
         for numeric, percent in re.findall(r'(?<![A-Za-z0-9_.])(-?\d+(?:\.\d+)?)(\s*%)?(?![A-Za-z0-9_.])', clean_gold):
             if not _fact_present(numeric + ('%' if percent else ''), text):
                 problems.append(f'答案缺少业务数值 {numeric}{"%" if percent else ""}')
@@ -229,9 +233,12 @@ def judge(case, response):
     if response.clarification or response.error:
         problems.append('回答含意外澄清或错误')
     problems.extend(compare_rows(case, response))
+    if case.get('expected_tables') and not response.sql_results:
+        problems.append('要求数据库事实，但未返回 SQL 来源')
     if case.get('gold_calculation'):
         problems.extend(facts_missing(case['gold_calculation'], response))
-        if not response.calculations:
+        arithmetic = any(key in case['gold_calculation'] for key in ('rate','gap','growth_rate','result','formula','sum','average_order_value'))
+        if arithmetic and not response.calculations:
             problems.append('公式题未返回结构化 calculations')
     problems.extend(compare_answer(case, response))
     actual_docs = {c.doc_id for c in response.documents}

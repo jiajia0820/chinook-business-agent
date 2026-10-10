@@ -16,6 +16,11 @@ def covers_context(candidate, context, *, media_applies=True):
     params = candidate.get('params', {})
     slots = context.get('resolved_slots', {})
     intent = slots.get('query_intent', {})
+    if slots.get('comparison_period'):
+        tags = [item.this.this for select in tree.find_all(exp.Select) for item in select.expressions
+            if isinstance(item,exp.Alias) and item.alias=='period' and isinstance(item.this,exp.Literal)]
+        if sorted(tags) != ['current','previous']:
+            return False
 
     def value(node):
         if isinstance(node, exp.Placeholder):
@@ -92,5 +97,13 @@ def covers_context(candidate, context, *, media_applies=True):
             table, name = dimensions[dimension]
             group = select.args.get('group')
             if group is None or not any(column(node, table, name) for node in group.expressions):
+                return False
+        elif dimension == 'month':
+            group=select.args.get('group')
+            def month_expression(node):
+                return isinstance(node,exp.TimeToStr) and value(node.args.get('format'))=='%Y-%m' and any(
+                    column(item,'invoice','InvoiceDate') for item in node.find_all(exp.Column))
+            if group is None or not any(month_expression(item) for item in group.expressions) or not any(
+                    isinstance(item,exp.Alias) and item.alias=='month' and month_expression(item.this) for item in select.expressions):
                 return False
     return True

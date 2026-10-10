@@ -110,7 +110,7 @@ class CalculationOperand(InternalModel):
 class CalculationRequest(InternalModel):
     calculation_id: NonEmptyString
     profile_id: NonEmptyString
-    function: Literal["difference", "attainment_rate", "growth_rate"]
+    function: Literal["difference", "attainment_rate", "growth_rate", "average_order_value", "sum"]
     formula_ref: NonEmptyString
     operands: dict[str, CalculationOperand] = Field(min_length=1)
     result_unit: NonEmptyString

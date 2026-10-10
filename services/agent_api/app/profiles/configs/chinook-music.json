@@ -129,6 +129,7 @@
     {"alias": "摇滚乐", "entity_type": "genre", "entity_id": "Genre:5", "label": "Rock And Roll"},
     {"alias": "金属", "entity_type": "genre", "entity_id": "Genre:3", "label": "Metal"},
     {"alias": "重金属", "entity_type": "genre", "entity_id": "Genre:13", "label": "Heavy Metal"},
+    {"alias": "拉丁", "entity_type": "genre", "entity_id": "Genre:7", "label": "Latin"},
     {"alias": "美国", "entity_type": "country", "entity_id": "Country:USA", "label": "USA"}
   ],
   "question_rules": {

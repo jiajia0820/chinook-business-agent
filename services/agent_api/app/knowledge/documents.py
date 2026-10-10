@@ -102,15 +102,30 @@ def _read_docx(path: Path, doc: dict, max_chars: int) -> tuple[ChunkRecord, ...]
         raise DocumentProcessingError(doc["doc_id"], "DOCX_PARSE_FAILED") from exc
     records: list[ChunkRecord] = []
     heading = "正文"
-    paragraph_number = 0
-    for paragraph in root.findall(".//w:p", ns):
-        paragraph_number += 1
+    paragraphs = root.findall('.//w:p', ns)
+    positions = {id(item): i for i,item in enumerate(paragraphs,1)}
+    body = root.find('./w:body', ns)
+    for paragraph in list(body) if body is not None else paragraphs:
+        if paragraph.tag == f"{{{ns['w']}}}tbl":
+            table_rows=[]
+            for row in paragraph.findall('./w:tr', ns):
+                cells=[''.join(node.text or '' for node in cell.findall('.//w:t', ns)).strip() for cell in row.findall('./w:tc', ns)]
+                table_rows.append(' | '.join(cells))
+            if table_rows:
+                first=next(iter(paragraph.findall('.//w:p',ns)),None)
+                location=f'#P{positions.get(id(first),1)}-table'
+                records.extend(_split_text('\n'.join(table_rows), doc=doc, location=location,
+                    section=heading+' / 表格', max_chars=max_chars))
+            continue
+        if paragraph.tag != f"{{{ns['w']}}}p":
+            continue
+        paragraph_number = positions[id(paragraph)]
         text = "".join(node.text or "" for node in paragraph.findall(".//w:t", ns)).strip()
         if not text:
             continue
         style = paragraph.find("./w:pPr/w:pStyle", ns)
         style_name = style.get(f"{{{ns['w']}}}val", "") if style is not None else ""
-        if style_name.lower().startswith("heading"):
+        if style_name.lower().startswith("heading") or re.match(r'^(?:[一二三四五六七八九十]+[、\s]|附件\s*\d)',text):
             heading = text
         records.extend(_split_text(
             text, doc=doc, location=f"#P{paragraph_number}", section=heading,
@@ -137,6 +152,13 @@ def _read_pdf(path: Path, doc: dict, max_chars: int) -> tuple[ChunkRecord, ...]:
             text, doc=doc, location=f"#P{number}", page=number,
             section=f"第{number}页", max_chars=max_chars,
         ))
+        # Preserve compact tables so identity, amount and count stay together.
+        headers=list(re.finditer(r'(?m)^统计范围\s*$',text))
+        for table_index,header in enumerate(headers):
+            start=max(0,text.rfind('\n',0,max(0,header.start()-80)))
+            end=headers[table_index+1].start() if table_index+1<len(headers) else len(text)
+            records.extend(_split_text(text[start:end],doc=doc,location=f'#P{number}:T{table_index}',page=number,
+                section=f'第{number}页 / 表格上下文',max_chars=max_chars))
     if not records:
         raise DocumentProcessingError(doc["doc_id"], "PDF_EMPTY")
     return tuple(records)
@@ -169,7 +191,14 @@ def _read_png(path: Path, doc: dict, max_chars: int) -> tuple[ChunkRecord, ...]:
         ))
     if not records:
         raise DocumentProcessingError(doc["doc_id"], "OCR_EMPTY")
-    return tuple(records)
+    # Keep all original OCR locators, and add bounded context windows so a
+    # title-only hit can still carry materials/deadlines from the same poster.
+    full_text='\n'.join(record.text for record in records)
+    bounds=[min(record.bbox[0] for record in records),min(record.bbox[1] for record in records),
+        max(record.bbox[2] for record in records),max(record.bbox[3] for record in records)]
+    parents=list(_split_text(full_text,doc=doc,location=f'#B1-B{len(records)}',page=1,
+        bbox=bounds,section='OCR / 全图上下文',max_chars=max_chars))
+    return tuple([*parents,*records])
 
 
 def read_document(root: Path, doc: dict, *, max_chars: int = 1200) -> tuple[ChunkRecord, ...]:

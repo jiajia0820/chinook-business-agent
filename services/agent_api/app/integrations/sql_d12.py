@@ -1,18 +1,12 @@
 """Real C SQL + A D12 instance, used by the offline API lifespan; no Calculator."""
 
 from dataclasses import dataclass
-from decimal import Decimal
 from pathlib import Path
 
 from ..contracts import ApiError, RetrievalRequest, RetrievalResponse
 from ..core.errors import ApplicationError
 from ..knowledge.d12 import KNOWLEDGE_ROOT, D12Index, load_d12_index
 from ..knowledge.index import KnowledgeIndex, load_knowledge_index
-from ..evidence.models import CalculationEvidenceBundle, DocumentLocator, DocumentScalarEvidence, EvidencePeriod, EvidenceScope, FormulaEvidence, SqlScalarEvidence
-from ..evidence.binding import result_hash, task_period, task_scope, comparison_period
-from ..tools.references import sql_cell_ref
-import hashlib
-import re
 from ..profiles import ProfileRegistry
 from ..runtime import ToolContext, ToolSpec
 from .c_offline import OfflineSqlIntegration, create_canonical_sql_integration, create_offline_sql_integration
@@ -42,65 +36,7 @@ class KnowledgeRagAdapter:
         return await self.executor.run(lambda: self.index.retrieve(request), deadline=context.deadline)
 
 
-def _business_evidence_resolver(index: KnowledgeIndex):
-    def resolve(task, sql, rag, calculation_id, context):
-        if not task.needs_calculation or not sql or not rag or not sql.sql_results or not rag.chunks:
-            return None
-        function = {"target_attainment": "attainment_rate", "target_difference": "difference", "growth_rate": "growth_rate"}.get(task.intent)
-        if function is None:
-            return None
-        metric_id = task.business_metric_ids[0] if task.business_metric_ids else "sales_amount"
-        period = task_period(task)
-        scope = task_scope(task)
-        prior = comparison_period(task) if function == "growth_rate" else None
-        documents = {chunk.chunk_id: chunk for chunk in rag.chunks}
-        target = next((chunk for chunk in rag.chunks if chunk.doc_id == "D06" and ("Rock" in chunk.text or "50.00" in chunk.text)), None)
-        if function == "growth_rate":
-            formula_text = next((chunk for chunk in rag.chunks if chunk.doc_id == "D01" and ("period_over_period_growth" in chunk.text or "增长" in chunk.text)), None)
-            if formula_text is None:
-                return None
-            locator = DocumentLocator(chunk_id=formula_text.chunk_id, doc_id=formula_text.doc_id, version="V1.0",
-                content_sha256=hashlib.sha256(formula_text.text.encode("utf-8")).hexdigest(), source_uri=formula_text.source_uri,
-                start=0, end=min(len(formula_text.text), 1200))
-        else:
-            if target is None:
-                return None
-            numeric = re.search(r"(?<![\w.])50\.00(?![\w.])", target.text)
-            if numeric is None:
-                return None
-            locator = DocumentLocator(chunk_id=target.chunk_id, doc_id=target.doc_id, version="V1.0",
-                content_sha256=hashlib.sha256(target.text.encode("utf-8")).hexdigest(), source_uri=target.source_uri,
-                start=numeric.start(), end=numeric.end())
-            formula_text = next((chunk for chunk in rag.chunks if chunk.doc_id in {"D01", "D06"} and ("销售额达成率" in chunk.text or "销售额差额" in chunk.text)), target)
-        formula_locator = DocumentLocator(chunk_id=formula_text.chunk_id, doc_id=formula_text.doc_id, version="V1.0",
-            content_sha256=hashlib.sha256(formula_text.text.encode("utf-8")).hexdigest(), source_uri=formula_text.source_uri,
-            start=0, end=max(1, len(formula_text.text)))
-        formula = FormulaEvidence(function=function, metric_id=metric_id, period=period, scope=scope,
-            input_unit="USD", result_unit="USD" if function == "difference" else "%",
-            confirmed=True, locator=formula_locator)
-        result = sql.sql_results[0]
-        if function == "growth_rate":
-            if len(sql.sql_results) >= 2:
-                current, previous = sql.sql_results[0], sql.sql_results[1]
-                current_index = previous_index = 0
-            elif len(sql.sql_results) == 1 and len(sql.sql_results[0].rows) >= 2:
-                current, previous = sql.sql_results[0], sql.sql_results[0]
-                current_index, previous_index = 0, 1
-            else:
-                return None
-            operands = {
-                "current": SqlScalarEvidence(metric_id=metric_id, period=period, scope=scope, unit="USD", value=Decimal(str(current.rows[current_index]["sales_amount"])).quantize(Decimal("0.000001")), confirmed=True, query_id=current.query_id, row_index=current_index, column="sales_amount", result_sha256=result_hash(current)),
-                "previous": SqlScalarEvidence(metric_id=metric_id, period=prior, scope=scope, unit="USD", value=previous.rows[previous_index]["sales_amount"], confirmed=True, query_id=previous.query_id, row_index=previous_index, column="sales_amount", result_sha256=result_hash(previous)),
-            }
-        else:
-            actual = Decimal(str(result.rows[0]["sales_amount"])).quantize(Decimal("0.000001"))
-            operands = {"actual": SqlScalarEvidence(metric_id=metric_id, period=period, scope=scope, unit="USD", value=actual, confirmed=True, query_id=result.query_id, row_index=0, column="sales_amount", result_sha256=result_hash(result)),
-                "target": DocumentScalarEvidence(metric_id=metric_id, period=period, scope=scope, unit="USD", value=50, confirmed=True, locator=locator)}
-        return CalculationEvidenceBundle(request_id=context.request_id, session_id=context.session_id, profile_id=context.profile_id,
-            calculation_id=calculation_id, source_mode="verified_business", function=function,
-            operands=operands, formula=formula)
-    return resolve
-
+from .business_calculation import create_business_resolver as _business_evidence_resolver
 
 @dataclass
 class OfflineKnowledgeIntegration:

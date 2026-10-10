@@ -109,7 +109,7 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
         return {
             "memory": memory, "parsed": {}, "status": "", "route": "clarification",
             "tool_plan": [], "sql_outcome": None, "retrieval_outcome": None,
-            "calculations": [], "calculation_binding": None, "calculation_evidence": None, "evidence_refs": [],
+            "calculations": [], "calculation_binding": None, "calculation_evidence": None, "calculation_audits":[], "evidence_refs": [],
             "events": [], "node_path": ["initialize_turn"], "error": None, "response": None,
             "limitations": [source_banner, "当前解析覆盖已登记的业务指标、时间和实体范围；会话仅在本进程内保留。", *profile_limitations],
         }
@@ -180,6 +180,9 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
         task = ParsedTurn.model_validate(state["parsed"]).task
         request = AskRequest.model_validate(state["request"])
         retrieval_query = task.original_question if task.route == "cross_source" else task.normalized_question
+        if task.needs_calculation:
+            retrieval_query += ' ' + {'target_difference':'目标 销售额差额 销售额达成率', 'target_attainment':'目标 销售额达成率 销售额差额',
+                'growth_rate':'销售额 增长率', 'average_order_value':'客单价', 'document_sum':'月度分解'}.get(task.intent,'')
         payload = RetrievalRequest(retrieval_id="retrieval-" + str(uuid.uuid4()), profile_id=state["profile_id"], query=retrieval_query, filters={"slots": task.slots, "business_metric_ids": task.business_metric_ids}, top_k=request.options.top_k)
         outcome = await runtime.run("rag.retrieve", payload, context(state))
         return tool_update(state, "rag", outcome, "retrieval_outcome", list(outcome.source_refs))
@@ -213,6 +216,46 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
     async def calculate(state: AgentState):
         task = ParsedTurn.model_validate(state["parsed"]).task
         sql, rag = _models(state)
+        if execution_mode=='offline_sql_d12_integration' and evidence_resolver is not None:
+            jobs=[]
+            for metric in task.business_metric_ids:
+                if metric not in {'sales_amount','units_sold','average_order_value'}:
+                    continue
+                primary=task.model_copy(deep=True)
+                primary.business_metric_ids=[metric]
+                jobs.append(primary)
+                secondary={'target_attainment':'target_difference','target_difference':'target_attainment','growth_rate':'period_difference'}.get(task.intent)
+                if secondary:
+                    jobs.append(primary.model_copy(update={'intent':secondary},deep=True))
+            current=state
+            completed=[]
+            audits=[]
+            try:
+                for job in jobs:
+                    calculation_id='calc-'+str(uuid.uuid4())
+                    invocation_context=context(current)
+                    bundle=evidence_resolver(job,sql,rag,calculation_id,invocation_context)
+                    if bundle is None:
+                        raise ValueError('incomplete operation binding')
+                    authorized=authorize_calculation(bundle,task=job,sql=sql,rag=rag,profile=profiles.get(state['profile_id']),
+                        context=invocation_context,calculation_id=calculation_id,expected_mode='verified_business')
+                    invocation_context=invocation_context.model_copy(update={'calculation_permit':authorized.permit})
+                    outcome=await runtime.run('calculator.calculate',authorized.request,invocation_context)
+                    updates=tool_update(current,'calculate',outcome,'calculation_binding',[])
+                    if not outcome.succeeded:
+                        raise ValueError('calculation tool failed')
+                    current={**current,**updates}
+                    completed.append(outcome.data.model_dump(mode='json'))
+                    audits.append({'task':job.model_dump(mode='json'),'binding':authorized.request.model_dump(mode='json'),
+                        'audit':authorized.audit,'calculation_id':calculation_id})
+                if not completed:
+                    raise ValueError('no bound operations')
+                return {**{key:current[key] for key in ('events','node_path','status','route','error','evidence_refs')},
+                    'calculations':completed,'calculation_audits':audits,'calculation_binding':audits[0]['binding'],
+                    'calculation_evidence':audits[0]['audit']}
+            except Exception:
+                return mark(state,'calculate',status='insufficient_evidence',calculations=[],calculation_audits=[],
+                    limitations=[*state['limitations'],'至少一项计算缺少实体、周期、单位或本轮来源绑定；未输出完整计算结论。'])
         calculation_id = "calc-" + str(uuid.uuid4())
         invocation_context = context(state)
         audit = None
@@ -301,6 +344,7 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
                 calculations=tuple(Calculation.model_validate(item) for item in state["calculations"]),
                 binding=CalculationRequest.model_validate(state["calculation_binding"]) if state["calculation_binding"] else None,
                 binding_audit=state["calculation_evidence"], available_source_refs=tuple(state["evidence_refs"]),
+                calculation_audits=tuple(state.get('calculation_audits',[])),
                 events=tuple(events), limitations=tuple(limitations), clarification=clarification,
                 error=ApiError.model_validate(state["error"]) if status == "error" else None,
                 parser_reason=parsed.reason, reset_context=parsed.decision == "cancelled",

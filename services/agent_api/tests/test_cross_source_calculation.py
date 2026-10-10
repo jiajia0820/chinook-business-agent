@@ -22,7 +22,8 @@ class CrossSourceCalculationTests(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(response.calculations[0].result, 95.04, places=2)
         self.assertTrue(any(chunk.doc_id == "D06" for chunk in response.documents))
         self.assertTrue(response.sql_results[0].sql)
-        self.assertEqual([step.tool for step in response.trace], ["sql.task", "rag.retrieve", "calculator.calculate"])
+        self.assertEqual([step.tool for step in response.trace], ["sql.task", "rag.retrieve", "calculator.calculate", "calculator.calculate"])
+        self.assertEqual({item.result for item in response.calculations}, {95.04, -2.48})
 
     async def test_q3_vs_q2_growth_binds_two_periods(self):
         response = await self.service.ask(

@@ -41,6 +41,8 @@ def parse_query_intent(question, metric_ids=()):
             result.update(top_n=number, order_by='sales_amount', order_desc=True)
     if '销售额最高' in q:
         result.update(order_by='sales_amount', order_desc=True)
+        if result.get('dimension') == 'genre' and 'top_n' not in result:
+            result['top_n'] = 1
     elif result.get('dimension') == 'support_rep':
         result.update(order_by='purchasing_customers', order_desc=True)
     measures = [m for m in metric_ids if m in MEASURES]
