@@ -42,3 +42,9 @@ class DocumentAnswerTests(unittest.TestCase):
         docs = [chunk("D03", "Metal为Genre:3，不自动合并Heavy Metal。")]
         payload = json.dumps({"claims": [{"text": "Metal为Genre:3，不自动合并Heavy Metal。", "evidence": [{"chunk_id": "D03-1", "quote": docs[0].text}]}]})
         self.assertEqual(validate_model_answer(payload, docs), "Metal为Genre:3，不自动合并Heavy Metal。\n依据：[D03]。")
+
+    def test_rock_alias_answer_preserves_rock_and_roll_boundary(self):
+        docs = [chunk("D03", "“Rock”“摇滚”“Rock类”默认映射Genre:1。Rock And Roll是Genre:5。")]
+        answer = draft_answer("“摇滚乐”在分类表里通常对应什么？", docs)
+        self.assertIn("Genre:1", answer)
+        self.assertIn("Genre:5", answer)

@@ -56,7 +56,7 @@ def comparison(question, documents):
 def classification(question, documents):
     if not any(word in question for word in ("归类", "并入", "分类", "Genre")):
         return None
-    if not any(word in question for word in ("Metal", "重金属", "Heavy Metal", "摇滚", "Rock")):
+    if not any(word in question for word in ("Metal", "重金属", "Heavy Metal", "摇滚", "摇滚乐", "Rock")):
         return None
     candidates = [item for item in documents if item.doc_id == "D03"]
     if not candidates:
@@ -65,6 +65,10 @@ def classification(question, documents):
     if "HeavyMetal是Genre:13" in text and "Metal" in text and "Genre:3" in text:
         item = next(item for item in candidates if "Genre:13" in item.text and "Genre:3" in item.text)
         return cited("Metal默认对应 Genre:3；Heavy Metal（重金属）对应 Genre:13，不自动并入 Metal。", [item])
+    if "摇滚乐" in question or "Rock And Roll" in question:
+        if "Genre:1" in text and "Genre:5" in text:
+            item = next(item for item in candidates if "Genre:1" in item.text and "Genre:5" in item.text)
+            return cited("“摇滚”默认对应 Genre:1；Rock And Roll（摇滚乐）对应 Genre:5，两个分类分开维护。", [item])
     return None
 
 
