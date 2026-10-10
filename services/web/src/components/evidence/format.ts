@@ -15,7 +15,7 @@ export function citationTargets(response: AskResponse): CitationTarget[] {
 
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-const ANSWER_NOTE_LINE = /^来源：(真实|SQL)/;
+const ANSWER_NOTE_LINE = /^(来源：(真实|SQL)|依据：)/;
 
 /** Separate source-banner/provenance boilerplate lines from the substantive answer so the UI can lead with the conclusion. */
 export function splitAnswer(answer: string): { conclusion: string; notes: string } {

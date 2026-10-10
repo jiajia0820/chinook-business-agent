@@ -141,6 +141,17 @@ describe('typed API client', () => {
       expect((await createAskClient({ fetch: fakeFetch }).ask(request, { requestId: copySample().request_id })).kind).toBe('business');
     }
   });
+  it('accepts structured knowledge metadata on document evidence', async () => {
+    const body = copySample();
+    body.documents = [{
+      chunk_id: 'D08@fixture:#P1:0:fixture', doc_id: 'D08', title: '2025Q3经营复盘',
+      doc_type: 'pdf', page: 1, section: null, text: 'fixture', score: 1,
+      source_uri: 'data/knowledge/D08_2025Q3经营复盘.pdf#P1', retrieval_id: null,
+      bbox: null, structured_data: { row_key: '2025Q3', metrics: ['sales_amount'] },
+    } as never];
+    const result = await createAskClient({ fetch: responding(body) }).ask(request, { requestId: body.request_id });
+    expect(result.kind).toBe('business');
+  });
   it('does not automatically retry network failures or expose raw exceptions', async () => {
     const fakeFetch = vi.fn<typeof fetch>(async () => { throw new Error('UNIT-PRIVATE credential-like error'); });
     const result = await createAskClient({ fetch: fakeFetch }).ask(request);

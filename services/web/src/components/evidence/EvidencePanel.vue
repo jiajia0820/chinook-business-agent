@@ -15,8 +15,10 @@ const docIds = computed(() => (props.response.documents ?? []).map((document) =>
 
 <template>
   <section class="evidence-panel" aria-label="本轮证据与口径" data-testid="evidence-panel" :data-request-id="response.request_id">
+    <details class="evidence-disclosure" data-testid="evidence-disclosure">
+    <summary>查看回答依据与原文 <span class="evidence-count">{{ response.documents?.length ?? 0 }} 段文档 · {{ response.sql_results?.length ?? 0 }} 个查询</span></summary>
     <h3>本轮证据与口径</h3>
-    <p class="helper">仅展示本轮后端返回的资料；存在片段不等于结论成立，没有人工标记也不构成生产真实性认证。</p>
+    <p class="helper">可展开查看引用原文、数据和计算记录，核对回答依据。</p>
     <p v-if="fixtureSources" class="evidence-warning" role="note" data-testid="fixture-warning">检测到人工测试来源标记：仅用于验证展示/计算流程，不代表 A/C 真实资料或生产经营结论。</p>
     <details class="conditions" data-testid="parsed-conditions">
       <summary>查看本轮解析条件</summary>
@@ -39,11 +41,14 @@ const docIds = computed(() => (props.response.documents ?? []).map((document) =>
     <p v-else class="evidence-empty" data-testid="sql-none" title="本轮未返回 SQL 结果，不代表业务数值为 0。">SQL 与查询结果：本轮无</p>
     <section v-if="response.documents?.length" class="evidence-section" aria-label="文档片段">
       <h4>文档片段</h4>
+      <details data-testid="documents-disclosure"><summary>查看 {{ response.documents.length }} 段引用原文</summary>
       <DocumentEvidence v-for="(document, index) in response.documents" :key="`${response.request_id}-${document.chunk_id}-${index}`" :document="document" />
+      </details>
     </section>
     <p v-else class="evidence-empty" data-testid="documents-none" title="本轮未返回文档片段，不代表资料不存在或已具备足够证据。">文档片段：本轮无</p>
     <MetricDefinitions :metrics="response.metric_definitions ?? []" :available-doc-ids="docIds" @focus-ref="emit('focus-ref', $event)" />
     <CalculationEvidence :calculations="response.calculations ?? []" :fixture-sources="fixtureSources" />
     <TraceEvidence :steps="response.trace ?? []" :show-trace-requested="showTraceRequested" />
+    </details>
   </section>
 </template>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, onUnmounted } from 'vue';
 import type { AskClientResult } from '../api/client';
 import type { AskOptions, AskStatus, Route } from '../contracts';
 import CopyButton from './CopyButton.vue';
@@ -17,20 +17,41 @@ const titles: Record<AskStatus, string> = {
 };
 const routes: Record<Route, string> = { sql: '数据库问数', rag: '文档检索', cross_source: '跨源', clarification: '澄清', unsupported: '不支持' };
 const citations = computed(() => business.value ? citationTargets(business.value) : []);
+const documentCitations = computed(() => {
+  const seen = new Set<string>();
+  return (business.value?.documents ?? []).flatMap((document) => {
+    if (seen.has(document.doc_id)) return [];
+    seen.add(document.doc_id);
+    return [{ refId: `ev-doc-${document.chunk_id}`, token: `[${document.doc_id}]`, label: `${document.doc_id} · ${document.title}`, kind: 'document' as const }];
+  });
+});
+const inlineCitations = computed(() => [...citations.value, ...documentCitations.value]);
+const citationChips = computed(() => [...citations.value.filter((target) => target.kind !== 'document'), ...documentCitations.value]);
 // The answer leads with the substantive conclusion; source-banner/provenance lines are demoted to small notes below it.
 const answerSplit = computed(() => (business.value?.answer != null ? splitAnswer(business.value.answer) : null));
-const conclusionSegments = computed(() => (answerSplit.value ? answerSegments(answerSplit.value.conclusion, citations.value) : []));
-const noteSegments = computed(() => (answerSplit.value?.notes ? answerSegments(answerSplit.value.notes, citations.value) : []));
+const conclusionSegments = computed(() => (answerSplit.value ? answerSegments(answerSplit.value.conclusion, inlineCitations.value) : []));
+const noteSegments = computed(() => (answerSplit.value?.notes ? answerSegments(answerSplit.value.notes, inlineCitations.value) : []));
+const highlightTimers = new Set<number>();
+onUnmounted(() => highlightTimers.forEach((timer) => window.clearTimeout(timer)));
 // Citation click: expand, scroll to and briefly highlight the referenced evidence card.
 function focusEvidence(refId: string) {
   const element = document.getElementById(refId);
   if (!element) return;
+  let parent = element.parentElement;
+  while (parent) {
+    if (parent instanceof HTMLDetailsElement) parent.open = true;
+    parent = parent.parentElement;
+  }
   element.querySelectorAll('details').forEach((details) => { details.open = true; });
   // Cards taller than the viewport must keep their head (SQL text, metric definition) on screen, so align those to the top.
   const block = element.getBoundingClientRect().height > window.innerHeight * 0.8 ? 'start' : 'center';
-  element.scrollIntoView?.({ behavior: 'smooth', block });
+  const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  element.scrollIntoView?.({ behavior: reducedMotion ? 'auto' : 'smooth', block });
+  element.setAttribute('tabindex', '-1');
+  element.focus({ preventScroll: true });
   element.classList.add('evidence-highlight');
-  window.setTimeout(() => element.classList.remove('evidence-highlight'), 2400);
+  const timer = window.setTimeout(() => { element.classList.remove('evidence-highlight'); highlightTimers.delete(timer); }, 2400);
+  highlightTimers.add(timer);
 }
 </script>
 
@@ -42,12 +63,12 @@ function focusEvidence(refId: string) {
         <span class="status-tag" :data-status="business.status">{{ business.status }}</span>
       </div>
       <div v-if="business.answer !== null" class="answer-block" data-testid="answer">
-        <p class="answer-conclusion" data-testid="answer-conclusion"><CopyButton v-if="business.answer" class="answer-copy" :text="business.answer" label="复制答案" /><template v-for="(segment, index) in conclusionSegments" :key="index"><button v-if="segment.refId" type="button" class="cite-link" :data-testid="`answer-ref-${index}`" @click="focusEvidence(segment.refId)">{{ segment.text }}</button><template v-else>{{ segment.text }}</template></template></p>
+        <p class="answer-conclusion" data-testid="answer-conclusion"><CopyButton v-if="business.answer" class="answer-copy" :text="answerSplit?.conclusion ?? business.answer" label="复制答案" /><template v-for="(segment, index) in conclusionSegments" :key="index"><button v-if="segment.refId" type="button" class="cite-link" :data-testid="`answer-ref-${index}`" @click="focusEvidence(segment.refId)">{{ segment.text }}</button><template v-else>{{ segment.text }}</template></template></p>
         <p v-if="noteSegments.length" class="answer-notes" data-testid="answer-notes"><template v-for="(segment, index) in noteSegments" :key="`note-${index}`"><button v-if="segment.refId" type="button" class="cite-link" :data-testid="`answer-note-ref-${index}`" @click="focusEvidence(segment.refId)">{{ segment.text }}</button><template v-else>{{ segment.text }}</template></template></p>
       </div>
       <div v-if="citations.length" class="citation-bar" data-testid="citation-bar" aria-label="回答引用">
         <span class="citation-bar-label">回答引用</span>
-        <button v-for="(target, index) in citations" :key="`${target.refId}-${index}`" type="button" class="citation-chip" :data-kind="target.kind" :data-testid="`citation-chip-${index}`" :title="target.label" @click="focusEvidence(target.refId)">{{ target.label }}</button>
+        <button v-for="(target, index) in citationChips" :key="`${target.refId}-${index}`" type="button" class="citation-chip" :data-kind="target.kind" :data-testid="`citation-chip-${index}`" :title="target.label" @click="focusEvidence(target.refId)">{{ target.label }}</button>
       </div>
       <dl class="result-meta">
         <div><dt>业务路由</dt><dd>{{ routes[business.route] }} · {{ business.route }}</dd></div>

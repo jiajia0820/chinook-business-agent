@@ -99,6 +99,30 @@ describe('retained 4B result branches alongside 4C evidence', () => {
 });
 
 describe('answer-to-evidence citation linking', () => {
+  it('copies the user-facing conclusion without source boilerplate', async () => {
+    const result = business();
+    result.response.answer = '来源：真实 D01–D12 业务文档。\n销售额增加了3.96美元。\n依据：[D07]、[D08]。';
+    const writeText = vi.fn(async (_text: string) => undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    const wrapper = mount(AskResult, { props: { result } });
+    await wrapper.get('[data-testid="answer-conclusion"] .icon-button').trigger('click');
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith('销售额增加了3.96美元。'));
+  });
+
+  it('opens the collapsed evidence section when a document citation is clicked', async () => {
+    const result = business();
+    result.response.answer = '分类默认分开统计。\n依据：[D03]。';
+    result.response.documents = [{ doc_id: 'D03', chunk_id: 'doc-3', title: '分类说明', doc_type: 'docx', text: '分类原文', source_uri: 'knowledge/D03' }];
+    const wrapper = mount(AskResult, { props: { result }, attachTo: document.body });
+    const section = wrapper.get('[data-testid="documents-disclosure"]').element as HTMLDetailsElement;
+    expect(section.open).toBe(false);
+    const ref = wrapper.findAll('.cite-link').find((item) => item.text() === '[D03]');
+    expect(ref).toBeDefined();
+    await ref!.trigger('click');
+    expect(section.open).toBe(true);
+    expect(document.getElementById('ev-doc-doc-3')!.classList.contains('evidence-highlight')).toBe(true);
+  });
+
   function answeredWithSql() {
     const response = actualResponse('客户数量是多少？');
     const queryId = response.sql_results![0]!.query_id;

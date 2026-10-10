@@ -130,10 +130,15 @@ class OfflineKnowledgeIntegration:
         from ..evidence.models import UnavailableEvidenceResolver
         from ..response import FormalResponseComposer
         from ..services.graph_ask_service import GraphAskService
+        answer_model = None
+        if self.knowledge_kind == "knowledge" and self.profiles.get("chinook-music").sql_backend.model_mode == "live":
+            from backend.sql_module.generation import HTTPJSONModel
+            answer_model = HTTPJSONModel.from_env()
         composer = (
             FormalResponseComposer.for_sql_d12(self.profiles.get("chinook-music"), self.rag_tool.index)
             if self.knowledge_kind == "d12"
-            else FormalResponseComposer.for_sql_knowledge(self.profiles.get("chinook-music"), self.rag_tool.index)
+            else FormalResponseComposer.for_sql_knowledge(self.profiles.get("chinook-music"), self.rag_tool.index,
+                 answer_model=answer_model, executor=self.sql_tool.executor)
         )
         return GraphAskService(self.profiles, self.runtime, evidence_resolver=_business_evidence_resolver(self.rag_tool.index) if self.knowledge_kind == "knowledge" else UnavailableEvidenceResolver(),
             response_composer=composer, execution_mode="offline_sql_d12_integration")

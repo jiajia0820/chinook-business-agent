@@ -63,6 +63,33 @@ class AllDocumentsRagTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.route, "rag")
         self.assertEqual({chunk.doc_id for chunk in response.documents}, {"D07", "D08"})
 
+    async def test_multidoc_answer_is_a_conclusion_separate_from_source_chunks(self):
+        response = await self.ask("结合二季度和三季度复盘，销售额、订单数和购买客户数发生了什么变化？")
+        self.assertEqual(response.status, "answered")
+        self.assertIn("108.90", response.answer)
+        self.assertIn("112.86", response.answer)
+        self.assertIn("3.96", response.answer)
+        self.assertIn("19", response.answer)
+        self.assertIn("21", response.answer)
+        self.assertNotIn("【D07", response.answer)
+        self.assertNotIn("检索到", response.answer)
+
+    async def test_alias_answer_is_concise_and_keeps_raw_text_in_documents(self):
+        response = await self.ask("重金属是否并入 Metal？")
+        self.assertEqual(response.status, "answered")
+        self.assertIn("Genre:3", response.answer)
+        self.assertIn("Genre:13", response.answer)
+        self.assertNotIn("这份说明用于处理", response.answer)
+        self.assertNotIn("【D03", response.answer)
+        self.assertTrue(any("Heavy Metal" in chunk.text for chunk in response.documents))
+
+    async def test_poster_answer_is_concise_and_keeps_ocr_evidence_separate(self):
+        response = await self.ask("活动报名截止时间和需要提交的材料是什么？")
+        self.assertEqual(response.status, "answered")
+        self.assertIn("10月13日18:00", response.answer)
+        self.assertIn("商品清单", response.answer)
+        self.assertNotIn("【D11", response.answer)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -348,7 +348,7 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
                 status = "answered"
         return mark(state, "evidence_check", status=status)
 
-    def compose(state: AgentState):
+    async def compose(state: AgentState):
         parsed = ParsedTurn.model_validate(state["parsed"])
         task = parsed.task
         memory = SessionMemory.model_validate(state["memory"])
@@ -385,7 +385,7 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
         options = AskRequest.model_validate(state["request"]).options
         limitations = [*state["limitations"], *(sql.limitations if sql else [])]
         if response_composer is not None:
-            response = response_composer.compose(ComposeContext(
+            compose_context = ComposeContext(
                 request_id=state["request_id"], session_id=state["session_id"], profile=profiles.get(state["profile_id"]),
                 status=status, route=state["route"], task=task, options=options, sql=sql, rag=rag,
                 calculations=tuple(Calculation.model_validate(item) for item in state["calculations"]),
@@ -394,7 +394,10 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
                 events=tuple(events), limitations=tuple(limitations), clarification=clarification,
                 error=ApiError.model_validate(state["error"]) if status == "error" else None,
                 parser_reason=parsed.reason, reset_context=parsed.decision == "cancelled",
-            ))
+            )
+            if hasattr(response_composer, "prepare"):
+                compose_context = await response_composer.prepare(compose_context)
+            response = response_composer.compose(compose_context)
             if response.status != "clarification_required":
                 memory.pending = None
                 memory.last_task = task if response.status == "answered" else None

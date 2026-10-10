@@ -34,6 +34,7 @@ class ComposeContext:
     error: ApiError | None = None
     parser_reason: str | None = None
     reset_context: bool = False
+    document_answer: str | None = None
 
 
 class ResponseComposer(Protocol):

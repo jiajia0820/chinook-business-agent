@@ -1,8 +1,9 @@
 """Finite renderers backed by this-turn sources, not generated business claims."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 import unicodedata
+import time
 
 from ..contracts import ApiError, AskResponse, Intent
 from ..evidence.binding import authorize_calculation
@@ -11,6 +12,7 @@ from ..knowledge.d12 import D12_SHA256, SOURCE_PREFIX
 from ..runtime import ToolContext, events_to_trace
 from ..tools.local_calculator import FORMULAS, calculate_decimal
 from .models import ComposeContext, ExecutionMode
+from .document_answer import draft_answer, comparison, poster, model_messages, validate_model_answer
 
 
 class EvidenceGap(ValueError):
@@ -99,7 +101,7 @@ def expected_result_evidence(metric_ids):
 
 
 class FormalResponseComposer:
-    def __init__(self, policy: SourcePolicy):
+    def __init__(self, policy: SourcePolicy, *, answer_model=None, executor=None):
         if policy.execution_mode not in BANNERS or not policy.profile_id:
             raise ValueError("unknown or unscoped source policy")
         if policy.execution_mode.startswith("offline_sql") and not policy.database_name:
@@ -111,6 +113,8 @@ class FormalResponseComposer:
         if policy.model_mode not in {"offline", "live"}:
             raise ValueError("unknown model mode")
         self.policy = policy
+        self.answer_model = answer_model
+        self.executor = executor
         self.execution_mode = policy.execution_mode
         self.source_banner = (
             LIVE_SQL_BANNER
@@ -135,7 +139,7 @@ class FormalResponseComposer:
             profile.sql_backend.display_name, records, model_mode=profile.sql_backend.model_mode))
 
     @classmethod
-    def for_sql_knowledge(cls, profile, index):
+    def for_sql_knowledge(cls, profile, index, *, answer_model=None, executor=None):
         records = tuple(
             DocumentSnapshot(
                 item.record.chunk_id, item.record.doc_id, item.record.title,
@@ -144,8 +148,36 @@ class FormalResponseComposer:
             )
             for item in index.chunks
         )
-        return cls(SourcePolicy("offline_sql_d12_integration", profile.profile_id,
-            profile.sql_backend.display_name, records, True, profile.sql_backend.model_mode))
+        composer = cls(SourcePolicy("offline_sql_d12_integration", profile.profile_id,
+            profile.sql_backend.display_name, records, True, profile.sql_backend.model_mode),
+            answer_model=answer_model, executor=executor)
+        return composer
+
+    async def prepare(self, context: ComposeContext) -> ComposeContext:
+        if context.status != "answered" or context.route != "rag" or not self.policy.allow_business_calculation or not context.rag or not context.task:
+            return context
+        try:
+            self._verify_sources(context)
+        except SourceMismatch:
+            return context
+        question, documents = context.task.normalized_question, context.rag.chunks
+        answer = comparison(question, documents) or poster(question, documents)
+        if answer is None and self.answer_model is not None and self.executor is not None:
+            deadline = time.monotonic() + 15
+            def generate():
+                payload = self.answer_model.generate_json(model_messages(question, documents), {"type": "object"}, deadline)
+                return validate_model_answer(payload, documents)
+            try:
+                answer = await self.executor.run(generate, deadline=deadline)
+            except Exception:
+                # Cancellation is not swallowed. Invalid/late model output
+                # falls back to an evidence-based extract, never raw pages.
+                answer = None
+        answer = answer or draft_answer(question, documents)
+        if answer is None:
+            return replace(context, status="insufficient_evidence", parser_reason=None,
+                           limitations=(*context.limitations, "现有文档片段未覆盖问题所需事实。"))
+        return replace(context, document_answer=answer)
 
     @classmethod
     def for_calculation_fixture(cls, profile):
@@ -246,6 +278,11 @@ class FormalResponseComposer:
         documents = context.rag.chunks if context.rag else []
         if not documents:
             raise EvidenceGap()
+        if self.policy.allow_business_calculation:
+            answer = context.document_answer or draft_answer(context.task.normalized_question, documents)
+            if answer is None:
+                raise EvidenceGap()
+            return answer
         seen, blocks = set(), []
         for chunk in documents:
             if chunk.chunk_id in seen:
@@ -451,7 +488,8 @@ class FormalResponseComposer:
             answer = "本轮处理失败，未输出成功数值结论；请查看结构化 error。"
         if status != "answered":
             calculations = []
-        answer = self.source_banner + "\n" + answer
+        banner = "来源：真实 D01–D12 业务文档；下方可查看原文和定位。" if context.route == "rag" and self.policy.allow_business_calculation else self.source_banner
+        answer = banner + "\n" + answer
         return AskResponse(request_id=context.request_id, session_id=context.session_id, profile_id=context.profile.profile_id,
             status=status, answer=answer, route=context.route, intent=Intent(name=context.task.intent if context.task else "reset_context" if context.reset_context else "unknown"),
             entities=context.task.entities if context.task else [], time_range=context.task.time_range if context.task else None,
