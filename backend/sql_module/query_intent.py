@@ -68,6 +68,9 @@ def parse_query_intent(question, metric_ids=()):
 
 
 def validate_intent(intent):
+    from .business_queries import OPERATIONS, valid_operation
+    if isinstance(intent, dict) and intent.get('operation') in OPERATIONS:
+        return valid_operation(intent)
     allowed = {'dimension', 'top_n', 'order_by', 'order_desc', 'measures', 'include', 'operation'}
     if not isinstance(intent, dict) or set(intent) - allowed:
         return False

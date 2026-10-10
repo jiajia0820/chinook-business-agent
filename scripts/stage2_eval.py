@@ -54,7 +54,7 @@ def metadata(kind, argv):
         'git_status': subprocess.check_output(git + ['status', '--porcelain'], text=True),
         'code_sha256': fingerprint(code),
         'scorer_version': eval_scoring.VERSION,
-        'scorer_sha256': fingerprint([ROOT/'scripts/eval_scoring.py', ROOT/'scripts/run_agent_eval.py']),
+        'scorer_sha256': fingerprint([ROOT/'scripts/eval_scoring.py', ROOT/'scripts/run_agent_eval.py', ROOT/'scripts/stage2_cross_assertions.json']),
         'dataset_sha256': fingerprint((ROOT/'eval/agent').glob('*.json*')),
         'data_sha256': fingerprint([p for p in (ROOT/'data').rglob('*') if p.is_file() and p.suffix in ('.sqlite', '.db', '.pdf', '.png', '.md', '.json')]),
         'model': os.environ.get('LLM_MODEL'), 'endpoint': os.environ.get('LLM_BASE_URL'),
@@ -127,9 +127,13 @@ async def live(out, argv, failure_budget=0):
             response = await original_ask(self, payload, request_id=request_id)
             append('responses.jsonl', {'request_id': request_id, 'question': payload.question,
                 'response': response.model_dump(mode='json'), 'elapsed_ms': round((time.monotonic()-started)*1000)})
-            fallback = [x for x in response.limitations if '受控查询' in x or '降级' in x]
+            fallback = [x for x in response.limitations if ('受控查询' in x or '降级' in x) and '受控业务查询' not in x]
             if fallback:
                 append('model-calls.jsonl', {'request_id': request_id, 'event': 'controlled_fallback', 'details': fallback})
+            business_queries=[x for x in response.limitations if '受控业务查询' in x]
+            if business_queries:
+                append('model-calls.jsonl', {'request_id': request_id, 'event': 'controlled_business_query',
+                    'actual_model_calls_for_step':0,'details':business_queries})
             return response
         except Exception as exc:
             append('responses.jsonl', {'request_id': request_id, 'question': payload.question,

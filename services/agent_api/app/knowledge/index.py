@@ -159,6 +159,11 @@ class KnowledgeIndex:
         for document,words in topics.items():
             if any(word in q for word in words):
                 hinted_docs.add(document)
+        workflow=filters.get('slots',{}).get('business_workflow')
+        if workflow=='customer_segmentation':
+            hinted_docs={'D04'}
+        elif workflow=='poster_candidates':
+            hinted_docs={'D05','D11'}
         if any(word in q for word in ('目标','计划','达标','达成','达到')):
             hinted_docs.add('D06')
         if any(word in q for word in ('达标','达成','达到','实际','差多少','差额','完成了吗','复盘')) and any(word in q for word in ('第三季度','三季度','q3')):
@@ -223,6 +228,19 @@ class KnowledgeIndex:
             if any(term in normalize(item.record.title) for term in query_terms):
                 score += 1.5
             ranked.append((float(score), item))
+        if workflow:
+            def dependency_priority(pair):
+                score,item=pair
+                text=item.record.text
+                if workflow=='customer_segmentation' and item.record.doc_id=='D04':
+                    if '层级 | 名称 | 当季音频销售额' in text: score+=3000
+                    elif '分层金额按客户' in text: score+=2900
+                    elif '本规则 V' in text and '适用于' in text: score+=2800
+                elif workflow=='poster_candidates':
+                    if item.record.doc_id=='D05' and '商品选品' in text and 'TrackId' in text: score+=3000
+                    if item.record.doc_id=='D11' and '全图上下文' in (item.record.section or ''): score+=3000
+                return score,item
+            ranked=[dependency_priority(pair) for pair in ranked]
         ranked.sort(key=lambda pair: (-pair[0], pair[1].record.doc_id, pair[1].record.chunk_id))
         # Reserve coverage for every requested source before filling remaining
         # slots by relevance. A repeated target document cannot crowd out a review.

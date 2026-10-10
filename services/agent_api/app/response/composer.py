@@ -8,6 +8,8 @@ import unicodedata
 from ..contracts import ApiError, AskResponse, Intent
 from ..evidence.binding import authorize_calculation
 from ..evidence.models import CalculationEvidenceBundle
+from ..evidence.business_workflows import WORKFLOWS, WorkflowGap, resolve_sources, conclude
+from ..evidence.claim_comparison import ScalarClaim,compare_claims
 from ..knowledge.d12 import D12_SHA256, SOURCE_PREFIX
 from ..runtime import ToolContext, events_to_trace
 from ..tools.local_calculator import FORMULAS, calculate_decimal
@@ -350,10 +352,55 @@ class FormalResponseComposer:
                 for match in re.finditer(r'(?m)^(\d{4})年(\d{1,2})月\n(\d+\.\d+)',chunk.text):
                     key = f'{match[1]}-{int(match[2]):02}'
                     claim = Decimal(match[3])
-                    if key in monthly and claim != monthly[key]:
+                    scope=task_scope(context.task)
+                    sql_entity='all_audio' if not scope.genre_ids and not scope.country_ids else str((scope.genre_ids,scope.country_ids))
+                    left=ScalarClaim('sales_amount',sql_entity,key,'USD',tuple(scope.media_ids),'actual',monthly.get(key,Decimal(0)),'SQL')
+                    right=ScalarClaim('sales_amount','all_audio',key,'USD',tuple(context.profile.default_media_ids),'actual',claim,chunk.source_uri)
+                    comparison=compare_claims(left,right)
+                    if key in monthly and comparison['status']=='conflict':
                         notes.append(f'来源冲突：{key}，D08文档写 {claim} USD，数据库为 {monthly[key]} USD。'
-                            f'月份及音频范围一致，数值不一致；保留双方来源，不能静默选择文档数值。文档季度合计需同步核对。来源 {chunk.source_uri}')
-        return sql_answer + '\n' + '\n'.join(notes) + '\n' + self._generic_document_answer(context)
+                            f"月份及音频范围一致，差异 {comparison['difference']} USD；数据库用于本轮成交事实，保留文档原值供核对，不能静默覆盖。文档季度合计需同步核对。来源 {chunk.source_uri}")
+                    elif key in monthly and comparison['status']=='not_comparable':
+                        notes.append(f"D08 全部音频月度数值与本轮范围不一致（{','.join(comparison['differences'])}），不能据此认定数值冲突。来源 {chunk.source_uri}")
+        lead=''
+        if context.task.slots.get('query_intent',{}).get('dimension')=='genre':
+            result=context.sql.sql_results[0]
+            top=result.rows[0]
+            if top.get('genre') and type(top.get('sales_amount')) in (int,float):
+                lead=f"{context.task.time_range.label} 销售额最高的音频品类为 {top['genre']}，销售额 {top['sales_amount']:.2f} USD，事实依据：SQL {result.query_id}。\n"
+        guidance=[]
+        for chunk in context.rag.chunks:
+            if chunk.doc_id=='D09' and '专题陈列' in chunk.text and '专辑' in chunk.text:
+                guidance.append(f"运营建议（文档建议，未证明增长原因）：{chunk.text}\n建议来源：{chunk.source_uri}")
+                break
+        return lead+sql_answer+'\n'+'\n'.join(notes+guidance)+'\n'+self._generic_document_answer(context)
+
+    def _business_answer(self,context):
+        try:
+            sources=resolve_sources(context.task,context.rag,context.profile)
+            audit=conclude(sources,context.sql)
+            if audit!=context.business_audit:
+                raise WorkflowGap('本轮结论与当前来源、查询及判定过程不一致。')
+        except WorkflowGap as exc:
+            raise EvidenceConflict(str(exc)) from exc
+        period=context.task.time_range.label
+        decisions=audit['decisions']
+        if sources['intent']=='customer_segmentation':
+            eligible=[d for d in decisions if d['eligible']]
+            lead=f"{period} 购买过 {context.task.entities[0]['label']} 的客户中，属于 A 层重点维护的客户共 {len(eligible)} 人。"
+            lines=[f"CustomerId {d['CustomerId']}（{d['customer']}）：当季全部音频消费额 {d['amount']} USD，达到 D04 的 ≥{sources['threshold']} USD 阈值，判定为 A 层。金额来源：{d['sql_ref']}；购买人群来源：{d['cohort_ref']}。" for d in eligible]
+            if not eligible: lines.append(audit.get('empty_reason') or '查询及比较成功，没有客户达到 A 层阈值。')
+            lines.append(f"购买 {context.task.entities[0]['label']} 只决定入选人群；分层使用同季度全部音频消费额，不是该品类金额。已核对 {len(decisions)} 位去重客户，完整中间结果见 sql_results。")
+            lines.append(f"规则来源：D04 {sources['rule_uri']}（阈值）；{sources['scope_uri']}（计算口径）；规则适用季度 {period}，引用 {sources['period_ref']}。")
+        else:
+            sold=sum(d['sold'] for d in decisions)
+            lead=f"{period} 用户编号范围内符合 D05 候选及 D11 音频主页面条件的商品共 {len(decisions)} 个，其中 {sold} 个有成交。"
+            lines=[f"TrackId {d['TrackId']}，{d['Name']}：{'有成交' if d['sold'] else '零成交（查询成功）'}，销售额 {d['amount']} USD。成交事实来源：{d['sql_ref']}；候选引用 {d['candidate_ref']}；主页面条件引用 {d['poster_ref']}。" for d in decisions]
+            if not decisions: lines.append(audit['empty_reason']+'未查询商品成交，不能据此断言区间内全部商品零成交。')
+            lines.append(f"候选来源：D05 {sources['candidate_uri']}；主页面条件来源：D11 {sources['poster_uri']}。集合由文档候选、海报条件与用户编号范围取交集，未将范围内所有整数当作候选。")
+        if audit.get('query_id'): lines.append('数据库来源：SQL '+audit['query_id']+'。'+SQL_NOTE)
+        lines.append('这些事实只证明历史购买/成交，不证明推荐被接受或活动造成增长。')
+        return lead+'\n'+'\n'.join(lines)
 
     def _d12_answer(self, context):
         task, rag = context.task, context.rag
@@ -431,7 +478,9 @@ class FormalResponseComposer:
             "这仅验证算术与绑定，不能当作真实销售、达标或增长结论。"
         )
         conclusion += (' 未达标。' if calc.result<100 else ' 达标。') if request.function=='attainment_rate' else ''
-        return "\n".join([*rows, scope_text, f"命名函数 {request.function}；公式 {calc.formula}；公式来源 {request.formula_ref}（{bundle.formula.locator.version}）。",
+        lead=f"{context.task.time_range.label if context.task.time_range else '已确认期间'}：{function} {calc.result:.2f} {calc.unit}。"
+        if request.function=='attainment_rate': lead+=('未达标。' if calc.result<100 else '已达标。')
+        return "\n".join([lead,*rows, scope_text, f"命名函数 {request.function}；公式 {calc.formula}；公式来源 {request.formula_ref}（{bundle.formula.locator.version}）。",
             f"{result_prefix}{function}：{calc.result:.2f} {calc.unit}；Decimal 计算，ROUND_HALF_UP 保留两位小数。", f"计算来源：{calc.calculation_id}。{conclusion}"])
 
     def compose(self, context: ComposeContext) -> AskResponse:
@@ -439,7 +488,9 @@ class FormalResponseComposer:
         banner = self.source_banner
         if self.policy.model_mode == 'live':
             if context.sql and context.sql.sql_results:
-                if any('受控查询' in text for text in context.sql.limitations):
+                if any('受控业务查询' in text for text in context.sql.limitations):
+                    banner='来源：真实 Chinook 样例库 + 文档证据驱动的服务端受控业务查询；本业务步骤未调用模型。'
+                elif any('受控查询' in text for text in context.sql.limitations):
                     banner = '来源：真实 Chinook 样例库 + 受控查询计划；模型失败或候选语义不完整时已修复，详见限制与追踪。'
             elif context.rag and context.rag.chunks:
                 banner = '来源：经快照验证的业务知识库文档，详见本轮引用。'
@@ -474,6 +525,8 @@ class FormalResponseComposer:
                     answer = "旧 3B 固定结果替身完成；仅供历史流程验证，未形成真实业务结论。"
                 elif self.execution_mode == "calculation_fixture":
                     answer = self._calculation_answer(context)
+                elif context.task and context.task.intent in WORKFLOWS:
+                    answer=self._business_answer(context)
                 elif context.task and context.task.needs_calculation:
                     answer = self._calculation_answer(context)
                     if context.route == 'cross_source':
@@ -510,7 +563,9 @@ class FormalResponseComposer:
         elif status == "unsupported":
             answer = context.parser_reason or "当前工具明确不支持这项任务，未生成业务结论。"
         elif status == "insufficient_evidence" and answer is None:
-            if context.task and {"purchasing_customers", "customer_count"} <= set(context.task.business_metric_ids):
+            if context.task and context.task.intent in WORKFLOWS:
+                answer=context.parser_reason or '缺少必要规则、候选或数据库查询，业务链路尚未完成。'
+            elif context.task and {"purchasing_customers", "customer_count"} <= set(context.task.business_metric_ids):
                 answer = "D12 未直接定义登记客户记录数，现有证据不能完整回答它与购买客户数的区别；需要 A 补充正式字段口径来源。"
             else:
                 answer = "本轮证据、适用范围或计算绑定不完整，不能形成确定结论。"

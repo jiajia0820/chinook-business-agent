@@ -93,6 +93,8 @@ def _matched_metrics(question, rules):
 
 def _periods(question):
     """Return explicitly stated periods only, never a wall-clock default."""
+    from .entity_ids import mask_identifiers
+    question = mask_identifiers(question)
     quarter_pattern = r"(?:第?([一二三四1234])季度|Q([1-4]))"
     year_matches = re.findall(r"(?<!\d)(\d{4})(?:\s*年)?(?!\d)", question)
     quarters = [int(a or b) if (a or b).isdigit() else "一二三四".index(a) + 1
@@ -322,10 +324,24 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
         task.slots.setdefault('scope','全部音频')
         task.slots.setdefault('data_scope','全部音频')
 
+    # Document-dependent business steps must not terminate at a rule quotation.
+    if '客户' in q and _contains(q,['购买','买过']) and _contains(q,['A层','A 层','重点维护']):
+        task.intent,task.route,task.needs_calculation='customer_segmentation','cross_source',False
+        task.business_metric_ids=['sales_amount']
+        task.slots['business_workflow']='customer_segmentation'
+    elif _contains(q,['海报','主页面']) and _contains(q,['成交','卖出','销售']) and _contains(q,['TrackId','商品编号','商品ID']):
+        from .entity_ids import track_selection
+        try:
+            selection=track_selection(q)
+        except ValueError:
+            return clarify(task,['filter_scope'],rules=['identifier_range'])
+        task.intent,task.route,task.needs_calculation='poster_candidates','cross_source',False
+        task.business_metric_ids=['sales_amount']
+        task.slots.update(business_workflow='poster_candidates',track_selection=selection)
     # 三分法第二类：带明确季度但缺年份，且意图引用按年绑定的经营资料
     # （目标/复盘/方案/增长对比）。年份由资料锚定，声明口径后直接答，不反问。
     anchored_intents = {"target_attainment", "target_difference", "cross_source_query", 'average_order_value','document_sum',
-                        "document_calculation", "growth_rate"}
+                        "document_calculation", "growth_rate", 'customer_segmentation','poster_candidates'}
     scoped_fact = task.intent=='quarterly_sales' and task.entities and profile.sql_backend is not None and 'sales_amount' in profile.sql_backend.registered_metric_ids
     if (task.intent in anchored_intents or scoped_fact) and "quarter" in task.slots and "year" not in task.slots:
         anchor = _anchor_year(profile)

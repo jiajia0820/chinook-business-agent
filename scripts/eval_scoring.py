@@ -1,8 +1,10 @@
 """Frozen stage2 business scorer. Evaluation expectations never enter runtime inputs."""
 from decimal import Decimal, InvalidOperation
+import json
+from pathlib import Path
 import re
 
-VERSION = 'stage2-policy-1.3'
+VERSION = 'stage2-policy-1.4'
 ALIASES = {
     'customer_count': ('customer_count', 'purchasing_customers'),
     'actual_sales': ('actual_sales', 'sales_amount'),
@@ -200,6 +202,40 @@ def compare_answer(case, response):
     return problems
 
 
+def workflow_assertions(case,response):
+    """Frozen evaluation-only checks for final decisions, not just SQL intermediates."""
+    problems=[]
+    if case['id']=='cross-004':
+        expected=json.loads((Path(__file__).with_name('stage2_cross_assertions.json')).read_text(encoding='utf-8'))
+        got={str(r.get('CustomerId')):r for r in rows(response)}
+        for identity,value in expected['all_audio_amounts'].items():
+            if identity not in got or not number_equal(value,got[identity].get('all_audio_sales_amount')):
+                problems.append(f'客户 {identity} 缺少正确的当季全部音频金额 {value}')
+        lines={int(m[1]):m[2] for m in re.finditer(r'^CustomerId\s+(\d+)[^\n]*?：([^\n]+)',response.answer or '',re.M)}
+        if set(lines)!=set(expected['eligible_ids']):
+            problems.append('最终A层名单不完整或含错误客户')
+        for identity in expected['eligible_ids']:
+            line=lines.get(identity,'')
+            if not re.search(r'全部音频[^\n]*?'+re.escape(f"{expected['all_audio_amounts'][str(identity)]:.2f}")+r'\s*USD',line) or not re.search(r'(?:≥|>=)\s*12(?:\.00)?\s*USD',line) or '阈值' not in line or 'sql-cell:' not in line:
+                problems.append(f'客户 {identity} 的判定缺少金额/单位/阈值或本轮SQL单元格绑定')
+        rule='\n'.join(c.text for c in response.documents if c.doc_id=='D04')
+        if not re.search(r'A\s*\|[^\n|]*\|\s*大于等于\s*12(?:\.00)?',rule):
+            problems.append('缺少D04原始A层规则行')
+        if not response.time_range or [response.time_range.start,response.time_range.end]!=expected['period']:
+            problems.append('客户分层期间不正确')
+    elif case['id']=='cross-006':
+        for row in rows(response):
+            identity=row.get('TrackId')
+            match=re.search(r'^TrackId\s+'+str(identity)+r'，([^\n]+)',response.answer or '',re.M)
+            if not match or not re.search(r'有成交[^\n]*0\.99\s*USD',match[1]) or not all(s in match[1] for s in ['sql-cell:','候选引用','主页面条件引用']):
+                problems.append(f'商品 {identity} 缺少成交事实/金额及候选、海报引用绑定')
+        if not response.time_range or (response.time_range.start,response.time_range.end)!=('2025-07-01','2025-10-01'):
+            problems.append('海报候选成交期间不正确')
+        if not any(c.doc_id=='D11' and c.bbox is not None for c in response.documents):
+            problems.append('海报条件缺少图片区域定位')
+    return problems
+
+
 def interface_diagnostics(case, response):
     want = case.get('interface_expectation', {}).get('expected_route')
     return [f'route: 期望 {want}，实际 {response.route}'] if want and str(response.route) != want else []
@@ -241,6 +277,7 @@ def judge(case, response):
         if arithmetic and not response.calculations:
             problems.append('公式题未返回结构化 calculations')
     problems.extend(compare_answer(case, response))
+    problems.extend(workflow_assertions(case,response))
     actual_docs = {c.doc_id for c in response.documents}
     for doc in case.get('expected_documents') or []:
         if doc not in actual_docs:

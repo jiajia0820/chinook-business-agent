@@ -16,6 +16,7 @@ from .profiles import obj, string, strings, integer
 from .schema import SchemaService
 from .query_intent import parse_query_intent, validate_intent
 from .semantic_scope import covers_context
+from .business_queries import OPERATIONS, build_query, output_columns
 
 
 def request_error(message):
@@ -350,6 +351,33 @@ class NLQueryService:
                 response['limitations'].append('指定指标已传入模型；本阶段未自动证明生成 SQL 与业务口径语义等价。')
             # Data is encoded as a separate JSON message, never interpolated into system instructions.
             contract=_output_contract(metric_ids,context)
+            if context.get('resolved_slots',{}).get('query_intent',{}).get('operation') in OPERATIONS:
+                generated=build_query(context['resolved_slots'])
+                query_id='sql-'+str(uuid.uuid4())
+                result=self.executor.execute_sql(dict(query_id=query_id,profile_id=profile.id,
+                    sql=generated['sql'],params=generated['params'],max_rows=options.get('max_rows',50),
+                    timeout_ms=5000),access)
+                contract=output_columns(context['resolved_slots']['query_intent'])
+                mapping=_contract_column_mapping(result,contract)
+                if result['status']=='success' and mapping is None:
+                    raise ModuleError('SQL_EXECUTION_FAILED','业务步骤输出契约不完整','SEMANTIC_SCOPE_MISMATCH')
+                if mapping:
+                    result['columns']=[mapping.get(n,n) for n in result['columns']]
+                    result['rows']=[{mapping.get(k,k):v for k,v in row.items()} for row in result['rows']]
+                response['sql_results']=[result]
+                if result['status']!='success':
+                    response['error']=result['error']
+                    return response
+                response['status']='answered'
+                response['limitations'].append('文档依赖业务步骤使用服务端受控业务查询；本步骤没有调用大模型，不是模型失败降级。')
+                response['metric_definitions']=[{k:m.get(k) for k in ('metric_id','name','definition','unit','source_refs')} for m in selected]
+                response['query_artifacts']=[dict(query_id=query_id,sql=generated['sql'],params=generated['params'],
+                    selected_tables=result['source']['tables'],schema_version=snapshot['schema_version'],
+                    metric_refs=[m['metric_id']+'@'+catalog['version'] for m in selected],attempt_count=1)]
+                if options.get('show_trace',True):
+                    response['trace']=[dict(step=1,tool='sql.query',status='success',source_refs=[query_id],
+                        summary='执行参数化文档依赖业务步骤；未调用模型',duration_ms=result['execution_ms'])]
+                return response
             payload=dict(question=data['question'].strip(),profile_id=profile.id,dialect=profile.database['dialect'],
                          schema=snapshot,metrics=selected,dictionary=catalog['dictionary'],context=context,
                          output_columns=contract or [])

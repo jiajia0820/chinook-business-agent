@@ -1,0 +1,27 @@
+{
+  "purpose": "Evaluation only. Independent cohort query + complete audio aggregation; D04 P15 threshold, P11 scope and P113 applicable period. Runtime must never import this file.",
+  "period": [
+    "2025-07-01",
+    "2025-10-01"
+  ],
+  "threshold": 12.0,
+  "all_audio_amounts": {
+    "1": 8.91,
+    "10": 15.84,
+    "12": 3.96,
+    "27": 1.98,
+    "29": 3.96,
+    "31": 13.86,
+    "33": 5.94,
+    "39": 8.91,
+    "45": 0.99,
+    "46": 1.98,
+    "48": 15.84,
+    "50": 3.96
+  },
+  "eligible_ids": [
+    10,
+    31,
+    48
+  ]
+}
