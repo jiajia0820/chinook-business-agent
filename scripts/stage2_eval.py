@@ -48,7 +48,7 @@ def new_run(kind):
 
 def metadata(kind, argv):
     git = ['git', '-c', f'safe.directory={ROOT}', '-C', str(ROOT)]
-    code = [p for folder in ('backend', 'services/agent_api/app', 'configs') for p in (ROOT/folder).rglob('*') if p.suffix in ('.py', '.json') and '__pycache__' not in p.parts]
+    code = [p for folder in ('backend', 'services/agent_api/app', 'config', 'profiles') for p in (ROOT/folder).rglob('*') if p.suffix in ('.py', '.json') and '__pycache__' not in p.parts]
     return {'kind': kind, 'started_at': datetime.now(timezone.utc).isoformat(),
         'git_head': subprocess.check_output(git + ['rev-parse', 'HEAD'], text=True).strip(),
         'git_status': subprocess.check_output(git + ['status', '--porcelain'], text=True),
@@ -157,7 +157,7 @@ async def live(out, argv, failure_budget=0):
             return result
         except Exception as exc:
             entry.update(status='error', error_type=type(exc).__name__, reason=getattr(exc, 'reason', None), code=getattr(exc, 'code', None))
-            if getattr(exc, 'reason', None) in {'MODEL_TIMEOUT', 'MODEL_NETWORK_ERROR', 'MODEL_HTTP_ERROR'}:
+            if getattr(exc, 'reason', None) in {'MODEL_TIMEOUT', 'MODEL_NETWORK_FAILED', 'MODEL_HTTP_FAILED'}:
                 external_failures.append(exc.reason)
             raise
         finally:

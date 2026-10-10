@@ -6,6 +6,7 @@ import re
 from ..contracts import Clarification, MissingSlot, TimeRange
 from ..profiles.models import BusinessProfile
 from .state import BusinessTask, ParsedTurn, SessionMemory
+from backend.sql_module.query_intent import parse_query_intent
 
 
 SLOT_DESCRIPTIONS = {
@@ -314,6 +315,8 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
     if missing:
         return clarify(task, list(dict.fromkeys(missing)), reused=reused, rules=["required_slots", "finite_grammar"])
     coverage_rules = []
+    if task.route != 'rag':
+        task.slots['query_intent'] = parse_query_intent(task.original_question, task.business_metric_ids)
     if task.route != "rag" and task.time_range and profile.data_start and profile.data_end:
         start, end = date.fromisoformat(task.time_range.start), date.fromisoformat(task.time_range.end)
         available_start = date.fromisoformat(profile.data_start)

@@ -14,6 +14,8 @@ from .execution import SQLExecutor
 from .generation import OUTPUT_SCHEMA, decode_generated, HTTPJSONModel
 from .profiles import obj, string, strings, integer
 from .schema import SchemaService
+from .query_intent import parse_query_intent, validate_intent
+from .semantic_scope import covers_context
 
 
 def request_error(message):
@@ -101,6 +103,8 @@ def _contract_column_mapping(result, contract):
 
 
 def _candidate_covers_context(generated, context):
+    if not covers_context(generated, context, media_applies=_media_scope_applies(context.get('metric_ids', []), context.get('resolved_slots', {}))):
+        return False
     sql=generated['sql'].casefold().replace('"','')
     values=list(generated['params'].values())
     slots=context.get('resolved_slots',{})
@@ -128,6 +132,27 @@ def _candidate_covers_context(generated, context):
 def _controlled_query(context, metric_ids, candidate_sql=None, max_rows=50):
     """按已登记口径生成确定性只读查询；无法覆盖时返回 None，不猜测业务语义。"""
     slots=context.get('resolved_slots',{})
+    if slots.get('comparison_period') and not any(m in GRAIN_PLANS for m in metric_ids):
+        period=slots['comparison_period']
+        year,quarter=period.get('year'),period.get('quarter')
+        if type(year) is not int or type(quarter) is not int or not 1 <= quarter <= 4:
+            return None
+        current_slots={key:value for key,value in slots.items() if key!='comparison_period'}
+        previous_slots={**current_slots,'start_date':f'{year:04}-{(quarter-1)*3+1:02}-01',
+            'end_date':f'{year+1:04}-01-01' if quarter==4 else f'{year:04}-{quarter*3+1:02}-01'}
+        branches=[]
+        params={}
+        for label,branch_slots in [('current',current_slots),('previous',previous_slots)]:
+            candidate=_controlled_query({**context,'resolved_slots':branch_slots},metric_ids,max_rows=max_rows)
+            if candidate is None:
+                return None
+            branch=candidate['sql'].replace('SELECT ',f"SELECT '{label}' AS period, ",1)
+            for key,value in candidate['params'].items():
+                replacement=label+'_'+key
+                branch=branch.replace(':'+key,':'+replacement)
+                params[replacement]=value
+            branches.append(branch)
+        return {'sql':' UNION ALL '.join(branches),'params':params}
     if metric_ids==['customer_count']:
         return {'sql':'SELECT COUNT(*) AS customer_count FROM main.Customer','params':{}}
     measures=[m for m in metric_ids if m in MEASURE_EXPRESSIONS]
@@ -165,7 +190,8 @@ def _controlled_query(context, metric_ids, candidate_sql=None, max_rows=50):
     sql='SELECT '+', '.join(select)+' FROM main.InvoiceLine il '
     sql+='JOIN main.Invoice i ON i.InvoiceId = il.InvoiceId JOIN main.Track t ON t.TrackId = il.TrackId '
     sql+=' '.join(joins)+' WHERE '+' AND '.join(where)
-    limit=_candidate_limit(candidate_sql,max_rows) if candidate_sql else None
+    intent=slots.get('query_intent', {})
+    limit=min(intent['top_n'],max_rows) if intent.get('top_n') else (_candidate_limit(candidate_sql,max_rows) if candidate_sql else None)
     if group_by:
         sql+=' GROUP BY '+', '.join(group_by)
         # 有取前 N 的候选时按度量降序排名，否则按维度键稳定排序。
@@ -201,6 +227,8 @@ def validate_request(request, profile):
             raise request_error('数组槽位需要唯一的正整数')
         if 'values' in rule and value not in rule['values']:
             raise request_error('槽位值未被 profile 允许')
+    if 'query_intent' in slots and not validate_intent(slots['query_intent']):
+        raise request_error('query_intent 结构或取值无效')
     if 'metric_ids' in context: strings(context['metric_ids'],'metric_ids',nonempty=False)
     entities=context.get('entities',[])
     if not isinstance(entities,list) or len(entities)>20:
@@ -245,6 +273,9 @@ class NLQueryService:
             obj(request,['request_id','profile_id','question','context','options'],['request_id','profile_id','question'],'NL 请求')
             profile,_=self.registry.resolve(data['profile_id'],access)
             context,options=validate_request(request,profile)
+            if 'query_intent' in profile.data.get('slots', {}) and 'query_intent' not in context.get('resolved_slots', {}):
+                context = {**context, 'resolved_slots': {**context.get('resolved_slots', {}),
+                    'query_intent': parse_query_intent(data['question'], context.get('metric_ids', []))}}
             snapshot=self.schemas.get_schema(profile.id,access)
             catalog=load_catalog(profile,snapshot)
             metrics_by_id={m['metric_id']:m for m in catalog['metrics']}

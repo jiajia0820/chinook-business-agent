@@ -383,7 +383,16 @@ class FormalResponseComposer:
 
     def compose(self, context: ComposeContext) -> AskResponse:
         status, answer, error = context.status, None, context.error
-        limits = [self.source_banner, *context.limitations, *(context.sql.limitations if context.sql else [])]
+        banner = self.source_banner
+        if self.policy.model_mode == 'live':
+            if context.sql and context.sql.sql_results:
+                if any('受控查询' in text for text in context.sql.limitations):
+                    banner = '来源：真实 Chinook 样例库 + 受控查询计划；模型失败或候选语义不完整时已修复，详见限制与追踪。'
+            elif context.rag and context.rag.chunks:
+                banner = '来源：经快照验证的业务知识库文档，详见本轮引用。'
+            else:
+                banner = '来源：当前业务配置与能力边界；本轮未形成数据库查询结论。'
+        limits = [banner, *context.limitations, *(context.sql.limitations if context.sql else [])]
         sql_results = context.sql.sql_results if context.sql else []
         documents = context.rag.chunks if context.rag else []
         calculations = list(context.calculations)
@@ -451,7 +460,7 @@ class FormalResponseComposer:
             answer = "本轮处理失败，未输出成功数值结论；请查看结构化 error。"
         if status != "answered":
             calculations = []
-        answer = self.source_banner + "\n" + answer
+        answer = banner + "\n" + answer
         return AskResponse(request_id=context.request_id, session_id=context.session_id, profile_id=context.profile.profile_id,
             status=status, answer=answer, route=context.route, intent=Intent(name=context.task.intent if context.task else "reset_context" if context.reset_context else "unknown"),
             entities=context.task.entities if context.task else [], time_range=context.task.time_range if context.task else None,

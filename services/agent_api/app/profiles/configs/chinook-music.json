@@ -18,7 +18,8 @@
       "end_date": {"type": "string"},
       "media_ids": {"type": "array"},
       "playlist_id": {"type": "integer"},
-      "comparison_period": {"type": "object"}
+      "comparison_period": {"type": "object"},
+      "query_intent": {"type": "object"}
     }
   },
   "document_root": "data/knowledge",
