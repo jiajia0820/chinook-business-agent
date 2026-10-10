@@ -150,7 +150,7 @@ async def live(out, argv, failure_budget=0):
         if failure_budget and len(external_failures) >= failure_budget:
             append('model-calls.jsonl', {**entry, 'event': 'deferred_external_api',
                 'status': 'not_called', 'reason': external_failures[-1], 'elapsed_ms': 0})
-            raise ModuleError('SQL_EXECUTION_FAILED', '本轮外部 API 连续失败已达预算；记录待复测，继续检查受控工具。', external_failures[-1])
+            raise ModuleError('SQL_EXECUTION_FAILED', '本轮外部 API 累计失败已达预算；记录待复测，继续检查受控工具。', external_failures[-1])
         try:
             result = original_generate(self, messages, output_schema, deadline)
             entry['status'] = 'success'

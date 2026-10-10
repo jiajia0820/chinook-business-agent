@@ -130,6 +130,8 @@ def authorize_calculation(bundle: CalculationEvidenceBundle, *, task: BusinessTa
     metric = profile.metric(metric_id)
     if metric is None:
         raise ValueError("unregistered business metric")
+    if function=='sum' and metric_id!='sales_amount':
+        raise ValueError('monthly monetary plan cannot substitute for other units')
     period, scope = task_period(task), task_scope(task)
     prior = comparison_period(task) if function == "growth_rate" or task.intent=='period_difference' else None
     if (function!='sum' and (sql is None or sql.status != "success" or sql.profile_id != profile.profile_id)) or rag is None or rag.status != "success" or rag.profile_id != profile.profile_id:

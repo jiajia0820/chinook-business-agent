@@ -326,7 +326,8 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
     # （目标/复盘/方案/增长对比）。年份由资料锚定，声明口径后直接答，不反问。
     anchored_intents = {"target_attainment", "target_difference", "cross_source_query", 'average_order_value','document_sum',
                         "document_calculation", "growth_rate"}
-    if (task.intent in anchored_intents or task.intent=='quarterly_sales' and task.entities) and "quarter" in task.slots and "year" not in task.slots:
+    scoped_fact = task.intent=='quarterly_sales' and task.entities and profile.sql_backend is not None and 'sales_amount' in profile.sql_backend.registered_metric_ids
+    if (task.intent in anchored_intents or scoped_fact) and "quarter" in task.slots and "year" not in task.slots:
         anchor = _anchor_year(profile)
         if anchor:
             task.slots["year"] = anchor

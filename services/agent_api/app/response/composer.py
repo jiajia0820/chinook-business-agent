@@ -336,6 +336,13 @@ class FormalResponseComposer:
             plans = monthly_plan(context.rag.chunks, task_scope(context.task))
             if not plans:
                 raise EvidenceGap()
+            quarter=context.task.slots.get('quarter')
+            if type(quarter) is not int or {month for month,_,_,_,_ in plans} != set(range((quarter-1)*3+1,quarter*3+1)):
+                raise EvidenceGap()
+            for _,_,chunk,_,_ in plans:
+                stamp=re.search(r'(\d{4})Q([1-4])',chunk.title)
+                if not stamp or (int(stamp[1]),int(stamp[2])) != (year,quarter):
+                    raise EvidenceGap()
             notes.extend(f'{year}-{month:02} 计划 {value} USD；来源 {chunk.source_uri}' for month,value,chunk,_,_ in plans)
             for chunk in context.rag.chunks:
                 if chunk.doc_id != 'D08':

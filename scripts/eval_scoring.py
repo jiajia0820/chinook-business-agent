@@ -2,7 +2,7 @@
 from decimal import Decimal, InvalidOperation
 import re
 
-VERSION = 'stage2-policy-1.2'
+VERSION = 'stage2-policy-1.3'
 ALIASES = {
     'customer_count': ('customer_count', 'purchasing_customers'),
     'actual_sales': ('actual_sales', 'sales_amount'),
@@ -237,7 +237,7 @@ def judge(case, response):
         problems.append('要求数据库事实，但未返回 SQL 来源')
     if case.get('gold_calculation'):
         problems.extend(facts_missing(case['gold_calculation'], response))
-        arithmetic = any(key in case['gold_calculation'] for key in ('rate','gap','growth_rate','result','formula','sum','average_order_value'))
+        arithmetic = any(key in case['gold_calculation'] for key in ('rate','gap','growth_rate','result','formula','sum','average_order_value','aov'))
         if arithmetic and not response.calculations:
             problems.append('公式题未返回结构化 calculations')
     problems.extend(compare_answer(case, response))

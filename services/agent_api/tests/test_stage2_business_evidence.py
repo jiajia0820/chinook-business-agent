@@ -4,6 +4,8 @@ import unittest
 
 from backend.sql_module.service import _controlled_query, _candidate_covers_context
 from services.agent_api.app.agent.state import BusinessTask
+from services.agent_api.app.agent.state import SessionMemory
+from services.agent_api.app.agent.parsing import parse_question
 from services.agent_api.app.contracts import DocumentChunk, RetrievalResponse, TimeRange
 from services.agent_api.app.evidence.binding import authorize_calculation, task_period
 from services.agent_api.app.integrations.business_calculation import create_business_resolver, quarterly_targets
@@ -80,6 +82,12 @@ class BusinessBindingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.authorize(self.bundle,task=task)
 
+    def test_monetary_plan_is_not_a_units_plan(self):
+        task=self.task.model_copy(update={'business_metric_ids':['units_sold']})
+        self.assertIsNone(self.resolve(task,None,self.rag,'calc-test',self.context))
+        with self.assertRaises(ValueError):
+            self.authorize(self.bundle,task=task)
+
     def test_month_boundary_and_metric_specific_table_column(self):
         task=self.task.model_copy(deep=True)
         task.slots={'year':2026,'month':12}
@@ -92,6 +100,13 @@ class BusinessBindingTests(unittest.TestCase):
 
 
 class MonthScopeTests(unittest.TestCase):
+    def test_historical_backend_keeps_missing_year_clarification(self):
+        profile=ProfileRegistry.stage1().get('chinook-music')
+        memory=SessionMemory(profile_id=profile.profile_id,config_version=profile.config_version)
+        parsed=parse_question('第三季度 Rock 销售额是多少？',profile,memory)
+        self.assertEqual(parsed.decision,'clarification')
+        self.assertIn('year',{item.name for item in parsed.clarification.missing_slots})
+
     def test_month_dimension_rejects_day_grouping_and_quarter_total(self):
         ctx={'entities':[],'metric_ids':['sales_amount'],'resolved_slots':{'start_date':'2026-04-01',
             'end_date':'2026-07-01','media_ids':[1,2,4,5],'query_intent':{'dimension':'month','measures':['sales_amount']}}}

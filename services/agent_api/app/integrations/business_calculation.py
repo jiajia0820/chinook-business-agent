@@ -67,6 +67,8 @@ def create_business_resolver(index):
                 value=Decimal(str(result.rows[row][column])).quantize(Decimal('0.000001')),confirmed=True,
                 query_id=result.query_id,row_index=row,column=column,result_sha256=result_hash(result))
         if function=='sum':
+            if metric_id!='sales_amount':
+                return None  # This source table is a monetary plan, not a units plan.
             # The declared operating-table year/quarter must match the requested
             # period; no other quarter inherits this target table.
             title=index.documents['D06'].title

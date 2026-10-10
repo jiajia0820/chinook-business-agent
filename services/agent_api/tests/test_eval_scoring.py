@@ -58,6 +58,10 @@ class ScoringTests(unittest.TestCase):
         r=response(answer='2026-04，来源冲突',sql_results=[N(status='success',rows=[{'month':'2026-04','sales_amount':1.25}])])
         self.assertEqual(judge(case,r),[])
 
+    def test_aov_requires_structured_calculation(self):
+        case={'id':'test','gold_calculation':{'sales':12,'orders':3,'aov':4}}
+        self.assertIn('公式题未返回结构化 calculations',judge(case,response(answer='销售额12，订单3，客单价4')))
+
 
 if __name__ == '__main__':
     unittest.main()
