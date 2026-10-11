@@ -179,6 +179,7 @@ class DocumentChunk(ContractModel):
     source_uri: NonEmptyString
     retrieval_id: NonEmptyString | None = None
     bbox: JsonValue | None = None
+    structured_data: JsonValue | None = None
 
 
 class RetrievalResponse(ContractModel):

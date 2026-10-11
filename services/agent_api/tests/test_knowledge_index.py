@@ -37,6 +37,33 @@ class KnowledgeIndexTests(unittest.TestCase):
         ))
         self.assertEqual((response.status, response.chunks), ("success", []))
 
+    def test_alias_classification_prefers_d03_authority(self):
+        response = self.index.retrieve(RetrievalRequest(
+            retrieval_id="retrieval-alias-authority", profile_id="chinook-music",
+            query="重金属写成 Heavy Metal 如何归类？",
+            filters={"answer_type": "alias_mapping", "preferred_doc": "D03"}, top_k=3,
+        ))
+        self.assertEqual(response.status, "success")
+        self.assertTrue(response.chunks)
+        self.assertEqual(response.chunks[0].doc_id, "D03")
+
+    def test_required_sources_are_covered_for_multidoc_retrieval(self):
+        response = self.index.retrieve(RetrievalRequest(
+            retrieval_id="retrieval-multidoc-coverage", profile_id="chinook-music",
+            query="比较 2025 年第二季度和第三季度经营复盘核心结果",
+            filters={"required_sources": ["D07", "D08"], "answer_type": "review_comparison"}, top_k=4,
+        ))
+        self.assertEqual(response.status, "success")
+        self.assertEqual({chunk.doc_id for chunk in response.chunks}, {"D07", "D08"})
+
+    def test_dense_retrieval_flag_can_fall_back_to_lexical(self):
+        response = self.index.retrieve(RetrievalRequest(
+            retrieval_id="retrieval-dense-fallback", profile_id="chinook-music",
+            query="经营表现核心结果",
+            filters={"dense_retrieval": False}, top_k=2,
+        ))
+        self.assertEqual(response.status, "success")
+
 
 if __name__ == "__main__":
     unittest.main()

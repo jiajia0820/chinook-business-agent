@@ -413,6 +413,16 @@
             "title": "Source Uri",
             "type": "string"
           },
+          "structured_data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "text": {
             "minLength": 1,
             "title": "Text",

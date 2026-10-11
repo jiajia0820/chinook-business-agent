@@ -53,6 +53,54 @@ class AllDocumentsRagTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.documents[0].doc_id, "D01")
         self.assertIn("销售额", response.answer)
 
+    async def test_alias_question_returns_authoritative_classification_document(self):
+        response = await self.ask("重金属是否并入 Metal？")
+        self.assertEqual(response.status, "answered")
+        self.assertEqual(response.documents[0].doc_id, "D03")
+
+    async def test_multidoc_question_returns_both_review_documents(self):
+        response = await self.ask("比较 2025 年第二季度和第三季度经营复盘的核心结果")
+        self.assertEqual(response.route, "rag")
+        self.assertEqual({chunk.doc_id for chunk in response.documents}, {"D07", "D08"})
+
+    async def test_multidoc_answer_is_a_conclusion_separate_from_source_chunks(self):
+        response = await self.ask("结合二季度和三季度复盘，销售额、订单数和购买客户数发生了什么变化？")
+        self.assertEqual(response.status, "answered")
+        self.assertIn("108.90", response.answer)
+        self.assertIn("112.86", response.answer)
+        self.assertIn("3.96", response.answer)
+        self.assertIn("19", response.answer)
+        self.assertIn("21", response.answer)
+        self.assertNotIn("【D07", response.answer)
+        self.assertNotIn("检索到", response.answer)
+
+    async def test_alias_answer_is_concise_and_keeps_raw_text_in_documents(self):
+        response = await self.ask("重金属是否并入 Metal？")
+        self.assertEqual(response.status, "answered")
+        self.assertIn("Genre:3", response.answer)
+        self.assertIn("Genre:13", response.answer)
+        self.assertNotIn("这份说明用于处理", response.answer)
+        self.assertNotIn("【D03", response.answer)
+        self.assertTrue(any("Heavy Metal" in chunk.text for chunk in response.documents))
+
+    async def test_poster_answer_is_concise_and_keeps_ocr_evidence_separate(self):
+        response = await self.ask("活动报名截止时间和需要提交的材料是什么？")
+        self.assertEqual(response.status, "answered")
+        self.assertIn("10月13日18:00", response.answer)
+        self.assertIn("商品清单", response.answer)
+        self.assertNotIn("【D11", response.answer)
+
+    async def test_metric_formula_question_retrieves_sales_analysis_method(self):
+        response = await self.ask("客单价是按销售额除以销量，还是除以订单数？订单数为零时怎么处理？")
+        self.assertEqual(response.status, "answered")
+        self.assertIn("D02", {chunk.doc_id for chunk in response.documents})
+
+    async def test_target_and_category_handbook_question_retrieves_operation_manual(self):
+        response = await self.ask("Rock第三季度没到目标时，目标表和Rock品类手册分别能告诉我们什么？")
+        self.assertEqual(response.status, "answered")
+        self.assertIn("D06", {chunk.doc_id for chunk in response.documents})
+        self.assertIn("D09", {chunk.doc_id for chunk in response.documents})
+
 
 if __name__ == "__main__":
     unittest.main()

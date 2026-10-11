@@ -160,6 +160,7 @@ export interface components {
             section?: string | null;
             /** Source Uri */
             source_uri: string;
+            structured_data?: components["schemas"]["JsonValue"] | null;
             /** Text */
             text: string;
             /** Title */

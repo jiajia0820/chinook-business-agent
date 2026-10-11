@@ -76,15 +76,19 @@ def _matched_metrics(question, rules):
 def _periods(question):
     """Return explicitly stated periods only, never a wall-clock default."""
     quarter_pattern = r"(?:第?([一二三四1234])季度|Q([1-4]))"
-    year_matches = re.findall(r"(?<!\d)(\d{4})(?:\s*年)?(?!\d)", question)
+    year_scan = re.sub(r"TrackId\s*\d+(?:-\d+)?", "", question, flags=re.I)
+    year_matches = re.findall(r"(?<![A-Za-z0-9])(\d{4})(?:\s*年)?(?!\d)", year_scan)
     quarters = [int(a or b) if (a or b).isdigit() else "一二三四".index(a) + 1
                 for a, b in re.findall(quarter_pattern, question, flags=re.I)]
     years = [int(year) for year in year_matches]
+    months = [int(month) for month in re.findall(r"(?<!\d)(1[0-2]|[1-9])\s*月", question)]
     slots = {}
     if years:
         slots["year"] = years[0]
     if quarters:
         slots["quarter"] = quarters[0]
+    if months:
+        slots["month"] = months[0]
     if len(quarters) == 2 and years:
         slots["comparison_period"] = {
             "year": years[1] if len(years) > 1 else years[0], "quarter": quarters[1],
@@ -119,6 +123,11 @@ def _time_range(slots):
     if year is None:
         return None
     quarter = slots.get("quarter")
+    month = slots.get("month")
+    if month:
+        start = date(year, month, 1)
+        end = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
+        return TimeRange(start=start.isoformat(), end=end.isoformat(), end_inclusive=False, label=f"{year}-{month:02d}")
     if quarter:
         month = (quarter - 1) * 3 + 1
         start = date(year, month, 1)
@@ -138,7 +147,7 @@ def _unparsed_query_text(question, profile):
     terms += profile.question_rules.ambiguous_scope_terms + profile.question_rules.query_fillers
     for term in sorted(set(terms), key=len, reverse=True):
         residue = re.sub(re.escape(term), "", residue, flags=re.I)
-    residue = re.sub(r"(?<!\d)\d{4}\s*年?|第?[一二三四1-4]季度|Q[1-4]|[\s，,。:：?？!！、]+", "", residue, flags=re.I)
+    residue = re.sub(r"(?<!\d)\d{4}\s*年?|第?[一二三四1-4]季度|Q[1-4]|(?<!\d)(1[0-2]|[1-9])\s*月|[\s，,。:：?？!！、]+", "", residue, flags=re.I)
     return residue
 
 
@@ -185,7 +194,7 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
     hits = {name: _contains(q, terms) for name, terms in rules.intent_terms.items()}
     followup = q.startswith(("换成", "改成", "那", "和目标比", "仅", "按", "对比", "环比", "同比"))
     # Slot-only responses are safe supplements; arbitrary text is not silently ignored.
-    stripped = re.sub(r"\d{4}\s*年?|第?[一二三四1234]季度|Q[1-4]|[\s，,。?？呢]+", "", q, flags=re.I)
+    stripped = re.sub(r"\d{4}\s*年?|第?[一二三四1234]季度|Q[1-4]|(?<!\d)(1[0-2]|[1-9])\s*月|[\s，,。?？呢]+", "", q, flags=re.I)
     slot_only = not stripped
     supplement = slot_only or q.startswith(("仅", "按", "全部音乐", "全部音频", "音频", "改成", "换成"))
     base = None
@@ -218,7 +227,7 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
         if entities:
             task.slots["scope"] = ", ".join(e["label"] for e in entities)
             task.slots["data_scope"] = task.slots["scope"]
-    if _contains(q, ["全部音乐", "全部音频"]):
+    if _contains(q, ["全部音乐", "全部音频", "全音乐", "全音频"]):
         task.entities = []
         task.slots["scope"] = task.slots["data_scope"] = "全部音频"
     if _contains(q, ["仅", "合并", "全部"]) and (entities or task.slots.get("scope") == "全部音频"):
@@ -250,6 +259,13 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
     elif not base:
         task.intent = "unknown"
 
+    # A comparison of multiple business documents is a RAG task. Keep it on
+    # the document route so the query planner can require each quarter's
+    # authoritative review instead of sending it to SQL.
+    if task.route == "rag" and task.intent == "document_rule" and (
+            len(quarters) >= 2 or ("复盘" in q and any(term in q for term in ("比较", "变化", "对比")))):
+        task.intent = "multidoc_query"
+
     # 三分法第二类：带明确季度但缺年份，且意图引用按年绑定的经营资料
     # （目标/复盘/方案/增长对比）。年份由资料锚定，声明口径后直接答，不反问。
     anchored_intents = {"target_attainment", "target_difference", "cross_source_query",
@@ -278,6 +294,8 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
         task.intent, task.route = "document_rule", "rag"
     if task.intent == "unknown" or hits.get("vague_metric") and not task.business_metric_ids:
         missing.append("metric" if hits.get("vague_metric") else "intent")
+    if task.intent == "growth_rate":
+        task.slots.setdefault("data_scope", "全部音频")
     if task.route != "rag":
         missing.extend(slot for slot in profile.required_slots_by_intent.get(task.intent, []) if slot not in task.slots)
         if "sales_amount" in task.business_metric_ids or "purchasing_customers" in task.business_metric_ids:
@@ -291,16 +309,17 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
         missing.append("genre_boundary")
     # Do not answer a narrower day/month question using a whole-quarter query.
     if re.search(r"\d{1,2}月|\d{1,2}日|最近|今年|去年|本季度|本月", q):
-        missing.append("time_range")
+        if "month" not in task.slots or "year" not in task.slots:
+            missing.append("time_range")
     if re.search(r"第?(?:[五六七八九]|[5-9])季度", q) and not re.search(r"第?[一二三四1-4]季度", q):
         missing.append("time_range")
     if len(years) > 1 or len(quarters) > 1:
-        comparable = (task.intent in {"growth_rate", "cross_source_query", "document_calculation"}
+        comparable = (task.intent in {"growth_rate", "cross_source_query", "document_calculation", "multidoc_query"}
                       and len(quarters) == 2 and len(years) <= 2
-                      and any(term in q for term in ("对比", "相比", "比", "增长", "环比", "同比")))
+                      and any(term in q for term in ("对比", "相比", "比", "变化", "增长", "环比", "同比")))
         if not comparable:
             missing.append("time_range")
-    if task.intent != "unknown" and task.route != "rag" and profile.sql_backend.model_mode == "offline" and _unparsed_query_text(q, profile):
+    if task.intent not in {"unknown", "cross_source_query", "growth_rate", "target_difference", "target_attainment"} and task.route not in {"rag", "cross_source"} and profile.sql_backend.model_mode == "offline" and _unparsed_query_text(q, profile):
         missing.append("filter_scope")
     try:
         task.time_range = _time_range(task.slots)

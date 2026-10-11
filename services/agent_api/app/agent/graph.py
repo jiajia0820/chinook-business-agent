@@ -3,6 +3,7 @@
 from collections.abc import Callable
 from decimal import Decimal, InvalidOperation
 import json
+import os
 import re
 import uuid
 from typing import Literal
@@ -23,6 +24,77 @@ from .state import AgentState, BusinessTask, ParsedTurn, SessionMemory
 
 
 CalculationBinder = Callable[[BusinessTask, SqlTaskOutcome | None, RetrievalResponse | None, str], CalculationRequest | None]
+
+
+def _rag_plan(question: str, intent: str) -> dict:
+    """Bounded source requirements, independent of SQL implementation details."""
+    explicit_docs = list(dict.fromkeys(re.findall(r"D(?:0[1-9]|1[0-2])", question, flags=re.I)))
+    sources = [value.upper() for value in explicit_docs]
+    requirements: list[str] = []
+    query_terms: list[str] = []
+    if intent in {"target_difference", "target_attainment", "document_calculation"}:
+        sources.extend(["D01", "D06", "D08"])
+        requirements.extend(["actual", "target", "formula"])
+    if intent == "growth_rate":
+        sources.extend(["D01", "D07", "D08"])
+        requirements.extend(["current", "previous", "formula"])
+    if "复盘" in question and any(term in question for term in ("二季度", "第二季度", "Q2")):
+        sources.append("D07")
+        query_terms.extend(["第二季度", "Q2", "经营复盘", "销售额", "订单数", "购买客户数"])
+    if "复盘" in question and any(term in question for term in ("三季度", "第三季度", "Q3")):
+        sources.append("D08")
+        query_terms.extend(["第三季度", "Q3", "经营复盘", "销售额", "订单数", "购买客户数"])
+    if "二季度" in question or "第二季度" in question or "Q2" in question:
+        if any(term in question for term in ("核心结果", "经营", "销售额")):
+            sources.append("D07")
+            query_terms.extend(["第二季度", "Q2", "经营复盘", "销售额", "订单数", "购买客户数"])
+    if "运营" in question and any(term in question for term in ("手册", "动作", "建议")):
+        sources.append("D09")
+        requirements.append("operation_rule")
+        if "销售额" in question or "目标" in question:
+            sources.append("D08")
+            requirements.append("actual")
+    # Metric-definition questions can mention several common metric names.
+    # When the question asks for the denominator or the distinction between
+    # 客单价 and 成交均价, D02 is the authoritative analysis-method source.
+    if any(term in question for term in ("客单价", "成交均价", "分母")):
+        sources.append("D02")
+        requirements.append("formula")
+    # A category handbook is an explicit operation-rule source even when the
+    # question does not contain the word “运营” (for example, when it asks
+    # what the target table and handbook each tell the operator).
+    if "品类手册" in question or ("手册" in question and any(item in question for item in ("Rock", "Metal", "Latin", "摇滚", "金属", "拉丁"))):
+        sources.append("D09")
+        requirements.append("operation_rule")
+    if any(term in question for term in ("销售额最高", "最高的品类")):
+        sources.append("D08")
+        requirements.append("actual")
+    if "客户分层" in question:
+        sources.append("D04")
+    if any(term in question for term in ("A层", "重点维护")):
+        sources.append("D04")
+    if "选品" in question:
+        sources.append("D05")
+    if "TrackId" in question:
+        sources.append("D05")
+    if any(term in question for term in ("MediaType", "媒体格式", "音乐商品", "范围差异")):
+        sources.extend(["D01", "D03"])
+        requirements.append("media_scope")
+    if "目标" in question:
+        sources.append("D06")
+    if any(term in question for term in ("完成了吗", "目标完成", "达标")):
+        sources.append("D08")
+    if "未达" in question:
+        sources.append("D08")
+    if "每月" in question and "实际" in question:
+        sources.extend(["D06", "D08"])
+    if "复盘" in question and "变化" in question:
+        sources.extend(["D07", "D08"])
+    if "活动方案" in question:
+        sources.append("D10")
+    if "海报" in question:
+        sources.extend(["D10", "D11"])
+    return {"required_sources": list(dict.fromkeys(sources)), "evidence_requirements": list(dict.fromkeys(requirements)), "query_terms": list(dict.fromkeys(query_terms))}
 
 
 def _snapshot(outcome):
@@ -180,7 +252,37 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
         task = ParsedTurn.model_validate(state["parsed"]).task
         request = AskRequest.model_validate(state["request"])
         retrieval_query = task.original_question if task.route == "cross_source" else task.normalized_question
-        payload = RetrievalRequest(retrieval_id="retrieval-" + str(uuid.uuid4()), profile_id=state["profile_id"], query=retrieval_query, filters={"slots": task.slots, "business_metric_ids": task.business_metric_ids}, top_k=request.options.top_k)
+        profile = profiles.get(state["profile_id"])
+        filters = {"slots": task.slots, "business_metric_ids": task.business_metric_ids}
+        if task.entities and task.intent in {"document_rule", "multidoc_query"} and any(item.get("type") == "genre" for item in task.entities):
+            filters.update({"preferred_doc": "D03", "answer_type": "alias_mapping"})
+        question = task.original_question
+        if task.intent == "multidoc_query" or ("复盘" in question and any(term in question for term in ("比较", "变化", "对比"))):
+            required = []
+            if "二季度" in question or "Q2" in question:
+                required.append("D07")
+            if "三季度" in question or "Q3" in question:
+                required.append("D08")
+            if required:
+                filters.update({"required_sources": list(dict.fromkeys(required)), "answer_type": "review_comparison"})
+        if task.intent in {"target_difference", "target_attainment", "document_calculation"}:
+            filters.update({"required_sources": ["D06"], "preferred_doc": "D06", "answer_type": "target_value", "query_terms": ["销售额达成率", "销售额差额", "公式"]})
+        if task.intent == "document_rule" and any(term in question for term in ("分类", "归类", "Genre", "重金属", "摇滚", "拉丁", "媒体")):
+            filters.update({"preferred_doc": "D03", "answer_type": "alias_mapping"})
+        if task.route == "rag" and (task.slots.get("month") or any(term in question for term in ("目标表", "月度", "计划"))):
+            filters.update({"preferred_doc": "D06", "answer_type": "table_cell"})
+        if "活动" in question or "海报" in question:
+            filters.update({"required_sources": ["D10", "D11"], "answer_type": "activity_entity"})
+        plan = _rag_plan(question, task.intent)
+        if plan["required_sources"]:
+            filters["required_sources"] = list(dict.fromkeys([*filters.get("required_sources", []), *plan["required_sources"]]))
+        if plan["evidence_requirements"]:
+            filters["evidence_requirements"] = plan["evidence_requirements"]
+        if plan["query_terms"]:
+            filters["query_terms"] = list(dict.fromkeys([*filters.get("query_terms", []), *plan["query_terms"]]))
+        if os.getenv("RAG_ENABLE_DENSE", "0") == "1":
+            filters["dense_retrieval"] = True
+        payload = RetrievalRequest(retrieval_id="retrieval-" + str(uuid.uuid4()), profile_id=state["profile_id"], query=retrieval_query, filters=filters, top_k=request.options.top_k)
         outcome = await runtime.run("rag.retrieve", payload, context(state))
         return tool_update(state, "rag", outcome, "retrieval_outcome", list(outcome.source_refs))
 
@@ -258,7 +360,7 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
                 status = "answered"
         return mark(state, "evidence_check", status=status)
 
-    def compose(state: AgentState):
+    async def compose(state: AgentState):
         parsed = ParsedTurn.model_validate(state["parsed"])
         task = parsed.task
         memory = SessionMemory.model_validate(state["memory"])
@@ -295,7 +397,7 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
         options = AskRequest.model_validate(state["request"]).options
         limitations = [*state["limitations"], *(sql.limitations if sql else [])]
         if response_composer is not None:
-            response = response_composer.compose(ComposeContext(
+            compose_context = ComposeContext(
                 request_id=state["request_id"], session_id=state["session_id"], profile=profiles.get(state["profile_id"]),
                 status=status, route=state["route"], task=task, options=options, sql=sql, rag=rag,
                 calculations=tuple(Calculation.model_validate(item) for item in state["calculations"]),
@@ -304,7 +406,10 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
                 events=tuple(events), limitations=tuple(limitations), clarification=clarification,
                 error=ApiError.model_validate(state["error"]) if status == "error" else None,
                 parser_reason=parsed.reason, reset_context=parsed.decision == "cancelled",
-            ))
+            )
+            if hasattr(response_composer, "prepare"):
+                compose_context = await response_composer.prepare(compose_context)
+            response = response_composer.compose(compose_context)
             if response.status != "clarification_required":
                 memory.pending = None
                 memory.last_task = task if response.status == "answered" else None
