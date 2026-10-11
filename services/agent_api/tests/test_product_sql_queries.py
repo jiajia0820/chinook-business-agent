@@ -8,6 +8,24 @@ from services.agent_api.app.profiles import ProfileRegistry
 
 
 class ProductSqlQueryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_nullable_date_join_cannot_sum_all_history(self):
+        class NullableDateJoinModel:
+            def generate_json(self, messages, output_schema, deadline):
+                return json.dumps({"sql": "SELECT mt.MediaTypeId, mt.Name, SUM(il.UnitPrice*il.Quantity) AS sales_amount, SUM(il.Quantity) AS units_sold FROM main.MediaType mt LEFT JOIN main.Track t ON t.MediaTypeId=mt.MediaTypeId LEFT JOIN main.InvoiceLine il ON il.TrackId=t.TrackId LEFT JOIN main.Invoice i ON i.InvoiceId=il.InvoiceId AND i.InvoiceDate>=:start_date AND i.InvoiceDate<:end_date GROUP BY mt.MediaTypeId,mt.Name ORDER BY mt.MediaTypeId", "params": {"start_date": "2025-07-01", "end_date": "2025-10-01"}})
+
+        with patch("backend.sql_module.generation.HTTPJSONModel.from_env", return_value=NullableDateJoinModel()):
+            live = await create_canonical_knowledge_integration(model_mode="live")
+        try:
+            result = await live.create_formal_graph_service().ask(AskRequest(question="2025年第三季度各媒体类型的销售额和销量是多少？", profile_id="chinook-music"), request_id="nullable-date-test")
+            self.assertEqual(result.status, "answered")
+            rows = result.sql_results[0].rows
+            self.assertEqual(len(rows), 2)
+            self.assertAlmostEqual(rows[0]["sales_amount"], 111.87, places=2)
+            self.assertEqual(rows[0]["units_sold"], 113)
+            self.assertTrue(any("可空订单连接风险" in text for text in result.limitations))
+        finally:
+            self.assertTrue(await live.aclose(grace_seconds=3))
+
     async def asyncSetUp(self):
         self.integration = await create_canonical_knowledge_integration(model_mode="offline")
         self.service = self.integration.create_formal_graph_service()
@@ -66,6 +84,8 @@ class ProductSqlQueryTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.sql_results[0].rows, [{"customer_count": 59}])
             self.assertIn("59", response.answer)
             self.assertIn("大模型生成 SQL", response.answer)
+            self.assertIn("受控查询计划", response.answer)
+            self.assertNotIn("样例库 + 大模型生成 SQL", response.answer)
             self.assertFalse(any("固定三问" in item or "C 离线模型仅支持" in item for item in response.limitations))
         finally:
             self.assertTrue(await live_integration.aclose(grace_seconds=3))
@@ -95,7 +115,7 @@ class ProductSqlQueryTests(unittest.IsolatedAsyncioTestCase):
         try:
             response = await live_integration.create_formal_graph_service().ask(
                 AskRequest(
-                    question="2025年第三季度 Rock 达到目标了吗？",
+                    question="2025年第三季度 Rock 销售额达到目标了吗？",
                     profile_id="chinook-music",
                 ),
                 request_id="product-live-rock-attainment",

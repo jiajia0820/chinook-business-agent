@@ -1,6 +1,7 @@
 {
   "profile_id": "chinook-music",
-  "config_version": "b-3c3-calculator-2026-10-06",
+  "config_version": "c-orchestration-v2-2026-10-11",
+  "orchestration_policy": "c_v1",
   "mode": "hybrid",
   "capabilities": ["sql", "rag", "calculate"],
   "sql_backend": {
@@ -18,7 +19,9 @@
       "end_date": {"type": "string"},
       "media_ids": {"type": "array"},
       "playlist_id": {"type": "integer"},
-      "comparison_period": {"type": "object"}
+      "comparison_period": {"type": "object"},
+      "result_grain": {"type": "string", "values": ["month", "customer_audio", "track_set"]},
+      "track_ids": {"type": "array"}
     }
   },
   "document_root": "data/knowledge",
@@ -117,6 +120,7 @@
     }
   ],
   "aliases": [
+    {"alias": "拉丁", "entity_type": "genre", "entity_id": "Genre:7", "label": "Latin"},
     {"alias": "摇滚", "entity_type": "genre", "entity_id": "Genre:1", "label": "Rock"},
     {"alias": "摇滚乐", "entity_type": "genre", "entity_id": "Genre:5", "label": "Rock And Roll"},
     {"alias": "金属", "entity_type": "genre", "entity_id": "Genre:3", "label": "Metal"},

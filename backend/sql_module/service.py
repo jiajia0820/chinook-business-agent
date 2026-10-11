@@ -62,8 +62,11 @@ def _media_scope_applies(metric_ids, slots):
     return set(metric_ids) != {'customer_count'}
 
 
-def _output_contract(metric_ids):
+def _output_contract(metric_ids, slots=None):
     """已登记指标要求的结果列；返回 None 表示本阶段不约束该组合。"""
+    from .finite_grains import columns
+    if slots and columns(slots):
+        return columns(slots)
     measures = [m for m in metric_ids if m in MEASURE_EXPRESSIONS]
     grains = [m for m in metric_ids if m in GRAIN_PLANS]
     if not grains:
@@ -125,9 +128,31 @@ def _candidate_covers_context(generated, context):
     return True
 
 
-def _controlled_query(context, metric_ids, candidate_sql=None, max_rows=50):
+def requested_top_n(question):
+    """Finite explicit ranking count, not max_rows or a model-guessed LIMIT."""
+    match = re.search(r'(?:最高的?|前|[Tt][Oo][Pp]\s*)([一二三四五六七八九十百\d]+)', question)
+    if match:
+        token = match.group(1)
+        if token.isdigit():
+            value = int(token)
+        elif '十' in token:
+            tens, _, ones = token.partition('十')
+            digits = '一二三四五六七八九'
+            value = (digits.index(tens) + 1 if tens in digits and tens else 1) * 10 + (digits.index(ones) + 1 if ones in digits and ones else 0)
+        elif token in '一二三四五六七八九' and len(token) == 1:
+            value = '一二三四五六七八九'.index(token) + 1
+        else:
+            return None
+        return value if 1 <= value <= 200 else None
+    return 1 if '最高' in question else None
+
+
+def _controlled_query(context, metric_ids, candidate_sql=None, max_rows=50, top_n=None):
     """按已登记口径生成确定性只读查询；无法覆盖时返回 None，不猜测业务语义。"""
     slots=context.get('resolved_slots',{})
+    if slots.get('result_grain'):
+        from .finite_grains import query
+        return query(context, max_rows)
     if metric_ids==['customer_count']:
         return {'sql':'SELECT COUNT(*) AS customer_count FROM main.Customer','params':{}}
     measures=[m for m in metric_ids if m in MEASURE_EXPRESSIONS]
@@ -150,22 +175,36 @@ def _controlled_query(context, metric_ids, candidate_sql=None, max_rows=50):
         select=['%s AS %s' % (expr, name) for name, expr in plan['columns']]
     if _media_scope_applies(metric_ids,slots):
         where.append('t.MediaTypeId IN ('+','.join(str(value) for value in slots['media_ids'])+')')
+    genre_ids=[]
     for entity in context.get('entities',[]):
         entity_id=entity.get('id','')
         if entity.get('type')=='genre' and entity_id.startswith('Genre:'):
-            params['genre_id']=int(entity_id.split(':',1)[1])
-            where.append('t.GenreId = :genre_id')
+            try:
+                value=int(entity_id.split(':',1)[1])
+            except ValueError:
+                return None
+            if value < 1:
+                return None
+            genre_ids.append(value)
         elif entity.get('type')=='country' and entity_id.startswith('Country:'):
             params['billing_country']=entity_id.split(':',1)[1]
             where.append('i.BillingCountry = :billing_country')
         else:
             return None
+    genre_ids=sorted(set(genre_ids))
+    if len(genre_ids)==1:
+        params['genre_id']=genre_ids[0]
+        where.append('t.GenreId = :genre_id')
+    elif genre_ids:
+        names=['genre_id_'+str(i) for i in range(len(genre_ids))]
+        params.update(zip(names,genre_ids))
+        where.append('t.GenreId IN ('+','.join(':'+name for name in names)+')')
     measures=measures or ['sales_amount']
     select+= [MEASURE_EXPRESSIONS[metric] for metric in measures]
     sql='SELECT '+', '.join(select)+' FROM main.InvoiceLine il '
     sql+='JOIN main.Invoice i ON i.InvoiceId = il.InvoiceId JOIN main.Track t ON t.TrackId = il.TrackId '
     sql+=' '.join(joins)+' WHERE '+' AND '.join(where)
-    limit=_candidate_limit(candidate_sql,max_rows) if candidate_sql else None
+    limit=min(top_n,max_rows) if top_n is not None else _candidate_limit(candidate_sql,max_rows) if candidate_sql else None
     if group_by:
         sql+=' GROUP BY '+', '.join(group_by)
         # 有取前 N 的候选时按度量降序排名，否则按维度键稳定排序。
@@ -265,7 +304,7 @@ class NLQueryService:
             else:
                 response['limitations'].append('指定指标已传入模型；本阶段未自动证明生成 SQL 与业务口径语义等价。')
             # Data is encoded as a separate JSON message, never interpolated into system instructions.
-            contract=_output_contract(metric_ids)
+            contract=_output_contract(metric_ids, context.get('resolved_slots', {}))
             payload=dict(question=data['question'].strip(),profile_id=profile.id,dialect=profile.database['dialect'],
                          schema=snapshot,metrics=selected,dictionary=catalog['dictionary'],context=context,
                          output_columns=contract or [])
@@ -311,8 +350,39 @@ class NLQueryService:
                 response['limitations'].append('模型调用重试后仍未成功（%s）；本轮改用已登记指标的受控查询计划执行，未使用模型生成的 SQL。' % '、'.join(dict.fromkeys(failures)))
             generation_ms=round((time.monotonic()-started)*1000,3)
             repaired=model_failure is not None
+            top_n = requested_top_n(data['question'])
+            nullable_media_join = 'media_type_sales' in metric_ids and bool(re.search(r'\bleft\s+(?:outer\s+)?join\s+(?:main\.)?invoice\b', generated['sql'], re.I))
+            if context.get('resolved_slots', {}).get('result_grain'):
+                controlled = _controlled_query(context, metric_ids, max_rows=max_rows)
+                if controlled is None:
+                    raise ModuleError('UNSUPPORTED_CAPABILITY', '有限跨源粒度与已确认范围不兼容')
+                generated, repaired = controlled, True
+                response['limitations'].append('跨源粒度使用已批准有限查询计划，模型候选未用于执行；仍通过现有只读校验。')
+            genres={e.get('id') for e in context.get('entities',[]) if e.get('type')=='genre'}
+            if len(genres)>1 and not context.get('resolved_slots', {}).get('result_grain'):
+                # A user's explicit union is not an AND of incompatible GenreIds.
+                # Textual candidate coverage alone cannot certify set semantics.
+                controlled=(_controlled_query(context,metric_ids,max_rows=max_rows,top_n=top_n)
+                            if all(m in MEASURE_EXPRESSIONS or m in GRAIN_PLANS for m in metric_ids) else None)
+                if controlled is None:
+                    raise ModuleError('UNSUPPORTED_CAPABILITY','已确认多品类合并范围，但当前登记指标不支持该集合查询')
+                generated,repaired=controlled,True
+                response['limitations'].append('用户明确多品类合并；使用参数化IN受控查询计划保留完整集合，模型候选未用于执行；仍通过只读校验。')
+            if len(metric_ids)>1 and all(m in MEASURE_EXPRESSIONS for m in metric_ids) and not context.get('resolved_slots', {}).get('result_grain'):
+                controlled=_controlled_query(context,metric_ids,max_rows=max_rows)
+                if controlled is None:
+                    raise ModuleError('UNSUPPORTED_CAPABILITY','已确认多个交易指标，但已登记计划缺少完整执行条件')
+                generated,repaired=controlled,True
+                response['limitations'].append('已确认的多个交易指标使用受控查询计划逐项保留；模型候选（如有）未用于执行；仍通过只读校验。')
+            if (top_n is not None and any(metric in GRAIN_PLANS for metric in metric_ids)) or nullable_media_join:
+                if top_n is not None and top_n > max_rows:
+                    raise ModuleError('UNSUPPORTED_CAPABILITY','请求排名数量超过本轮max_rows上限，请提高行数限制或缩小排名范围')
+                controlled = _controlled_query(context, metric_ids, max_rows=max_rows, top_n=top_n)
+                if controlled is not None:
+                    generated, repaired = controlled, True
+                    response['limitations'].append('媒体类型金额的日期过滤存在可空订单连接风险；改用已登记指标的明细日期受控查询计划。' if nullable_media_join else '显式Top-N通过已登记指标的受控查询计划执行：按度量降序、同分按维度键稳定排序；未用max_rows代替排名。')
             if not _candidate_covers_context(generated,context):
-                controlled=_controlled_query(context,metric_ids,candidate_sql=generated['sql'],max_rows=max_rows)
+                controlled=_controlled_query(context,metric_ids,candidate_sql=generated['sql'],max_rows=max_rows,top_n=top_n)
                 if controlled is None:
                     raise ModuleError('SQL_EXECUTION_FAILED','模型候选遗漏已确认的业务筛选条件','SEMANTIC_SCOPE_MISMATCH')
                 generated=controlled
@@ -330,7 +400,7 @@ class NLQueryService:
             if contract and result.get('status')=='success':
                 mapping=_contract_column_mapping(result,contract)
                 if mapping is None:
-                    controlled=_controlled_query(context,metric_ids,candidate_sql=generated['sql'],max_rows=max_rows)
+                    controlled=_controlled_query(context,metric_ids,candidate_sql=generated['sql'],max_rows=max_rows,top_n=top_n)
                     if controlled is not None:
                         generated=controlled
                         repaired=True

@@ -38,6 +38,7 @@ class ChunkRecord:
     page: int | None
     bbox: list[float] | None
     source_uri: str
+    context_members: tuple[tuple[str, tuple[float, ...]], ...] = ()
 
 
 def _source_uri(doc: dict, suffix: str) -> str:
@@ -46,7 +47,7 @@ def _source_uri(doc: dict, suffix: str) -> str:
 
 def _split_text(text: str, *, doc: dict, location: str, page: int | None = None,
                 bbox: list[float] | None = None, section: str | None = None,
-                max_chars: int = 1200) -> Iterable[ChunkRecord]:
+                max_chars: int = 1200, context_members=()) -> Iterable[ChunkRecord]:
     value = text.strip()
     if not value:
         return
@@ -69,6 +70,7 @@ def _split_text(text: str, *, doc: dict, location: str, page: int | None = None,
             page=page,
             bbox=bbox,
             source_uri=_source_uri(doc, location),
+            context_members=context_members,
         )
 
 
@@ -116,6 +118,15 @@ def _read_docx(path: Path, doc: dict, max_chars: int) -> tuple[ChunkRecord, ...]
             text, doc=doc, location=f"#P{paragraph_number}", section=heading,
             max_chars=max_chars,
         ))
+    # Preserve each original paragraph; add source-addressable table context.
+    # Flattening cells independently loses the association between a label and
+    # its threshold/frequency. These chunks contain only actual table text.
+    for number, table in enumerate(root.findall(".//w:tbl", ns), 1):
+        rows = []
+        for row in table.findall("./w:tr", ns):
+            cells = [" ".join(n.text or "" for n in cell.findall(".//w:t", ns)) for cell in row.findall("./w:tc", ns)]
+            rows.append(" | ".join(cells))
+        records.extend(_split_text("\n".join(rows), doc=doc, location=f"#T{number}", section="表格", max_chars=max_chars))
     if not records:
         raise DocumentProcessingError(doc["doc_id"], "DOCX_EMPTY")
     return tuple(records)
@@ -167,9 +178,44 @@ def _read_png(path: Path, doc: dict, max_chars: int) -> tuple[ChunkRecord, ...]:
             str(item[1]), doc=doc, location=f"#B{index}", page=1,
             bbox=bbox, section="OCR", max_chars=max_chars,
         ))
+    # Bound neighbours by actual geometry, not the OCR enumeration order.
+    # Keep each original block ID/bbox; union bbox is only the preview region.
+    originals = list(records)
+    for index, item in enumerate(originals):
+        neighbours = spatial_neighbours(item, originals)
+        if len(neighbours) < 2:
+            continue
+        boxes = [n.bbox for n in neighbours]
+        bbox = [min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes)]
+        locations = [n.source_uri.rsplit("#", 1)[1] for n in neighbours]
+        members = tuple((n.chunk_id, tuple(n.bbox)) for n in neighbours)
+        records.extend(_split_text("\n".join(n.text for n in neighbours), doc=doc,
+            location="#" + "+".join(locations), page=1, bbox=bbox, section="OCR邻接", max_chars=max_chars, context_members=members))
     if not records:
         raise DocumentProcessingError(doc["doc_id"], "OCR_EMPTY")
     return tuple(records)
+
+
+def spatial_neighbours(seed, records):
+    """At most two nearby same-column/baseline blocks; no distant joining."""
+    box = seed.bbox
+    if not box:
+        return [seed]
+    height = max(1.0, box[3] - box[1])
+    ranked = []
+    for candidate in records:
+        if candidate.chunk_id == seed.chunk_id or candidate.page != seed.page or not candidate.bbox:
+            continue
+        other = candidate.bbox
+        overlap = max(0, min(box[2], other[2]) - max(box[0], other[0]))
+        ratio = overlap / max(1.0, min(box[2] - box[0], other[2] - other[0]))
+        gap = other[1] - box[3]
+        baseline = abs((other[1] + other[3]) / 2 - (box[1] + box[3]) / 2)
+        horizontal = max(0, other[0] - box[2], box[0] - other[2])
+        if 0 <= gap <= height * 2.5 and ratio >= 0.5 or baseline <= height * 0.6 and horizontal <= height * 2:
+            ranked.append((max(0, gap) + baseline + horizontal, candidate))
+    ranked.sort(key=lambda p: (p[0], p[1].chunk_id))
+    return [seed, *(c for _, c in ranked[:2])]
 
 
 def read_document(root: Path, doc: dict, *, max_chars: int = 1200) -> tuple[ChunkRecord, ...]:

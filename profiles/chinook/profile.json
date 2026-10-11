@@ -11,6 +11,8 @@
     "end_date": {"type":"string"},
     "media_ids": {"type":"array"},
     "playlist_id": {"type":"integer"},
-    "comparison_period": {"type":"object"}
+    "comparison_period": {"type":"object"},
+    "result_grain": {"type":"string", "values":["month", "customer_audio", "track_set"]},
+    "track_ids": {"type":"array"}
   }
 }

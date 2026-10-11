@@ -121,9 +121,13 @@ class KnowledgeIndex:
                 status="failed", error=ApiError(code="PROFILE_NOT_FOUND", message="该知识索引不属于请求 profile。", retryable=False),
             )
         filters = request.filters
-        if not set(filters) <= {"doc_id", "section", "business_metric_ids", "slots"}:
+        if not set(filters) <= {"doc_id", "section", "business_metric_ids", "slots", "fact_role"}:
             return self._failure(request, "INVALID_REQUEST", "检索筛选条件不受支持。")
         doc_id = filters.get("doc_id")
+        from .facts import FACTS, fact_matches
+        role = filters.get("fact_role")
+        if role is not None and (role not in FACTS or FACTS[role][0] != doc_id):
+            return self._failure(request, "INVALID_REQUEST", "事实检索角色与文档不匹配。")
         if doc_id is not None and doc_id not in self.documents:
             return self._failure(request, "INVALID_REQUEST", "文档筛选条件不受支持。")
         metric_ids = filters.get("business_metric_ids", [])
@@ -158,10 +162,13 @@ class KnowledgeIndex:
                 continue
             # 覆盖率按 IDF 权重计算：长问题会切出大量高频碎片词，
             # 用命中词数占比当门槛会让正常问法直接被筛空。
-            if not hinted_doc and query_weight and sum(self._weight(term) for term in matched) / query_weight < 0.35:
+            role_hit = role and fact_matches(role, item.record.text)
+            if not role_hit and not hinted_doc and query_weight and sum(self._weight(term) for term in matched) / query_weight < 0.35:
                 continue
             # 词频取对数，避免长段落靠重复高频词压过真正讲该主题的段落。
             score = sum(self._weight(term) * (1 + math.log(item.normalized_text.count(term))) for term in matched)
+            if role_hit:
+                score += 2_000_000
             if hinted_doc and item.record.doc_id == hinted_doc:
                 # Configured whole-question vocabulary is a document-routing
                 # signal. Keep lexical scoring for chunks inside that document,
@@ -173,6 +180,13 @@ class KnowledgeIndex:
                 score += 1.5
             ranked.append((float(score), item))
         ranked.sort(key=lambda pair: (-pair[0], pair[1].record.doc_id, pair[1].record.chunk_id))
+        if role == "monthly_bundle":
+            preferred = []
+            for need in ("monthly_plan", "target_formula"):
+                pair = next((p for p in ranked if fact_matches(need, p[1].record.text)), None)
+                if pair and pair not in preferred:
+                    preferred.append(pair)
+            ranked = preferred + [p for p in ranked if p not in preferred]
         chunks = [
             DocumentChunk(
                 chunk_id=item.record.chunk_id, doc_id=item.record.doc_id,

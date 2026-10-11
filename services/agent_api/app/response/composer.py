@@ -1,7 +1,7 @@
 """Finite renderers backed by this-turn sources, not generated business claims."""
 
-from dataclasses import dataclass
-from decimal import Decimal
+from dataclasses import dataclass, replace
+from decimal import Decimal, ROUND_HALF_UP
 import unicodedata
 
 from ..contracts import ApiError, AskResponse, Intent
@@ -35,6 +35,8 @@ class DocumentSnapshot:
     text: str
     source_uri: str
     version: str
+    page: int | None = None
+    bbox: tuple[float, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -54,7 +56,7 @@ BANNERS = {
     "offline_sql_d12_integration": "来源：真实 Chinook 样例库 + A 的 D12 V1.0 Markdown；仅有限问法，没有真实业务计算器。",
     "calculation_fixture": "人工测试来源：SQL 行、目标及公式文档是 fixture；仅 LocalCalculator 实际计算，不能当作真实销售或企业达标结论。",
 }
-LIVE_SQL_BANNER = "来源：真实 Chinook 样例库 + 大模型生成 SQL；候选经 C 只读安全校验后执行。"
+LIVE_SQL_BANNER = "来源：真实 Chinook 样例库；SQL 经 C 只读安全校验执行。在线模式含大模型生成 SQL 候选及受控查询计划；本轮实际采用路径见 limitations/trace。"
 
 # Match exactly C's accepted offline candidate shapes, not arbitrary SQL text.
 SQL_SHAPES = {
@@ -117,6 +119,8 @@ class FormalResponseComposer:
             if policy.model_mode == "live" and self.execution_mode.startswith("offline_sql")
             else BANNERS[self.execution_mode]
         )
+        if policy.allow_business_calculation:
+            self.source_banner = (LIVE_SQL_BANNER if policy.model_mode == "live" else "来源：真实Chinook样例库；SQL为离线固定演示，不代表自由NL2SQL。") + " 已核验D01-D12资料；计算使用受控LocalCalculator。"
 
     @classmethod
     def for_sql(cls, profile):
@@ -141,6 +145,7 @@ class FormalResponseComposer:
                 item.record.chunk_id, item.record.doc_id, item.record.title,
                 item.record.section or "正文", item.record.text,
                 item.record.source_uri, item.record.version,
+                item.record.page, tuple(item.record.bbox) if item.record.bbox else None,
             )
             for item in index.chunks
         )
@@ -174,6 +179,8 @@ class FormalResponseComposer:
                     if self.execution_mode in {"fixture", "calculation_fixture"} and (result.source.type != "fixture" or not result.query_id.startswith("fixture-") or result.source.tables):
                         raise SourceMismatch()
         if context.rag:
+            for retrieval in context.retrievals:
+                self._verify_sources(replace(context, rag=retrieval, retrievals=()))
             if context.rag.profile_id != self.policy.profile_id:
                 raise SourceMismatch()
             seen = set()
@@ -185,6 +192,8 @@ class FormalResponseComposer:
                     snapshots = {item.chunk_id: item for item in self.policy.documents}
                     item = snapshots.get(chunk.chunk_id)
                     if item is None or (chunk.doc_id, chunk.title, chunk.section, chunk.text, chunk.source_uri) != (item.doc_id, item.title, item.section, item.text, item.source_uri):
+                        raise SourceMismatch()
+                    if (chunk.page, tuple(chunk.bbox) if chunk.bbox else None) != (item.page, item.bbox):
                         raise SourceMismatch()
                 elif self.execution_mode in {"fixture", "calculation_fixture"} and (chunk.doc_type != "fixture" or not chunk.doc_id.startswith("fixture-") or not chunk.source_uri.startswith("fixture://")):
                     raise SourceMismatch()
@@ -243,9 +252,21 @@ class FormalResponseComposer:
 
     def _generic_document_answer(self, context, limit: int = 3):
         """Render retrieved passages verbatim instead of a single arbitrary chunk."""
-        documents = context.rag.chunks if context.rag else []
+        documents = self._documents(context)
         if not documents:
             raise EvidenceGap()
+        if context.task and context.task.answer_obligations:
+            from ..knowledge.facts import coverage
+            facts = coverage(context.task, documents)
+            if any(not item["complete"] for item in facts):
+                raise EvidenceGap()
+            references = list(dict.fromkeys(ref for item in facts for ref in item["source_refs"]))
+            selected = [c for c in documents if c.chunk_id in references]
+            if selected:
+                lead = "已核验的资料事实（不代表数据库实测或运营动作已执行）："
+                if context.task.assumptions:
+                    lead += "\n用户前提尚未核验：" + "；".join(context.task.assumptions)
+                return lead + "\n" + "\n\n".join(f"{c.text}\n来源：{c.doc_id} {c.source_uri}" for c in selected)
         seen, blocks = set(), []
         for chunk in documents:
             if chunk.chunk_id in seen:
@@ -254,8 +275,75 @@ class FormalResponseComposer:
             where = f" / {chunk.section}" if chunk.section else ""
             blocks.append(f"【{chunk.doc_id}《{chunk.title}》{where}】\n{chunk.text}\n来源：{chunk.source_uri}")
         doc_ids = sorted({chunk.doc_id for chunk in documents})
+        # Preserve at least one visible passage from each required source.
+        if context.retrievals:
+            limit = len(blocks)
         lead = f"从 {'、'.join(doc_ids)} 检索到 {len(blocks)} 段相关原文，按相关度展示前 {min(limit, len(blocks))} 段："
         return lead + "\n\n" + "\n\n".join(blocks[:limit]) + "\n" + RAG_NOTE
+
+    def _documents(self, context):
+        responses = context.retrievals or ((context.rag,) if context.rag else ())
+        documents, seen = [], set()
+        for retrieval in responses:
+            for chunk in retrieval.chunks:
+                if chunk.chunk_id not in seen:
+                    seen.add(chunk.chunk_id)
+                    documents.append(chunk)
+        return documents
+
+    def _cross_answer(self, context):
+        if "customer_tiers" in context.task.required_outputs:
+            from ..agent.cross_templates import thresholds, completed
+            docs = self._documents(context)
+            bounds = thresholds(docs)
+            if not bounds or not completed(context.task, context.sql, docs):
+                raise EvidenceGap()
+            a, b, ref = bounds
+            rows = context.sql.sql_results[0].rows
+            records = []
+            for row in rows:
+                amount = Decimal(str(row["sales_amount"]))
+                tier = "A" if amount >= a else "B" if amount >= b else "C"
+                records.append(f"客户 {row['CustomerId']}：所选品类金额 {row['selected_genre_amount']} USD；全部音频金额 {amount} USD；金额落层 {tier}层")
+            selected = [str(r["CustomerId"]) for r in rows if Decimal(str(r["sales_amount"])) >= a]
+            return "按D04金额阈值属于A层的客户：" + ("、".join(selected) or "无") + "。\n" + "\n".join(records) + f"\n分层依据：{ref}。购买品类用于筛选客户，落层按同季度全部音频金额；B层频次升级须客户支持岗确认，未自动认定升级。\n" + self._generic_document_answer(context)
+        if "monthly_actuals" in context.task.required_outputs:
+            # Independent reported figures never overwrite database actuals.
+            import re
+            rows = context.sql.sql_results[0].rows if context.sql else []
+            conflicts = []
+            for c in self._documents(context):
+                if c.doc_id == "D08" and not context.task.entities and context.task.slots.get("media_ids") == [1, 2, 4, 5] and context.task.slots.get("year") == 2025 and context.task.slots.get("quarter") == 3:
+                    for m, value in re.findall(r"([789])月(?:音频)?销售额\s*(\d+\.\d{2})美元", c.text):
+                        observed = next((r["sales_amount"] for r in rows if r["month"].endswith("-0" + m)), None)
+                        if observed is not None and Decimal(str(observed)) != Decimal(value):
+                            conflicts.append(f"{m}月：数据库实际 {observed} USD；D08报告实际 {value} USD（{c.source_uri}）")
+            if conflicts:
+                raise EvidenceConflict("同期间/全音频金额存在来源冲突，需核对：\n" + "\n".join(dict.fromkeys(conflicts)) + "\n未平均、未覆盖任一来源；整题未标完整成功。")
+        if context.task.needs_calculation:
+            if not context.calculation_records or len(context.calculation_records) != len(context.calculations):
+                return self._calculation_answer(context)
+            from ..agent.state import BusinessTask
+            from ..tools.models import CalculationRequest
+            blocks, verdicts = [], []
+            for calc, record in zip(context.calculations, context.calculation_records):
+                child = BusinessTask.model_validate(record["task"])
+                binding = CalculationRequest.model_validate(record["binding"])
+                # Reuse every old numeric/source/authorization check per item.
+                selected_rag = next((r for r in context.retrievals if r.retrieval_id == record.get("retrieval_id")), context.rag)
+                blocks.append(self._calculation_answer(replace(context, task=child, rag=selected_rag, calculations=(calc,), binding=binding, binding_audit=record["audit"], calculation_records=())))
+                if binding.function == "attainment_rate":
+                    actual, target = binding.operands["actual"].value, binding.operands["target"].value
+                    verdicts.append(f"{child.business_metric_ids[0]}：{'达标' if actual >= target else '未达标'}（以未提前四舍五入的实际值判定）。")
+            return "\n\n".join([*blocks, *verdicts, self._generic_document_answer(context)])
+        if not context.sql or not self._documents(context):
+            raise EvidenceGap()
+        task = context.task.model_copy(deep=True)
+        task.route, task.needs_calculation = "sql", False
+        structured = self._generic_sql_answer(replace(context, task=task, route="sql", rag=None, retrievals=()))
+        if "transaction_exists" in context.task.required_outputs:
+            structured += "\n逐商品成交状态：" + "；".join(f"TrackId {r['TrackId']} {'有成交' if r['units_sold'] > 0 else '无成交'}" for r in context.sql.sql_results[0].rows)
+        return structured + "\n\n资料规则/建议（不代表动作已执行）：\n" + self._generic_document_answer(context)
 
     def _generic_sql_answer(self, context):
         task, sql = context.task, context.sql
@@ -293,13 +381,29 @@ class FormalResponseComposer:
             returned_columns = set(result.columns)
             if expected and not expected <= returned_columns:
                 raise EvidenceGap()
+            coverage_columns = {
+                "customer_ranking": {"customerid", "customer_id", "customer"},
+                "support_distribution": {"supportrep", "supportrepid", "support_rep", "employeeid"},
+                "album_details": {"album", "album_title", "albumid"},
+                "artist_details": {"artist", "artist_name", "artistid"},
+            }
+            for obligation in task.required_outputs:
+                if obligation in coverage_columns and not coverage_columns[obligation] & {column.casefold() for column in returned_columns}:
+                    raise EvidenceGap()
+            if any(row.get(name) is None for row in result.rows for name in expected):
+                raise EvidenceGap()  # NULL is not a successful zero-valued observation.
             # 分组指标必须真的带出维度列，否则退化成一行合计，不能当作分组答案。
             if grouped and not returned_columns - expected:
                 raise EvidenceGap()
 
             def render_row(row):
+                def display(name):
+                    value = row[name]
+                    if units.get(name) == "USD" and type(value) in (int, float):
+                        return format(Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), "f")
+                    return str(value)
                 return "；".join(
-                    f"{labels.get(name, name)} {row[name]}{(' ' + units[name]) if name in units else ''}"
+                    f"{labels.get(name, name)} {display(name)}{(' ' + units[name]) if name in units else ''}"
                     for name in result.columns
                 )
 
@@ -379,13 +483,13 @@ class FormalResponseComposer:
             "这仅验证算术与绑定，不能当作真实销售、达标或增长结论。"
         )
         return "\n".join([*rows, scope_text, f"命名函数 {request.function}；公式 {calc.formula}；公式来源 {request.formula_ref}（{bundle.formula.locator.version}）。",
-            f"{result_prefix}{function}：{calc.result:.2f} {calc.unit}；Decimal 计算，ROUND_HALF_UP 保留两位小数。", f"计算来源：{calc.calculation_id}。{conclusion}"])
+            f"{result_prefix}{function}：{calc.result:.2f}{'' if calc.unit == '%' else ' '}{calc.unit}；Decimal 计算，ROUND_HALF_UP 保留两位小数。", f"计算来源：{calc.calculation_id}。{conclusion}"])
 
     def compose(self, context: ComposeContext) -> AskResponse:
         status, answer, error = context.status, None, context.error
         limits = [self.source_banner, *context.limitations, *(context.sql.limitations if context.sql else [])]
         sql_results = context.sql.sql_results if context.sql else []
-        documents = context.rag.chunks if context.rag else []
+        documents = self._documents(context)
         calculations = list(context.calculations)
         definitions = context.sql.metric_definitions if context.sql else []
         try:
@@ -414,7 +518,7 @@ class FormalResponseComposer:
                 elif context.route == "sql":
                     answer = self._sql_answer(context)
                 elif context.route == "cross_source" and self.policy.allow_business_calculation:
-                    answer = self._calculation_answer(context)
+                    answer = self._cross_answer(context)
                 elif context.route == "rag" and self.execution_mode == "offline_sql_d12_integration":
                     if not documents:
                         raise EvidenceGap()
@@ -451,7 +555,11 @@ class FormalResponseComposer:
             answer = "本轮处理失败，未输出成功数值结论；请查看结构化 error。"
         if status != "answered":
             calculations = []
-        answer = self.source_banner + "\n" + answer
+        banner = self.source_banner
+        if self.policy.model_mode == "live" and not context.sql:
+            banner = "来源：本轮业务资料检索；本轮未调用大模型生成SQL。"
+            limits = [item for item in limits if item != self.source_banner]
+        answer = banner + "\n" + answer
         return AskResponse(request_id=context.request_id, session_id=context.session_id, profile_id=context.profile.profile_id,
             status=status, answer=answer, route=context.route, intent=Intent(name=context.task.intent if context.task else "reset_context" if context.reset_context else "unknown"),
             entities=context.task.entities if context.task else [], time_range=context.task.time_range if context.task else None,

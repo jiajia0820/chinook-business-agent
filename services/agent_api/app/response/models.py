@@ -34,6 +34,8 @@ class ComposeContext:
     error: ApiError | None = None
     parser_reason: str | None = None
     reset_context: bool = False
+    retrievals: tuple[RetrievalResponse, ...] = ()
+    calculation_records: tuple[dict, ...] = ()
 
 
 class ResponseComposer(Protocol):

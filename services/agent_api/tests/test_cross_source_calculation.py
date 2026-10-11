@@ -14,7 +14,7 @@ class CrossSourceCalculationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_q3_rock_attainment_binds_sql_d06_and_calculator(self):
         response = await self.service.ask(
-            AskRequest(question="2025年第三季度 Rock 达到目标了吗？", profile_id="chinook-music"),
+            AskRequest(question="2025年第三季度 Rock 销售额达到目标了吗？", profile_id="chinook-music"),
             request_id="calc-attainment",
         )
         self.assertEqual(response.status, "answered")
@@ -25,8 +25,15 @@ class CrossSourceCalculationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([step.tool for step in response.trace], ["sql.task", "rag.retrieve", "calculator.calculate"])
 
     async def test_q3_vs_q2_growth_binds_two_periods(self):
-        response = await self.service.ask(
+        ambiguous = await self.service.ask(
             AskRequest(question="2025年第三季度 Rock 与第二季度相比增长多少？", profile_id="chinook-music"),
+            request_id="calc-growth-metric-missing",
+        )
+        self.assertEqual(ambiguous.status, "clarification_required")
+        self.assertEqual([s.name for s in ambiguous.clarification.missing_slots], ["metric"])
+        self.assertEqual(ambiguous.sql_results, [])
+        response = await self.service.ask(
+            AskRequest(question="2025年第三季度 Rock 销售额与第二季度相比增长多少？", profile_id="chinook-music"),
             request_id="calc-growth",
         )
         self.assertEqual(response.status, "answered")

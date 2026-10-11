@@ -43,9 +43,14 @@ class KnowledgeRagAdapter:
 
 
 def _business_evidence_resolver(index: KnowledgeIndex):
+    snapshots = {item.record.chunk_id: item.record for item in index.chunks}
     def resolve(task, sql, rag, calculation_id, context):
         if not task.needs_calculation or not sql or not rag or not sql.sql_results or not rag.chunks:
             return None
+        for chunk in rag.chunks:
+            original = snapshots.get(chunk.chunk_id)
+            if original is None or (chunk.doc_id, chunk.text, chunk.source_uri) != (original.doc_id, original.text, original.source_uri):
+                return None  # Verify immutable source before issuing a permit.
         function = {"target_attainment": "attainment_rate", "target_difference": "difference", "growth_rate": "growth_rate"}.get(task.intent)
         if function is None:
             return None
@@ -54,7 +59,59 @@ def _business_evidence_resolver(index: KnowledgeIndex):
         scope = task_scope(task)
         prior = comparison_period(task) if function == "growth_rate" else None
         documents = {chunk.chunk_id: chunk for chunk in rag.chunks}
-        target = next((chunk for chunk in rag.chunks if chunk.doc_id == "D06" and ("Rock" in chunk.text or "50.00" in chunk.text)), None)
+        metric = index.profile.metric(metric_id)
+        if metric is None or metric_id not in {"sales_amount", "units_sold"}:
+            return None
+        unit = metric.unit
+        target, numeric = None, None
+        if function != "growth_rate":
+            # A limited approved D06 row resolver: identity, period, scope and
+            # units must match before taking a numeric span. No hardcoded value.
+            monthly = task.slots.get("month")
+            valid_period = (period.start == "2025-07-01" and period.end == "2025-10-01") or (task.slots.get("year") == 2025 and monthly in {7, 8, 9})
+            if not valid_period or scope.media_ids != [1, 2, 4, 5] or scope.country_ids:
+                return None
+            if len(scope.genre_ids) == 1:
+                row_pattern = r"Genre\s*:\s*" + re.escape(str(scope.genre_ids[0]).split(":")[-1]) + r"\s+(\d+\.\d{2})\s+(\d+)\s"
+            elif not scope.genre_ids:
+                row_pattern = r"全部音频\s+全部音频分类\s+(\d+\.\d{2})\s+(\d+)\s"
+            else:
+                return None
+            found = []
+            for chunk in rag.chunks:
+                if chunk.doc_id == "D06" and "销售额目标 美元" in chunk.text and "销量目标 件" in chunk.text:
+                    for match in re.finditer(row_pattern, chunk.text):
+                        found.append((chunk, match))
+            if not found and not scope.genre_ids:
+                # The all-audio table row can fall into a separate PDF chunk.
+                # Use only the explicit, unit-bearing whole-audio statement in
+                # a currently retrieved immutable D06 chunk; never concatenate
+                # batches or infer a target from sums / example numbers.
+                paragraph = r"本季度全音频销售额目标确定为\s*(\d+\.\d{2})\s*美元\s*[，,]\s*销量目标\s*(\d+)\s*件"
+                for chunk in rag.chunks:
+                    if chunk.doc_id == "D06":
+                        found.extend((chunk, match) for match in re.finditer(paragraph, chunk.text))
+            if monthly and metric_id == "sales_amount":
+                label = "全部音频" if not scope.genre_ids else next((a.label for a in index.profile.aliases if a.entity_id == scope.genre_ids[0]), None) if len(scope.genre_ids) == 1 else None
+                found = []
+                if not label:
+                    return None
+                for chunk in rag.chunks:
+                    if chunk.doc_id == "D06" and "月度分解" in chunk.text and "7月金额 美元" in chunk.text:
+                        pattern = re.escape(label) + r"\s+(\d+\.\d{2})\s+(\d+\.\d{2})\s+(\d+\.\d{2})"
+                        found.extend((chunk, match) for match in re.finditer(pattern, chunk.text))
+            # Overlapping context chunks may repeat the same source fact; only
+            # identical values collapse, conflicting values never do.
+            dedup = {}
+            for chunk, match in found:
+                dedup.setdefault(match.group(), (chunk, match))
+            found = list(dedup.values())
+            if len(found) != 1:
+                return None
+            target, row = found[0]
+            group = monthly - 6 if monthly else 1 if metric_id == "sales_amount" else 2
+            target_value = Decimal(row.group(group))
+            numeric_start, numeric_end = row.span(group)
         if function == "growth_rate":
             formula_text = next((chunk for chunk in rag.chunks if chunk.doc_id == "D01" and ("period_over_period_growth" in chunk.text or "增长" in chunk.text)), None)
             if formula_text is None:
@@ -65,18 +122,18 @@ def _business_evidence_resolver(index: KnowledgeIndex):
         else:
             if target is None:
                 return None
-            numeric = re.search(r"(?<![\w.])50\.00(?![\w.])", target.text)
-            if numeric is None:
-                return None
             locator = DocumentLocator(chunk_id=target.chunk_id, doc_id=target.doc_id, version="V1.0",
                 content_sha256=hashlib.sha256(target.text.encode("utf-8")).hexdigest(), source_uri=target.source_uri,
-                start=numeric.start(), end=numeric.end())
-            formula_text = next((chunk for chunk in rag.chunks if chunk.doc_id in {"D01", "D06"} and ("销售额达成率" in chunk.text or "销售额差额" in chunk.text)), target)
+                start=numeric_start, end=numeric_end)
+            label = "销售额差额" if function == "difference" else "销售额达成率"
+            formula_text = next((chunk for chunk in rag.chunks if chunk.doc_id in {"D01", "D06"} and label in chunk.text and (metric_id == "sales_amount" or "销量目标按同样办法单独比较" in chunk.text)), None)
+            if formula_text is None:
+                return None
         formula_locator = DocumentLocator(chunk_id=formula_text.chunk_id, doc_id=formula_text.doc_id, version="V1.0",
             content_sha256=hashlib.sha256(formula_text.text.encode("utf-8")).hexdigest(), source_uri=formula_text.source_uri,
             start=0, end=max(1, len(formula_text.text)))
         formula = FormulaEvidence(function=function, metric_id=metric_id, period=period, scope=scope,
-            input_unit="USD", result_unit="USD" if function == "difference" else "%",
+            input_unit=unit, result_unit=unit if function == "difference" else "%",
             confirmed=True, locator=formula_locator)
         result = sql.sql_results[0]
         if function == "growth_rate":
@@ -89,13 +146,16 @@ def _business_evidence_resolver(index: KnowledgeIndex):
             else:
                 return None
             operands = {
-                "current": SqlScalarEvidence(metric_id=metric_id, period=period, scope=scope, unit="USD", value=Decimal(str(current.rows[current_index]["sales_amount"])).quantize(Decimal("0.000001")), confirmed=True, query_id=current.query_id, row_index=current_index, column="sales_amount", result_sha256=result_hash(current)),
-                "previous": SqlScalarEvidence(metric_id=metric_id, period=prior, scope=scope, unit="USD", value=previous.rows[previous_index]["sales_amount"], confirmed=True, query_id=previous.query_id, row_index=previous_index, column="sales_amount", result_sha256=result_hash(previous)),
+                "current": SqlScalarEvidence(metric_id=metric_id, period=period, scope=scope, unit=unit, value=Decimal(str(current.rows[current_index][metric_id])).quantize(Decimal("0.000001")), confirmed=True, query_id=current.query_id, row_index=current_index, column=metric_id, result_sha256=result_hash(current)),
+                "previous": SqlScalarEvidence(metric_id=metric_id, period=prior, scope=scope, unit=unit, value=previous.rows[previous_index][metric_id], confirmed=True, query_id=previous.query_id, row_index=previous_index, column=metric_id, result_sha256=result_hash(previous)),
             }
         else:
-            actual = Decimal(str(result.rows[0]["sales_amount"])).quantize(Decimal("0.000001"))
-            operands = {"actual": SqlScalarEvidence(metric_id=metric_id, period=period, scope=scope, unit="USD", value=actual, confirmed=True, query_id=result.query_id, row_index=0, column="sales_amount", result_sha256=result_hash(result)),
-                "target": DocumentScalarEvidence(metric_id=metric_id, period=period, scope=scope, unit="USD", value=50, confirmed=True, locator=locator)}
+            row_index = next((i for i, row in enumerate(result.rows) if row.get("month") == f"2025-{monthly:02}"), None) if monthly else 0 if len(result.rows) == 1 else None
+            if row_index is None or result.rows[row_index].get(metric_id) is None:
+                return None
+            actual = Decimal(str(result.rows[row_index][metric_id])).quantize(Decimal("0.000001"))
+            operands = {"actual": SqlScalarEvidence(metric_id=metric_id, period=period, scope=scope, unit=unit, value=actual, confirmed=True, query_id=result.query_id, row_index=row_index, column=metric_id, result_sha256=result_hash(result)),
+                "target": DocumentScalarEvidence(metric_id=metric_id, period=period, scope=scope, unit=unit, value=target_value, confirmed=True, locator=locator)}
         return CalculationEvidenceBundle(request_id=context.request_id, session_id=context.session_id, profile_id=context.profile_id,
             calculation_id=calculation_id, source_mode="verified_business", function=function,
             operands=operands, formula=formula)

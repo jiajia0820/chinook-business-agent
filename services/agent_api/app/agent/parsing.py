@@ -143,6 +143,9 @@ def _unparsed_query_text(question, profile):
 
 
 def parse_question(question: str, profile: BusinessProfile, memory: SessionMemory) -> ParsedTurn:
+    if profile.orchestration_policy == "c_v1":
+        from .task_policy import parse_c_v1
+        return parse_c_v1(question, profile, memory)
     q = question.strip()
     rules = profile.question_rules
     if q in {"取消", "取消当前问题", "重新开始", "清空上下文"}:

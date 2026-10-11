@@ -36,8 +36,11 @@ def task_period(task: BusinessTask) -> EvidencePeriod:
     year, quarter = task.slots.get("year"), task.slots.get("quarter")
     if type(year) is not int or not 1 <= year <= 9998 or quarter is not None and (type(quarter) is not int or not 1 <= quarter <= 4):
         raise ValueError("invalid period slots")
-    start = date(year, (quarter - 1) * 3 + 1 if quarter else 1, 1)
-    end = date(year + 1, 1, 1) if not quarter or quarter == 4 else date(year, quarter * 3 + 1, 1)
+    month = task.slots.get("month")
+    if month is not None and (type(month) is not int or not 1 <= month <= 12 or quarter is not None):
+        raise ValueError("invalid monthly calculation period")
+    start = date(year, month or ((quarter - 1) * 3 + 1 if quarter else 1), 1)
+    end = date(year + (month == 12), 1 if month == 12 else month + 1, 1) if month else date(year + 1, 1, 1) if not quarter or quarter == 4 else date(year, quarter * 3 + 1, 1)
     if period.start != start.isoformat() or period.end != end.isoformat():
         raise ValueError("period does not match explicit slots")
     return period

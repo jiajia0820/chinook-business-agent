@@ -43,7 +43,10 @@ class AllDocumentsRagTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_unknown_document_question_has_no_fake_answer(self):
         response = await self.ask("火星移民政策的审批流程是什么？")
-        self.assertEqual(response.status, "insufficient_evidence")
+        # c_v1 intentionally removes unknown -> RAG fallback. Preserve the
+        # no-fabrication assertions and additionally prove no tool ran.
+        self.assertEqual(response.status, "clarification_required")
+        self.assertEqual(response.trace, [])
         self.assertEqual(response.documents, [])
 
     async def test_metric_definition_prioritizes_the_definition_document(self):
