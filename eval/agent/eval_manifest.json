@@ -6,18 +6,18 @@
   "profile_fixture": "eval/agent/interface_profile_fixture.json",
   "files": {
     "eval_basic_nl2sql.jsonl": 10,
-    "eval_basic_rag.jsonl": 10,
+    "eval_basic_rag.jsonl": 15,
     "eval_special_clarification.jsonl": 8,
-    "eval_special_alias_robustness.jsonl": 8,
+    "eval_special_alias_robustness.jsonl": 15,
     "eval_special_multitable.jsonl": 8,
     "eval_special_formula.jsonl": 6,
     "eval_special_multimodal.jsonl": 5,
     "eval_special_negative.jsonl": 5,
     "eval_cross_source.jsonl": 10,
-    "eval_multidoc.jsonl": 5,
+    "eval_multidoc.jsonl": 15,
     "eval_multiturn.jsonl": 5
   },
-  "single_turn_total": 75,
+  "single_turn_total": 97,
   "multiturn_sessions": 5,
   "official_mapping": {
     "basic_nl2sql": "eval/agent/eval_basic_nl2sql.jsonl",

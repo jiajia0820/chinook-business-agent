@@ -4,7 +4,7 @@
 
 测试配置名为 `chinook-music`，定义见 [测试配置](../agent/interface_profile_fixture.json)。正式测试前，开发同学需要在应用中接入这个配置。
 
-当前包含 75 道单轮题和 5 组多轮会话，机器文件清单见 [eval_manifest.json](../agent/eval_manifest.json)。
+当前包含 97 道单轮题和 5 组多轮会话，机器文件清单见 [eval_manifest.json](../agent/eval_manifest.json)。
 
 ## 目录结构
 
@@ -42,15 +42,15 @@
 | 题库 | 数量 | 作用和核查重点 |
 | --- | ---: | --- |
 | [基础 NL2SQL](eval_basic_nl2sql.md) | 10 题 | 自然语言查数；核对数值、时间和统计范围 |
-| [基础文档问答](eval_basic_rag.md) | 10 题 | 文档问答；核对事实与原文依据 |
+| [基础文档问答](eval_basic_rag.md) | 15 题 | 文档问答；核对事实与原文依据 |
 | [专项 澄清](eval_special_clarification.md) | 8 题 | 条件不完整；检查是否提出必要的补充问题 |
-| [专项 别名与分类](eval_special_alias_robustness.md) | 8 题 | 业务别名与相近分类；检查名称和分类是否对应正确 |
+| [专项 别名与分类](eval_special_alias_robustness.md) | 15 题 | 业务别名与相近分类；检查名称和分类是否对应正确 |
 | [专项 多表关联](eval_special_multitable.md) | 8 题 | 多表关联；核对关联关系、去重和汇总结果 |
 | [专项 公式计算](eval_special_formula.md) | 6 题 | 公式计算；核对输入、公式、单位及结果 |
 | [专项 多模态](eval_special_multimodal.md) | 5 题 | PDF 表格与海报读取；对照表格位置或图片区域 |
 | [专项 无证据处理](eval_special_negative.md) | 5 题 | 数据不足的问题；检查是否说明缺口 |
 | [跨源问答](eval_cross_source.md) | 10 题 | 数据库与业务文档联合分析；分别核对实际值和规则 |
-| [多文档问答](eval_multidoc.md) | 5 题 | 多份文档综合问答；核对各项结论的依据 |
+| [多文档问答](eval_multidoc.md) | 15 题 | 多份文档综合问答；核对各项结论的依据 |
 | [多轮会话](eval_multiturn.md) | 5 组 | 连续对话；在同一会话逐轮检查条件继承和修改 |
 
 ## 来源索引

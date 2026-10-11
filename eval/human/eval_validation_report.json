@@ -5,7 +5,7 @@
       "duplicate_ids": []
     },
     "eval_basic_rag.jsonl": {
-      "count": 10,
+      "count": 15,
       "duplicate_ids": []
     },
     "eval_special_clarification.jsonl": {
@@ -13,7 +13,7 @@
       "duplicate_ids": []
     },
     "eval_special_alias_robustness.jsonl": {
-      "count": 8,
+      "count": 15,
       "duplicate_ids": []
     },
     "eval_special_multitable.jsonl": {
@@ -37,7 +37,7 @@
       "duplicate_ids": []
     },
     "eval_multidoc.jsonl": {
-      "count": 5,
+      "count": 15,
       "duplicate_ids": []
     },
     "eval_multiturn.jsonl": {
