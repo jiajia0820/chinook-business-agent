@@ -584,4 +584,4 @@ API 超时等外部问题可以暂缓、后续换模型复测，但不算通过�
 
 执行`stage2_local_check.py eval_basic_nl2sql`，结果原10/10、新5/5、合计15/15；实际API调用0，HTTP被阻断，完整响应和开始/结束指纹保留。额外85单位/95请求回归83/85；多表8/8、公式6/6、跨源10/10，无旧通过退化，原有multidoc-002与session-002未在本范围修复。该成绩仅本地受控验证，第三次修改的live0/15和历史10题成绩保留，待后续用户决定恢复在线测试。
 
-本地命令：`.\.venv\Scripts\python.exe scripts/stage2_local_check.py eval_basic_nl2sql`；不得将内部注入不可用模型的live工厂参数称为已成功接入大模型。详细修改与证据见`docs/stage2-basic-nl2sql-local-repairs.md`。本地版本S2-009先备注后提交，未经整体验收禁止远程推送/PR/合并。
+本地命令：`.\.venv\Scripts\python.exe scripts/stage2_local_check.py eval_basic_nl2sql`；不得将内部注入不可用模型的live工厂参数称为已成功接入大模型。详细修改与证据统一见`docs/stage2-technical-implementation-and-generalization.md`第10节（S2-010文档整合，运行实现仍为S2-009）。本地版本S2-009先备注后提交，未经整体验收禁止远程推送/PR/合并。
