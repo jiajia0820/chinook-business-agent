@@ -54,6 +54,18 @@ def _rag_plan(question: str, intent: str) -> dict:
         if "销售额" in question or "目标" in question:
             sources.append("D08")
             requirements.append("actual")
+    # Metric-definition questions can mention several common metric names.
+    # When the question asks for the denominator or the distinction between
+    # 客单价 and 成交均价, D02 is the authoritative analysis-method source.
+    if any(term in question for term in ("客单价", "成交均价", "分母")):
+        sources.append("D02")
+        requirements.append("formula")
+    # A category handbook is an explicit operation-rule source even when the
+    # question does not contain the word “运营” (for example, when it asks
+    # what the target table and handbook each tell the operator).
+    if "品类手册" in question or ("手册" in question and any(item in question for item in ("Rock", "Metal", "Latin", "摇滚", "金属", "拉丁"))):
+        sources.append("D09")
+        requirements.append("operation_rule")
     if any(term in question for term in ("销售额最高", "最高的品类")):
         sources.append("D08")
         requirements.append("actual")

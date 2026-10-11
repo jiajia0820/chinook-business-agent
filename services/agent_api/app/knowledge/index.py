@@ -248,7 +248,12 @@ class KnowledgeIndex:
                 continue
             # 覆盖率按 IDF 权重计算：长问题会切出大量高频碎片词，
             # 用命中词数占比当门槛会让正常问法直接被筛空。
-            if not hinted_doc and query_weight and sum(self._weight(term) for term in matched) / query_weight < 0.35:
+            # A planner-provided required source is an evidence contract. It
+            # may legitimately match only one facet of a long natural-language
+            # question, so the generic coverage gate must not discard it
+            # before the required-source selection step.
+            if (not hinted_doc and item.record.doc_id not in required_sources
+                    and query_weight and sum(self._weight(term) for term in matched) / query_weight < 0.35):
                 continue
             # 词频取对数，避免长段落靠重复高频词压过真正讲该主题的段落。
             score = sum(self._weight(term) * (1 + math.log(item.normalized_text.count(term))) for term in matched)

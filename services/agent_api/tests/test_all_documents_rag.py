@@ -90,6 +90,17 @@ class AllDocumentsRagTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("商品清单", response.answer)
         self.assertNotIn("【D11", response.answer)
 
+    async def test_metric_formula_question_retrieves_sales_analysis_method(self):
+        response = await self.ask("客单价是按销售额除以销量，还是除以订单数？订单数为零时怎么处理？")
+        self.assertEqual(response.status, "answered")
+        self.assertIn("D02", {chunk.doc_id for chunk in response.documents})
+
+    async def test_target_and_category_handbook_question_retrieves_operation_manual(self):
+        response = await self.ask("Rock第三季度没到目标时，目标表和Rock品类手册分别能告诉我们什么？")
+        self.assertEqual(response.status, "answered")
+        self.assertIn("D06", {chunk.doc_id for chunk in response.documents})
+        self.assertIn("D09", {chunk.doc_id for chunk in response.documents})
+
 
 if __name__ == "__main__":
     unittest.main()
