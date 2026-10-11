@@ -12,6 +12,8 @@
     "media_ids": {"type":"array"},
     "playlist_id": {"type":"integer"},
     "comparison_period": {"type":"object"},
-    "query_intent": {"type":"object"}
+    "query_intent": {"type":"object"},
+    "result_grain": {"type":"string", "values":["month", "customer_audio", "track_set"]},
+    "track_ids": {"type":"array"}
   }
 }

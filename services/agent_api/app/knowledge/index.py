@@ -154,9 +154,13 @@ class KnowledgeIndex:
                 status="failed", error=ApiError(code="PROFILE_NOT_FOUND", message="该知识索引不属于请求 profile。", retryable=False),
             )
         filters = request.filters
-        if not set(filters) <= {"doc_id", "section", "business_metric_ids", "slots", "required_sources", "preferred_doc", "answer_type", "query_terms", "evidence_requirements", "dense_retrieval"}:
+        if not set(filters) <= {"doc_id", "section", "business_metric_ids", "slots", "fact_role", "required_sources", "preferred_doc", "answer_type", "query_terms", "evidence_requirements", "dense_retrieval"}:
             return self._failure(request, "INVALID_REQUEST", "检索筛选条件不受支持。")
         doc_id = filters.get("doc_id")
+        from .facts import FACTS, fact_matches
+        role = filters.get("fact_role")
+        if role is not None and (role not in FACTS or FACTS[role][0] != doc_id):
+            return self._failure(request, "INVALID_REQUEST", "事实检索角色与文档不匹配。")
         if doc_id is not None and doc_id not in self.documents:
             return self._failure(request, "INVALID_REQUEST", "文档筛选条件不受支持。")
         metric_ids = filters.get("business_metric_ids", [])
@@ -287,16 +291,17 @@ class KnowledgeIndex:
                 continue
             # 覆盖率按 IDF 权重计算：长问题会切出大量高频碎片词，
             # 用命中词数占比当门槛会让正常问法直接被筛空。
-            # A planner-provided required source is an evidence contract. It
-            # may legitimately match only one facet of a long natural-language
-            # question, so the generic coverage gate must not discard it
-            # before the required-source selection step.
-            if (not hinted_doc and item.record.doc_id not in required_sources
+            role_hit = role and fact_matches(role, item.record.text)
+            # A planner-provided required source is an evidence contract. It may
+            # legitimately match only one facet of a long natural-language question.
+            if not role_hit and (not hinted_doc and item.record.doc_id not in required_sources
                     and query_weight and sum(self._weight(term) for term in matched) / query_weight < 0.35):
                 continue
             # 词频取对数，避免长段落靠重复高频词压过真正讲该主题的段落。
             score = sum(self._weight(term) * (1 + math.log(item.normalized_text.count(term))) for term in matched)
             score += dense_scores.get(item.record.chunk_id, 0.0) * 10.0
+            if role_hit:
+                score += 2_000_000
             if item.record.doc_id in hinted_docs:
                 # Configured whole-question vocabulary is a document-routing
                 # signal. Keep lexical scoring for chunks inside that document,
@@ -357,15 +362,12 @@ class KnowledgeIndex:
                 source_hits = [pair for pair in ranked if pair[1].record.doc_id == source]
                 if source_hits:
                     selected_ranked.append(source_hits[0])
-        # Reserve coverage for explicitly hinted documents before filling by relevance.
         selected_ids = {item.record.chunk_id for _, item in selected_ranked}
         for document in sorted(hinted_docs):
             match = next((pair for pair in ranked if pair[1].record.doc_id == document and pair[1].record.chunk_id not in selected_ids), None)
             if match:
                 selected_ranked.append(match)
                 selected_ids.add(match[1].record.chunk_id)
-        # OCR chunks are small individual text boxes. A multipart question needs
-        # distinct boxes for deadline/materials/activity details.
         poster_hits = [pair for pair in ranked if pair[1].record.doc_id == "D11"]
         facets = []
         if any(word in request.query for word in ("截止", "报名", "一致")):
@@ -385,18 +387,17 @@ class KnowledgeIndex:
                 selected_ids.add(hit[1].record.chunk_id)
         selected_ranked.extend(pair for pair in ranked if pair[1].record.chunk_id not in selected_ids)
         ranked = selected_ranked
+        if role == "monthly_bundle":
+            preferred = []
+            for need in ("monthly_plan", "target_formula"):
+                pair = next((p for p in ranked if fact_matches(need, p[1].record.text)), None)
+                if pair and pair not in preferred:
+                    preferred.append(pair)
+            ranked = preferred + [p for p in ranked if p not in preferred]
         structured_data = None
         if structured_matches:
             record = structured_matches[0]
-            structured_data = {
-                "record_type": record.record_type,
-                "row_key": record.row_key,
-                "column_key": record.column_key,
-                "value": record.value,
-                "unit": record.unit,
-                "page": record.page,
-                "source_uri": record.source_uri,
-            }
+            structured_data = {"record_type": record.record_type, "row_key": record.row_key, "column_key": record.column_key, "value": record.value, "unit": record.unit, "page": record.page, "source_uri": record.source_uri}
         chunks = [
             DocumentChunk(
                 chunk_id=item.record.chunk_id, doc_id=item.record.doc_id,

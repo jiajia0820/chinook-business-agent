@@ -107,6 +107,7 @@ class BusinessProfile(InternalModel):
     currency: str | None = None
     sources: list[ConfigSource] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
+    orchestration_policy: Literal["legacy", "c_v1"] = "legacy"
 
     @model_validator(mode="after")
     def validate_configuration(self) -> BusinessProfile:

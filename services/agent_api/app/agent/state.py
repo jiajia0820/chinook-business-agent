@@ -1,6 +1,7 @@
 """Validated context and JSON-only checkpoint channels (no model messages)."""
 
 from typing import Literal, TypedDict
+import uuid
 
 from pydantic import Field, JsonValue
 
@@ -18,6 +19,19 @@ class BusinessTask(InternalModel):
     business_metric_ids: list[str] = Field(default_factory=list)
     time_range: TimeRange | None = None
     needs_calculation: bool = False
+    information_needs: list[str] = Field(default_factory=list)
+    required_outputs: list[str] = Field(default_factory=list)
+    excluded_entities: list[dict[str, JsonValue]] = Field(default_factory=list)
+    slot_provenance: dict[str, dict[str, JsonValue]] = Field(default_factory=dict)
+    retrieval_question: str = ""
+    subtask_plan: list[dict[str, JsonValue]] = Field(default_factory=list)
+    task_id: str = Field(default_factory=lambda: "business-" + str(uuid.uuid4()))
+    task_version: int = 1
+    source_roles: list[str] = Field(default_factory=list)
+    answer_obligations: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    evidence_coverage: list[dict[str, JsonValue]] = Field(default_factory=list)
+    time_issues: list[str] = Field(default_factory=list)
 
 
 class SessionMemory(InternalModel):
@@ -26,6 +40,20 @@ class SessionMemory(InternalModel):
     pending: BusinessTask | None = None
     last_task: BusinessTask | None = None
     last_answer_summary: str | None = None
+    pending_slots: list[str] = Field(default_factory=list)
+    policy_version: str = "legacy"
+    previous_view: BusinessTask | None = None
+    active_task_id: str | None = None
+    pending_clarification: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+def logical_copy(task):
+    if task is None:
+        return None
+    copied = task.model_copy(deep=True)
+    copied.evidence_coverage, copied.subtask_plan = [], []
+    copied.slot_provenance = {k: {name: value for name, value in meta.items() if name not in {"source_ref", "source_refs"}} for k, meta in copied.slot_provenance.items()}
+    return copied
 
 
 class ParsedTurn(InternalModel):
@@ -35,6 +63,7 @@ class ParsedTurn(InternalModel):
     reason: str | None = None
     reused_context: bool = False
     rules: list[str] = Field(default_factory=list)
+    blocking_slots: list[str] = Field(default_factory=list)
 
 
 class AgentState(TypedDict, total=False):
@@ -50,6 +79,8 @@ class AgentState(TypedDict, total=False):
     tool_plan: list[str]
     sql_outcome: dict | None
     retrieval_outcome: dict | None
+    retrieval_outcomes: list[dict]
+    calculation_records: list[dict]
     calculations: list[dict]
     calculation_binding: dict | None
     calculation_evidence: dict | None
@@ -62,3 +93,4 @@ class AgentState(TypedDict, total=False):
     limitations: list[str]
     error: dict | None
     response: dict | None
+    turn_deadline: float

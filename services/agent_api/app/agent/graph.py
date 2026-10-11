@@ -6,12 +6,13 @@ import json
 import os
 import re
 import uuid
+import time
 from typing import Literal
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 
-from ..contracts import ApiError, AskRequest, AskResponse, Calculation, Intent, RetrievalRequest, RetrievalResponse
+from ..contracts import ApiError, AskRequest, AskResponse, Calculation, DocumentChunk, Intent, RetrievalRequest, RetrievalResponse
 from ..evidence.binding import authorize_calculation
 from ..evidence.models import EvidenceResolver
 from ..evidence.business_workflows import WORKFLOWS, WorkflowGap, resolve_sources, conclude
@@ -21,7 +22,7 @@ from ..response.models import ComposeContext, ResponseComposer
 from ..tools.models import BusinessContextItem, CalculationRequest, SqlTaskOutcome, SqlTaskRequest
 from ..tools.references import sql_cell_ref
 from .parsing import parse_question
-from .state import AgentState, BusinessTask, ParsedTurn, SessionMemory
+from .state import AgentState, BusinessTask, ParsedTurn, SessionMemory, logical_copy
 
 
 CalculationBinder = Callable[[BusinessTask, SqlTaskOutcome | None, RetrievalResponse | None, str], CalculationRequest | None]
@@ -179,19 +180,26 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
         memory = state.get("memory")
         if not memory or memory["profile_id"] != profile.profile_id or memory["config_version"] != profile.config_version:
             memory = SessionMemory(profile_id=profile.profile_id, config_version=profile.config_version).model_dump(mode="json")
+        from .task_policy import POLICY_VERSION
+        policy_version = POLICY_VERSION if profile.orchestration_policy == "c_v1" else "legacy"
+        if memory.get("policy_version", "legacy") != policy_version:
+            memory = SessionMemory(profile_id=profile.profile_id, config_version=profile.config_version, policy_version=policy_version).model_dump(mode="json")
         return {
             "memory": memory, "parsed": {}, "status": "", "route": "clarification",
             "tool_plan": [], "sql_outcome": None, "retrieval_outcome": None,
-            "calculations": [], "calculation_binding": None, "calculation_evidence": None, "calculation_audits":[], "evidence_refs": [],
+            "calculations": [], "calculation_binding": None, "calculation_evidence": None, "calculation_audits": [], "evidence_refs": [],
+            "retrieval_outcomes": [], "calculation_records": [],
             "events": [], "node_path": ["initialize_turn"], "error": None, "response": None,
             "business_sources":None,"business_audit":None,
             "limitations": [source_banner, "当前解析覆盖已登记的业务指标、时间和实体范围；会话仅在本进程内保留。", *profile_limitations],
+            "turn_deadline": time.monotonic() + 200,
         }
 
     def parse(state: AgentState):
         request = AskRequest.model_validate(state["request"])
-        parsed = parse_question(request.question, profiles.get(state["profile_id"]), SessionMemory.model_validate(state["memory"]))
-        return mark(state, "parse_question", parsed=parsed.model_dump(mode="json"))
+        memory = SessionMemory.model_validate(state["memory"])
+        parsed = parse_question(request.question, profiles.get(state["profile_id"]), memory)
+        return mark(state, "parse_question", parsed=parsed.model_dump(mode="json"), memory=memory.model_dump(mode="json"))
 
     def validate(state: AgentState):
         parsed = ParsedTurn.model_validate(state["parsed"])
@@ -210,6 +218,9 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
                 plan.append("rag.retrieve")
             if parsed.task.needs_calculation:
                 plan.append("calculator.calculate")
+            if profiles.get(state["profile_id"]).orchestration_policy == "c_v1":
+                from .task_plan import make_plan
+                parsed.task.subtask_plan = make_plan(parsed.task)
         limitations = state["limitations"]
         if "partial_data_coverage" in parsed.rules:
             profile = profiles.get(state["profile_id"])
@@ -222,20 +233,32 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
     def start_route(state):
         if state["status"] != "ready":
             return compose_node
-        if ParsedTurn.model_validate(state['parsed']).task.intent in WORKFLOWS:
-            return 'rag'
+        task = ParsedTurn.model_validate(state["parsed"]).task
+        if task.intent in WORKFLOWS or (task.subtask_plan and task.subtask_plan[0]["kind"] == "rag"):
+            return "rag"
         return "sql" if state["route"] in ("sql", "cross_source") else "rag"
 
     def context(state):
-        return ToolContext(request_id=state["request_id"], session_id=state["session_id"], profile_id=state["profile_id"], available_source_refs=tuple(state["evidence_refs"]))
+        return ToolContext(request_id=state["request_id"], session_id=state["session_id"], profile_id=state["profile_id"], available_source_refs=tuple(state["evidence_refs"]), deadline=state.get("turn_deadline"))
 
     async def call_sql(state: AgentState):
         parsed = ParsedTurn.model_validate(state["parsed"])
         task = parsed.task
         profile = profiles.get(state["profile_id"])
         request = AskRequest.model_validate(state["request"])
+        if profile.orchestration_policy == "c_v1":
+            from .cross_templates import prepare
+            documents = [DocumentChunk.model_validate(c) for r in state.get("retrieval_outcomes", []) if r["data"] for c in r["data"]["chunks"]]
+            task = prepare(task, documents, getattr(getattr(response_composer, "policy", None), "documents", ()))
+            if task is None:
+                return mark(state, "sql_preflight", status="insufficient_evidence", limitations=[*state["limitations"], "未取得批准的规则/候选事实；未把未核验文档转换为SQL条件。"])
+            parsed.task = task
         definitions = [profile.metric(metric) for metric in task.business_metric_ids]
         business_context = {ref: definition.definition for definition in definitions for ref in definition.source_refs}
+        for recorded in state.get("retrieval_outcomes", []):
+            if recorded["data"]:
+                for chunk in recorded["data"]["chunks"]:
+                    business_context[chunk["chunk_id"]] = chunk["text"]
         payload = SqlTaskRequest(
             query_id="task-" + str(uuid.uuid4()), profile_id=profile.profile_id,
             question=task.original_question, normalized_question=task.normalized_question,
@@ -246,16 +269,81 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
             business_context=[BusinessContextItem(ref_id=ref, text=text) for ref, text in business_context.items()][:20],
             max_rows=request.options.max_rows, show_trace=request.options.show_trace,
         )
+        if task.intent == "growth_rate":
+            slots = dict(payload.resolved_slots)
+            slots.pop("comparison_period", None)
+            metric_label = profile.metric(task.business_metric_ids[0]).name
+            query = f"{task.time_range.label} {task.slots.get('data_scope', '')}{metric_label}是多少"
+            payload = payload.model_copy(update={"question": query, "normalized_question": query, "resolved_slots": slots})
         outcome = await runtime.run("sql.task", payload, context(state))
         refs = list(outcome.source_refs)
         if outcome.succeeded:
             for result in outcome.data.sql_results:
                 refs.extend(sql_cell_ref(result.query_id, index, column) for index, row in enumerate(result.rows) for column, value in row.items() if type(value) in (int, float))
-        return tool_update(state, "sql", outcome, "sql_outcome", refs)
+        update = tool_update(state, "sql", outcome, "sql_outcome", refs)
+        update["parsed"] = parsed.model_dump(mode="json")
+        if outcome.succeeded and task.intent == "growth_rate" and task.slots.get("comparison_period"):
+            from .parsing import _time_range
+            prior = task.slots["comparison_period"]
+            period = _time_range(prior)
+            slots = dict(payload.resolved_slots)
+            slots.update(start_date=period.start, end_date=period.end)
+            slots.pop("comparison_period", None)
+            prior_question = f"{period.label} {task.slots.get('data_scope', '')}{metric_label}是多少"
+            second = payload.model_copy(update={"query_id": "task-" + str(uuid.uuid4()), "question": prior_question, "normalized_question": prior_question, "resolved_slots": slots, "time_range": period})
+            current = {**state, **update}
+            previous = await runtime.run("sql.task", second, context(current))
+            prior_refs = [*previous.source_refs, *[sql_cell_ref(r.query_id, i, c) for r in previous.data.sql_results for i, row in enumerate(r.rows) for c, v in row.items() if type(v) in (int, float)]] if previous.succeeded else []
+            update.update(tool_update(current, "sql_previous", previous, "sql_outcome", prior_refs))
+            if previous.succeeded:
+                combined = outcome.data.model_copy(update={"sql_results": [*outcome.data.sql_results, *previous.data.sql_results], "source_refs": [*outcome.data.source_refs, *previous.data.source_refs], "limitations": [*outcome.data.limitations, *previous.data.limitations]})
+                update["sql_outcome"] = {"status": "success", "data": combined.model_dump(mode="json"), "error": None}
+        return update
 
     async def call_rag(state: AgentState):
         task = ParsedTurn.model_validate(state["parsed"]).task
         request = AskRequest.model_validate(state["request"])
+        if profiles.get(state["profile_id"]).orchestration_policy == "c_v1":
+            from .task_plan import retrieval_specs, retrieval_task_from_sql, retry_query
+            from ..knowledge.facts import FACTS, fact_matches, coverage
+            sql, _ = _models(state)
+            task = retrieval_task_from_sql(task, sql, profiles.get(state["profile_id"]))
+            current, recorded, repairs, empty_repaired = dict(state), [], 0, False
+            for doc, query, count, role in retrieval_specs(task, request.options.top_k):
+                filters = {"slots": task.slots, "business_metric_ids": task.business_metric_ids}
+                if doc:
+                    filters["doc_id"] = doc
+                if role:
+                    filters["fact_role"] = role
+                payload = RetrievalRequest(retrieval_id="retrieval-" + str(uuid.uuid4()), profile_id=state["profile_id"], query=query, filters=filters, top_k=count)
+                outcome = await runtime.run("rag.retrieve", payload, context(current))
+                current.update(tool_update(current, "rag", outcome, "retrieval_outcome", list(outcome.source_refs)))
+                incomplete = outcome.succeeded and (not outcome.data.chunks or role and not any(fact_matches(role, c.text) for c in outcome.data.chunks))
+                if incomplete and doc and repairs < 2 and (role or not empty_repaired):
+                    repairs += 1
+                    empty_repaired = empty_repaired or not outcome.data.chunks
+                    payload = payload.model_copy(update={"retrieval_id": "retrieval-" + str(uuid.uuid4()), "query": FACTS[role][1] if role else retry_query(task, doc)})
+                    outcome = await runtime.run("rag.retrieve", payload, context(current))
+                    current.update(tool_update(current, "rag", outcome, "retrieval_outcome", list(outcome.source_refs)))
+                    current["limitations"] = [*current["limitations"], f"{doc}/{role or 'document'}事实缺证，定向补检索；未改变用户条件（整轮最多2次）。"]
+                recorded.append(_snapshot(outcome))
+                if not outcome.succeeded:
+                    break
+            primary = next((r for r in recorded if r["data"] and r["data"]["chunks"]), recorded[0] if recorded else None)
+            all_chunks = [c for r in recorded if r["data"] for c in r["data"]["chunks"]]
+            if primary and primary.get("data") and all_chunks:
+                merged = dict(primary)
+                merged_data = dict(primary["data"])
+                primary_retrieval_id = merged_data.get("retrieval_id")
+                merged_data["chunks"] = [{**chunk, "retrieval_id": primary_retrieval_id} for chunk in all_chunks]
+                merged["data"] = merged_data
+                primary = merged
+            task.evidence_coverage = coverage(task, [DocumentChunk.model_validate(c) for c in all_chunks])
+            if all_chunks:
+                current["evidence_refs"] = list(dict.fromkeys([*current.get("evidence_refs", []), *(c.get("chunk_id") for c in all_chunks)]))
+            parsed = ParsedTurn.model_validate(state["parsed"])
+            parsed.task.evidence_coverage = task.evidence_coverage
+            return {**current, "retrieval_outcomes": recorded, "retrieval_outcome": primary, "parsed": parsed.model_dump(mode="json")}
         retrieval_query = task.original_question if task.route == "cross_source" else task.normalized_question
         profile = profiles.get(state["profile_id"])
         filters = {"slots": task.slots, "business_metric_ids": task.business_metric_ids}
@@ -316,14 +404,16 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
             return 'evidence_check'
         if not any(result["rows"] for result in state["sql_outcome"]["data"]["sql_results"]):
             return "evidence_check"
-        return "rag" if state["route"] == "cross_source" else "calculate" if "calculator.calculate" in state["tool_plan"] else "evidence_check"
+        return "rag" if state["route"] == "cross_source" and not state.get("retrieval_outcome") else "calculate" if "calculator.calculate" in state["tool_plan"] else "evidence_check"
 
     def after_rag(state):
         rag = state["retrieval_outcome"]
         if state["status"] != "ready" or not rag["data"]["chunks"]:
             return "evidence_check"
-        if ParsedTurn.model_validate(state['parsed']).task.intent in WORKFLOWS:
-            return 'prepare_business'
+        if ParsedTurn.model_validate(state["parsed"]).task.intent in WORKFLOWS:
+            return "prepare_business"
+        if state["route"] == "cross_source" and not state.get("sql_outcome"):
+            return "sql"
         return "calculate" if "calculator.calculate" in state["tool_plan"] else "evidence_check"
 
     def prepare_business(state):
@@ -346,46 +436,8 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
     async def calculate(state: AgentState):
         task = ParsedTurn.model_validate(state["parsed"]).task
         sql, rag = _models(state)
-        if execution_mode=='offline_sql_d12_integration' and evidence_resolver is not None:
-            jobs=[]
-            for metric in task.business_metric_ids:
-                if metric not in {'sales_amount','units_sold','average_order_value'}:
-                    continue
-                primary=task.model_copy(deep=True)
-                primary.business_metric_ids=[metric]
-                jobs.append(primary)
-                secondary={'target_attainment':'target_difference','target_difference':'target_attainment','growth_rate':'period_difference'}.get(task.intent)
-                if secondary:
-                    jobs.append(primary.model_copy(update={'intent':secondary},deep=True))
-            current=state
-            completed=[]
-            audits=[]
-            try:
-                for job in jobs:
-                    calculation_id='calc-'+str(uuid.uuid4())
-                    invocation_context=context(current)
-                    bundle=evidence_resolver(job,sql,rag,calculation_id,invocation_context)
-                    if bundle is None:
-                        raise ValueError('incomplete operation binding')
-                    authorized=authorize_calculation(bundle,task=job,sql=sql,rag=rag,profile=profiles.get(state['profile_id']),
-                        context=invocation_context,calculation_id=calculation_id,expected_mode='verified_business')
-                    invocation_context=invocation_context.model_copy(update={'calculation_permit':authorized.permit})
-                    outcome=await runtime.run('calculator.calculate',authorized.request,invocation_context)
-                    updates=tool_update(current,'calculate',outcome,'calculation_binding',[])
-                    if not outcome.succeeded:
-                        raise ValueError('calculation tool failed')
-                    current={**current,**updates}
-                    completed.append(outcome.data.model_dump(mode='json'))
-                    audits.append({'task':job.model_dump(mode='json'),'binding':authorized.request.model_dump(mode='json'),
-                        'audit':authorized.audit,'calculation_id':calculation_id})
-                if not completed:
-                    raise ValueError('no bound operations')
-                return {**{key:current[key] for key in ('events','node_path','status','route','error','evidence_refs')},
-                    'calculations':completed,'calculation_audits':audits,'calculation_binding':audits[0]['binding'],
-                    'calculation_evidence':audits[0]['audit']}
-            except Exception:
-                return mark(state,'calculate',status='insufficient_evidence',calculations=[],calculation_audits=[],
-                    limitations=[*state['limitations'],'至少一项计算缺少实体、周期、单位或本轮来源绑定；未输出完整计算结论。'])
+        if profiles.get(state["profile_id"]).orchestration_policy == "c_v1" and evidence_resolver is not None:
+            return await calculate_many(state, task, sql, rag)
         calculation_id = "calc-" + str(uuid.uuid4())
         invocation_context = context(state)
         audit = None
@@ -417,6 +469,43 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
         update["calculations"] = [outcome.data.model_dump(mode="json")] if outcome.succeeded else []
         return update
 
+    async def calculate_many(state, task, sql, rag):
+        current, records, calculations = dict(state), [], []
+        functions = ["growth_rate"] if task.intent == "growth_rate" else ["attainment_rate"]
+        if "difference" in task.required_outputs or task.intent == "target_difference":
+            functions.append("difference")
+        months = [(task.slots["quarter"] - 1) * 3 + i for i in (1, 2, 3)] if "monthly_actuals" in task.required_outputs else [None]
+        for metric in task.business_metric_ids:
+            for month, function in [(m, f) for m in months for f in functions]:
+                child = task.model_copy(deep=True)
+                child.business_metric_ids = [metric]
+                child.intent = {"growth_rate": "growth_rate", "attainment_rate": "target_attainment", "difference": "target_difference"}[function]
+                if month:
+                    from datetime import date
+                    from ..contracts import TimeRange
+                    child.slots.pop("quarter", None)
+                    child.slots["month"] = month
+                    y = child.slots["year"]
+                    child.time_range = TimeRange(start=date(y, month, 1).isoformat(), end=date(y + (month == 12), 1 if month == 12 else month + 1, 1).isoformat(), end_inclusive=False, label=f"{y}年{month}月")
+                selected_rag = next((RetrievalResponse.model_validate(r["data"]) for r in state.get("retrieval_outcomes", []) if r["data"] and any(c["doc_id"] == ("D01" if function == "growth_rate" else "D06") for c in r["data"]["chunks"])), rag)
+                calculation_id = "calc-" + str(uuid.uuid4())
+                invocation_context = context(current)
+                try:
+                    bundle = evidence_resolver(child, sql.model_copy(deep=True) if sql else None, selected_rag.model_copy(deep=True) if selected_rag else None, calculation_id, invocation_context)
+                    if bundle is None:
+                        raise ValueError("missing binding")
+                    authorized = authorize_calculation(bundle, task=child, sql=sql, rag=selected_rag, profile=profiles.get(state["profile_id"]), context=invocation_context, calculation_id=calculation_id, expected_mode="verified_business")
+                except Exception:
+                    return mark(current, "calculate", status="insufficient_evidence", calculations=calculations, calculation_records=records, limitations=[*current["limitations"], f"{metric}/{function}缺少同周期/范围的有效目标与公式绑定，未执行该项。"])
+                outcome = await runtime.run("calculator.calculate", authorized.request, invocation_context.model_copy(update={"calculation_permit": authorized.permit}))
+                current.update(tool_update(current, "calculate", outcome, "calculation_binding", []))
+                if not outcome.succeeded:
+                    return {**current, "calculations": calculations, "calculation_records": records}
+                calculations.append(outcome.data.model_dump(mode="json"))
+                records.append({"task": child.model_dump(mode="json"), "binding": authorized.request.model_dump(mode="json"), "audit": authorized.audit, "retrieval_id": selected_rag.retrieval_id})
+        return {**current, "calculations": calculations, "calculation_records": records,
+            "calculation_binding": records[0]["binding"] if records else None, "calculation_evidence": records[0]["audit"] if records else None}
+
     def evidence_check(state: AgentState):
         status = state["status"]
         if status == "ready":
@@ -435,8 +524,27 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
                 status = "insufficient_evidence"
             if state["route"] in ("rag", "cross_source") and (not rag or not rag.chunks):
                 status = "insufficient_evidence"
+            if state.get("retrieval_outcomes"):
+                from .task_plan import document_needs
+                task = ParsedTurn.model_validate(state["parsed"]).task
+                required_docs = {d for d in document_needs(task) if d}
+                present = {c["doc_id"] for outcome in state["retrieval_outcomes"] if outcome["data"] for c in outcome["data"]["chunks"]}
+                if not required_docs <= present:
+                    status = "insufficient_evidence"
+                if any(not item["complete"] for item in task.evidence_coverage):
+                    status = "insufficient_evidence"
             if "calculator.calculate" in state["tool_plan"] and not state["calculations"]:
                 status = "insufficient_evidence"
+            task = ParsedTurn.model_validate(state["parsed"]).task
+            from .cross_templates import completed
+            chunks = [DocumentChunk.model_validate(c) for r in state.get("retrieval_outcomes", []) if r["data"] for c in r["data"]["chunks"]]
+            blocked = set(task.required_outputs) & {"document_sum"}
+            if {"customer_tiers", "monthly_actuals", "transaction_exists"} & set(task.required_outputs) and not completed(task, sql, chunks):
+                blocked.update(set(task.required_outputs) & {"customer_tiers", "monthly_actuals", "transaction_exists"})
+            if blocked:
+                # These need B's approved grain/document arithmetic seam. A
+                # scalar quarter value or raw passage is not a completed answer.
+                return mark(state, "evidence_check", status="insufficient_evidence", limitations=[*state["limitations"], "尚未解锁必要的客户分层/月度粒度/文档合计算子：" + ", ".join(sorted(blocked)) + "；不把片段命中当作完整结论。"])
             if status == "ready":
                 status = "answered"
         return mark(state, "evidence_check", status=status)
@@ -450,15 +558,21 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
         clarification = parsed.clarification
         answer = None
         if parsed.decision == "cancelled":
-            memory = SessionMemory(profile_id=memory.profile_id, config_version=memory.config_version)
+            memory = SessionMemory(profile_id=memory.profile_id, config_version=memory.config_version, policy_version=memory.policy_version)
             from .parsing import clarify
             clarification = clarify(None, ["intent"]).clarification
             answer = parsed.reason
         elif status == "clarification_required":
-            memory.pending, memory.last_task, memory.last_answer_summary = task, None, None
+            memory.pending, memory.last_task, memory.last_answer_summary = logical_copy(task), None, None
+            memory.pending_slots = [slot.name for slot in clarification.missing_slots] if clarification else []
+            memory.pending_clarification = {"task_id": task.task_id, "task_version": task.task_version,
+                "slots": memory.pending_slots, "blocking_slots": parsed.blocking_slots,
+                "options": clarification.options if clarification else []} if task else {}
         else:
             memory.pending = None
-            memory.last_task = task if status == "answered" else None
+            memory.pending_slots = []
+            memory.pending_clarification = {}
+            memory.last_task = logical_copy(task) if status == "answered" else None
             memory.last_answer_summary = None
         if status == "answered" and response_composer is None:
             if execution_mode == "fixture":
@@ -475,6 +589,7 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
         elif status == "insufficient_evidence":
             answer = "本轮证据或计算绑定不完整，不能形成业务结论。"
         events = [ToolEvent.model_validate_json(json.dumps(event)) for event in state["events"]]
+        memory.active_task_id = task.task_id if task else None
         options = AskRequest.model_validate(state["request"]).options
         limitations = [*state["limitations"], *(sql.limitations if sql else [])]
         if response_composer is not None:
@@ -489,13 +604,16 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
                 events=tuple(events), limitations=tuple(limitations), clarification=clarification,
                 error=ApiError.model_validate(state["error"]) if status == "error" else None,
                 parser_reason=parsed.reason, reset_context=parsed.decision == "cancelled",
+                retrievals=tuple(RetrievalResponse.model_validate(item["data"]) for item in state.get("retrieval_outcomes", []) if item["data"]),
+                calculation_records=tuple(state.get("calculation_records", [])),
             )
             if hasattr(response_composer, "prepare"):
                 compose_context = await response_composer.prepare(compose_context)
             response = response_composer.compose(compose_context)
             if response.status != "clarification_required":
                 memory.pending = None
-                memory.last_task = task if response.status == "answered" else None
+                memory.pending_slots = []
+                memory.last_task = logical_copy(task) if response.status == "answered" or (memory.policy_version != "legacy" and response.status in {"error", "insufficient_evidence"}) else None
             memory.last_answer_summary = response.answer if response.status == "answered" else None
             return mark(state, compose_node, status=response.status, response=response.model_dump(mode="json"), memory=memory.model_dump(mode="json"))
         response = AskResponse(
@@ -524,8 +642,8 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
     builder.add_edge("parse_question", "validate_slots_and_capabilities")
     builder.add_conditional_edges("validate_slots_and_capabilities", start_route, ["sql", "rag", compose_node])
     builder.add_conditional_edges("sql", after_sql, ["rag", "calculate", "evidence_check"])
-    builder.add_conditional_edges("rag", after_rag, ["calculate", "evidence_check",'prepare_business'])
-    builder.add_conditional_edges('prepare_business',after_business_plan,['sql','evidence_check'])
+    builder.add_conditional_edges("rag", after_rag, ["sql", "calculate", "evidence_check", "prepare_business"])
+    builder.add_conditional_edges("prepare_business", after_business_plan, ["sql", "evidence_check"])
     builder.add_edge("calculate", "evidence_check")
     builder.add_edge("evidence_check", compose_node)
     builder.add_edge(compose_node, END)

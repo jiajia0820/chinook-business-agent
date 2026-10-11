@@ -6,7 +6,7 @@ import re
 from ..contracts import Clarification, MissingSlot, TimeRange
 from ..profiles.models import BusinessProfile
 from .state import BusinessTask, ParsedTurn, SessionMemory
-from backend.sql_module.query_intent import parse_query_intent, DIMENSION_METRICS
+from backend.sql_module.query_intent import parse_query_intent, DIMENSION_METRICS, MEASURES
 
 
 SLOT_DESCRIPTIONS = {
@@ -77,16 +77,22 @@ def _matched_metrics(question, rules):
     scan = _metric_scan_text(question)
     metrics = [metric for metric, terms in rules.metric_terms.items()
             if _contains(question, terms) or _contains(scan, terms)]
-    intent = parse_query_intent(question, metrics)
+    try:
+        intent = parse_query_intent(question, metrics)
+    except ValueError:
+        return metrics
     if intent.get('operation') == 'track_attributes':
         return ['track_attributes']
     if intent.get('operation') == 'mixed_media_orders':
         return ['mixed_order_count']
     grain = DIMENSION_METRICS.get(intent.get('dimension'))
     if grain:
-        metrics = [m for m in metrics if m not in DIMENSION_METRICS.values() or m == grain]
-        if grain not in metrics:
-            metrics.append(grain)
+        if intent.get("track_ids") and any(metric in metrics for metric in MEASURES):
+            metrics = [m for m in metrics if m not in DIMENSION_METRICS.values()]
+        else:
+            metrics = [m for m in metrics if m not in DIMENSION_METRICS.values() or m == grain]
+            if grain not in metrics:
+                metrics.append(grain)
     for measure in intent.get('measures', []):
         if measure not in metrics:
             metrics.append(measure)
@@ -179,6 +185,12 @@ def _unparsed_query_text(question, profile):
 
 
 def parse_question(question: str, profile: BusinessProfile, memory: SessionMemory) -> ParsedTurn:
+    if profile.orchestration_policy == "c_v1":
+        from .task_policy import parse_c_v1
+        parsed = parse_c_v1(question, profile, memory)
+        if parsed.decision == "ready" and parsed.task and parsed.task.route != "rag":
+            parsed.task.slots.setdefault("query_intent", parse_query_intent(parsed.task.original_question, parsed.task.business_metric_ids))
+        return parsed
     q = question.strip()
     rules = profile.question_rules
     if q in {"取消", "取消当前问题", "重新开始", "清空上下文"}:

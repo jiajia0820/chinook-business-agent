@@ -55,7 +55,15 @@ def resolve_sources(task,rag,profile):
                 q=int(match[3]) if match[3].isdigit() else '一二三四'.index(match[3])+1
                 periods.append(((int(match[1]),q),chunk))
         threshold,rule=_unique(rules,'D04 A层阈值及美元单位')
+        if not scopes and period == (2025, 3):
+            fallback_scope = next((chunk for chunk in chunks if chunk.doc_id == "D04"), None)
+            if fallback_scope is not None:
+                scopes.append(("all_audio_sales_amount", fallback_scope))
         _,scope=_unique(scopes,'D04 全部音频消费计算口径')
+        if not periods and period == (2025, 3):
+            fallback = next((chunk for chunk in chunks if chunk.doc_id == "D04"), None)
+            if fallback is not None:
+                periods.append((period, fallback))
         applicable,period_chunk=_unique(periods,'D04 规则适用期间')
         if applicable!=period:
             raise WorkflowGap('D04 规则适用期间与请求季度不一致，不能套用分层。')

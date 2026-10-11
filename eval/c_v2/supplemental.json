@@ -1,0 +1,150 @@
+{
+  "kind": "development_diagnostics_not_original80_or_holdout",
+  "cases": [
+    {
+      "id": "period-track-no-year",
+      "question": "第三季度TrackId 1791-1799中，按D05选品和海报要求的Rock主页面商品是否有成交？",
+      "status": "clarification_required",
+      "missing": [
+        "year"
+      ]
+    },
+    {
+      "id": "threshold-facts",
+      "question": "客户如何分层？",
+      "status": "answered",
+      "facts": [
+        "customer_thresholds"
+      ]
+    },
+    {
+      "id": "threshold-paraphrase",
+      "question": "客户怎么分层？",
+      "status": "answered",
+      "facts": [
+        "customer_thresholds"
+      ]
+    },
+    {
+      "id": "maintenance-facts",
+      "question": "A层客户怎么维护？",
+      "status": "answered",
+      "facts": [
+        "customer_maintenance"
+      ]
+    },
+    {
+      "id": "material-facts",
+      "question": "报名要交哪些材料？",
+      "status": "answered",
+      "facts": [
+        "registration_materials"
+      ]
+    },
+    {
+      "id": "period-facts",
+      "question": "D10和D11里的活动什么时候举行？",
+      "status": "answered",
+      "facts": [
+        "activity_period",
+        "poster_activity_period"
+      ]
+    },
+    {
+      "id": "premise-position",
+      "question": "Metal未达目标，下一次活动方案中应该放在什么位置？",
+      "status": "answered",
+      "facts": [
+        "activity_position"
+      ],
+      "no_sql": true
+    },
+    {
+      "id": "complete-dual-target",
+      "question": "2025年第三季度全音频销售额和销量是否都达到目标？",
+      "status": "answered",
+      "calculations": 2
+    },
+    {
+      "id": "complete-customer-scope",
+      "question": "2025年第三季度购买Rock的客户里，哪些按客户分层规则属于A层？",
+      "status": "answered",
+      "customer_scope": true
+    },
+    {
+      "id": "complete-track-set",
+      "question": "2025年第三季度TrackId 1791-1799中，按D05选品和海报要求的Rock主页面商品是否有成交？",
+      "status": "answered",
+      "track_ids": [
+        1791,
+        1793,
+        1795,
+        1797,
+        1799
+      ]
+    },
+    {
+      "id": "monthly-plan",
+      "question": "2025年第三季度全音频每月实际销售额与月度计划差多少？",
+      "status": "answered",
+      "calculations": 6
+    },
+    {
+      "id": "monthly-source-conflict",
+      "question": "2025年第三季度全音频每月数据库实际销售额与D06月度计划及D08复盘核对",
+      "status": "insufficient_evidence",
+      "contains": [
+        "37.62",
+        "36.63"
+      ]
+    },
+    {
+      "id": "unapproved-exclusion",
+      "question": "2025Q3全部音频销售额，排除Metal",
+      "status": "unsupported",
+      "no_sql": true
+    },
+    {
+      "id": "independent-period-growth",
+      "turns": [
+        {
+          "question": "2025年第二季度全音频销售额是多少？",
+          "status": "answered"
+        },
+        {
+          "question": "换成第三季度呢？",
+          "status": "answered"
+        },
+        {
+          "question": "增长率是多少？",
+          "status": "answered",
+          "calculations": 1,
+          "sql_results": 2,
+          "growth": 3.64
+        }
+      ]
+    },
+    {
+      "id": "year-is-not-annual",
+      "turns": [
+        {
+          "question": "Rock销售额是多少？",
+          "status": "clarification_required"
+        },
+        {
+          "question": "2025",
+          "status": "clarification_required",
+          "missing": [
+            "period"
+          ],
+          "no_sql": true
+        },
+        {
+          "question": "全年",
+          "status": "answered",
+          "period_start": "2025-01-01"
+        }
+      ]
+    }
+  ]
+}

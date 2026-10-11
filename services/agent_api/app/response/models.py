@@ -37,6 +37,8 @@ class ComposeContext:
     parser_reason: str | None = None
     reset_context: bool = False
     document_answer: str | None = None
+    retrievals: tuple[RetrievalResponse, ...] = ()
+    calculation_records: tuple[dict, ...] = ()
 
 
 class ResponseComposer(Protocol):

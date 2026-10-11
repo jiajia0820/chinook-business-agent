@@ -1,0 +1,94 @@
+{
+  "kind": "development_diagnostics_not_holdout_or_original80",
+  "cases": [
+    {"id": "goal-sales", "turns": [
+      {"question": "第三季度Rock卖得怎么样？", "status": "clarification_required", "missing": ["metric"], "no_tools": true},
+      {"question": "目标达成情况", "status": "clarification_required", "missing": ["metric"], "intent": "target_attainment", "metrics": [], "no_tools": true},
+      {"question": "销售额", "status": "clarification_required", "missing": ["year"], "metrics": ["sales_amount"], "no_tools": true},
+      {"question": "2025年", "status": "answered", "intent": "target_attainment", "metrics": ["sales_amount"], "period_start": "2025-07-01", "genres": [1], "min_calculations": 1, "scalar": {"year": 2025, "quarter": 3, "media": [1,2,4,5], "genres": [1], "metrics": ["sales_amount"]}}
+    ]},
+    {"id": "goal-both", "turns": [
+      {"question": "第三季度Rock卖得怎么样？", "status": "clarification_required", "missing": ["metric"], "no_tools": true},
+      {"question": "目标达成情况", "status": "clarification_required", "missing": ["metric"], "no_tools": true},
+      {"question": "销售额和销量", "status": "clarification_required", "missing": ["year"], "metrics": ["sales_amount", "units_sold"], "no_tools": true},
+      {"question": "2025年", "status": "answered", "intent": "target_attainment", "metrics": ["sales_amount", "units_sold"], "period_start": "2025-07-01", "genres": [1], "min_calculations": 2, "scalar": {"year": 2025, "quarter": 3, "media": [1,2,4,5], "genres": [1], "metrics": ["sales_amount", "units_sold"]}}
+    ]},
+    {"id": "genre-union", "turns": [
+      {"question": "摇滚相关销售额是多少？", "status": "clarification_required", "missing": ["genre_scope"], "blocking": ["period", "genre_boundary"], "no_tools": true},
+      {"question": "Rock与Rock And Roll合并", "status": "clarification_required", "missing": ["period"], "genres": [1,5], "no_tools": true},
+      {"question": "2025年", "status": "clarification_required", "missing": ["period"], "genres": [1,5], "no_tools": true},
+      {"question": "第三季度", "status": "answered", "period_start": "2025-07-01", "genres": [1,5], "union_plan": true, "scalar": {"year": 2025, "quarter": 3, "media": [1,2,4,5], "genres": [1,5], "metrics": ["sales_amount"]}}
+    ]},
+    {"id": "genre-narrow", "turns": [
+      {"question": "摇滚相关销售额是多少？", "status": "clarification_required", "missing": ["genre_scope"], "no_tools": true},
+      {"question": "仅Rock", "status": "clarification_required", "missing": ["period"], "genres": [1], "no_tools": true},
+      {"question": "2025Q3", "status": "answered", "genres": [1], "scalar": {"year": 2025, "quarter": 3, "media": [1,2,4,5], "genres": [1], "metrics": ["sales_amount"]}}
+    ]},
+    {"id": "media-aggregate", "turns": [
+      {"question": "音频与视频销售额分别统计还是合并？", "status": "clarification_required", "missing": ["media_scope"], "no_tools": true},
+      {"question": "合并音视频", "status": "clarification_required", "missing": ["period"], "media": [1,2,3,4,5], "no_tools": true},
+      {"question": "2025Q3", "status": "answered", "media": [1,2,3,4,5], "scalar": {"year": 2025, "quarter": 3, "media": [1,2,3,4,5], "genres": [], "metrics": ["sales_amount"]}}
+    ]},
+    {"id": "media-separate", "turns": [
+      {"question": "音乐和视频销售额要分开看还是合计？", "status": "clarification_required", "missing": ["media_scope"], "no_tools": true},
+      {"question": "分别统计", "status": "unsupported", "slot_values": {"media_aggregation": "separate"}, "contains": ["未用合计值替代"], "no_tools": true}
+    ]},
+    {"id": "classification-dimension", "turns": [
+      {"question": "某商品是哪种类型？", "status": "clarification_required", "missing": ["entity_dimension"], "blocking": ["entity", "classification_dimension"], "no_tools": true},
+      {"question": "Genre品类", "status": "clarification_required", "missing": ["entity"], "slot_values": {"classification_dimension": "Genre"}, "no_tools": true},
+      {"question": "TrackId 1", "status": "unsupported", "slot_values": {"classification_entity": "TrackId:1", "classification_dimension": "Genre"}, "no_tools": true}
+    ]},
+    {"id": "classification-name", "turns": [
+      {"question": "某商品属于什么类型？", "status": "clarification_required", "missing": ["entity_dimension"], "no_tools": true},
+      {"question": "Genre品类", "status": "clarification_required", "missing": ["entity"], "no_tools": true},
+      {"question": "商品名称：今年2025", "status": "unsupported", "slot_values": {"classification_entity": "TrackName:今年2025", "classification_dimension": "Genre"}, "no_tools": true}
+    ]},
+    {"id": "classification-identity", "turns": [
+      {"question": "某商品属于哪个类别？", "status": "clarification_required", "missing": ["entity_dimension"], "no_tools": true},
+      {"question": "TrackId 1791", "status": "clarification_required", "missing": ["entity_dimension"], "slot_values": {"classification_entity": "TrackId:1791"}, "no_tools": true},
+      {"question": "所属Album", "status": "unsupported", "slot_values": {"classification_entity": "TrackId:1791", "classification_dimension": "Album"}, "no_tools": true}
+    ]},
+    {"id": "year-conflict", "turns": [
+      {"question": "第三季度Rock卖得怎么样？", "status": "clarification_required", "missing": ["metric"], "no_tools": true},
+      {"question": "2025年", "status": "clarification_required", "missing": ["metric"], "slot_values": {"year": 2025}, "no_tools": true},
+      {"question": "2024年", "status": "clarification_required", "missing": ["condition_conflict"], "slot_values": {"year": 2025}, "no_tools": true},
+      {"question": "改成2024年", "status": "clarification_required", "missing": ["metric"], "slot_values": {"year": 2024}, "no_tools": true},
+      {"question": "销量", "status": "answered", "period_start": "2024-07-01", "metrics": ["units_sold"], "scalar": {"year": 2024, "quarter": 3, "media": [1,2,4,5], "genres": [1], "metrics": ["units_sold"]}}
+    ]},
+    {"id": "metric-conflict", "turns": [
+      {"question": "第三季度Rock销售额是多少？", "status": "clarification_required", "missing": ["year"], "no_tools": true},
+      {"question": "销量", "status": "clarification_required", "missing": ["condition_conflict"], "metrics": ["sales_amount"], "no_tools": true},
+      {"question": "改查销量", "status": "clarification_required", "missing": ["year"], "metrics": ["units_sold"], "no_tools": true},
+      {"question": "2025年", "status": "answered", "metrics": ["units_sold"], "scalar": {"year": 2025, "quarter": 3, "media": [1,2,4,5], "genres": [1], "metrics": ["units_sold"]}}
+    ]},
+    {"id": "invalid-quarter", "turns": [
+      {"question": "2025Q5音频销售额是多少？", "status": "clarification_required", "missing": ["time_range"], "no_tools": true},
+      {"question": "2025年", "status": "clarification_required", "missing": ["time_range"], "no_tools": true},
+      {"question": "改成2025Q3", "status": "answered", "period_start": "2025-07-01", "scalar": {"year": 2025, "quarter": 3, "media": [1,2,4,5], "genres": [], "metrics": ["sales_amount"]}}
+    ]},
+    {"id": "relative-period", "turns": [
+      {"question": "今年音频销售额是多少？", "status": "clarification_required", "missing": ["time_range"], "no_tools": true},
+      {"question": "是", "status": "clarification_required", "missing": ["time_range"], "contains": ["未自动填写"], "no_tools": true},
+      {"question": "2025年", "status": "clarification_required", "missing": ["time_range"], "no_tools": true},
+      {"question": "2025年全年", "status": "answered", "period_start": "2025-01-01", "scalar": {"year": 2025, "media": [1,2,4,5], "genres": [], "metrics": ["sales_amount"]}}
+    ]},
+    {"id": "bare-confirmation", "turns": [
+      {"question": "销售额达到目标了吗？", "status": "clarification_required", "missing": ["period", "scope"], "metrics": ["sales_amount"], "no_tools": true},
+      {"question": "不知道", "status": "clarification_required", "missing": ["period", "scope"], "contains": ["未自动填写"], "no_tools": true}
+    ]},
+    {"id": "customer-period", "turns": [
+      {"question": "哪些客户是高价值客户？", "status": "clarification_required", "missing": ["observation_period"], "no_tools": true},
+      {"question": "2025年", "status": "clarification_required", "missing": ["observation_period"], "no_tools": true},
+      {"question": "第三季度", "status": "unsupported", "period_start": "2025-07-01", "contains": ["不能只返回规则冒充名单"], "no_tools": true}
+    ]},
+    {"id": "cancel-reset", "turns": [
+      {"question": "第三季度Rock卖得怎么样？", "status": "clarification_required", "missing": ["metric"], "no_tools": true},
+      {"question": "取消当前问题", "status": "clarification_required", "no_tools": true, "reset": true},
+      {"question": "2025Q3全音频销量是多少？", "status": "answered", "media": [1,2,4,5], "genres": [], "scalar": {"year": 2025, "quarter": 3, "media": [1,2,4,5], "genres": [], "metrics": ["units_sold"]}}
+    ]},
+    {"id": "combined-supplement", "turns": [
+      {"question": "销售额达到目标了吗？", "status": "clarification_required", "missing": ["period", "scope"], "no_tools": true},
+      {"question": "2025Q3全音频", "status": "answered", "metrics": ["sales_amount"], "period_start": "2025-07-01", "min_calculations": 1, "scalar": {"year": 2025, "quarter": 3, "media": [1,2,4,5], "genres": [], "metrics": ["sales_amount"]}}
+    ]}
+  ]
+}

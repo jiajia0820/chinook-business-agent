@@ -1,6 +1,7 @@
 {
   "profile_id": "chinook-music",
-  "config_version": "b-stage2-s2-009-basic-nl2sql-2026-10-11",
+  "config_version": "integrated-stage2-rag-orchestration-2026-10-12",
+  "orchestration_policy": "c_v1",
   "mode": "hybrid",
   "capabilities": ["sql", "rag", "calculate"],
   "sql_backend": {
@@ -19,7 +20,9 @@
       "media_ids": {"type": "array"},
       "playlist_id": {"type": "integer"},
       "comparison_period": {"type": "object"},
-      "query_intent": {"type": "object"}
+      "query_intent": {"type": "object"},
+      "result_grain": {"type": "string", "values": ["month", "customer_audio", "track_set"]},
+      "track_ids": {"type": "array"}
     }
   },
   "document_root": "data/knowledge",

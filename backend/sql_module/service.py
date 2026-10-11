@@ -101,25 +101,41 @@ def _media_scope_applies(metric_ids, slots):
 
 def _output_contract(metric_ids, context=None):
     """已登记指标要求的结果列；返回 None 表示本阶段不约束该组合。"""
-    slots=(context or {}).get('resolved_slots', {})
-    intent=slots.get('query_intent', {})
-    if intent.get('operation') == 'track_attributes':
+    slots = context.get("resolved_slots", {}) if isinstance(context, dict) and "resolved_slots" in context else (context or {})
+    from .finite_grains import columns
+    if slots.get("result_grain") and columns(slots):
+        return columns(slots)
+    intent = slots.get("query_intent", {})
+    if intent.get("operation") == "track_attributes":
         return CATALOG_COLUMNS
-    if intent.get('operation')=='mixed_media_orders':
-        return ['mixed_order_count']
-    if intent.get('dimension')=='playlist':
-        return ['PlaylistId','Name','track_count']
-    measures = ['sales_amount','order_count'] if 'average_order_value' in metric_ids else (intent.get('measures') or [m for m in metric_ids if m in MEASURE_EXPRESSIONS])
-    plan=_grain_plan(metric_ids, slots)
+    if intent.get("operation") == "mixed_media_orders":
+        return ["mixed_order_count"]
+    if intent.get("dimension") == "playlist":
+        return ["PlaylistId", "Name", "track_count"]
+    measures = ["sales_amount", "order_count"] if "average_order_value" in metric_ids else (intent.get("measures") or [m for m in metric_ids if m in MEASURE_EXPRESSIONS])
+    plan = _grain_plan(metric_ids, slots)
     if plan:
-        return [name for name,_ in plan['columns']] + (measures or ['sales_amount'])
+        return [name for name, _ in plan["columns"]] + (measures or ["sales_amount"])
     grains = [m for m in metric_ids if m in GRAIN_PLANS]
     if not grains:
         return measures or None
-    # 多维度交叉分组与 customer_count 混用不属于已登记口径，不做受控兜底。
-    if len(grains) != 1 or 'customer_count' in metric_ids:
+    if len(grains) != 1 or "customer_count" in metric_ids:
         return None
-    return [name for name, _ in GRAIN_PLANS[grains[0]]['columns']] + (measures or ['sales_amount'])
+    return [name for name, _ in GRAIN_PLANS[grains[0]]["columns"]] + (measures or ["sales_amount"])
+
+
+def requested_top_n(question):
+    match = re.search(r"(?:最高的?|前|[Tt][Oo][Pp]\s*)([一二三四五六七八九十百\d]+)", question)
+    if match:
+        token = match.group(1)
+        if token.isdigit(): value = int(token)
+        elif "十" in token:
+            tens, _, ones = token.partition("十"); digits = "一二三四五六七八九"
+            value = (digits.index(tens) + 1 if tens in digits and tens else 1) * 10 + (digits.index(ones) + 1 if ones in digits else 0)
+        elif token in "一二三四五六七八九": value = "一二三四五六七八九".index(token) + 1
+        else: return None
+        return value if 1 <= value <= 200 else None
+    return 1 if "最高" in question else None
 
 
 def _candidate_limit(sql, max_rows):
@@ -181,10 +197,13 @@ def _candidate_covers_context(generated, context):
     return True
 
 
-def _controlled_query(context, metric_ids, candidate_sql=None, max_rows=50):
+def _controlled_query(context, metric_ids, candidate_sql=None, max_rows=50, top_n=None):
     """按已登记口径生成确定性只读查询；无法覆盖时返回 None，不猜测业务语义。"""
     slots=context.get('resolved_slots',{})
     intent=slots.get('query_intent', {})
+    if slots.get("result_grain"):
+        from .finite_grains import query
+        return query(context, max_rows)
     if not validate_intent(intent):
         return None
     if intent.get('operation') == 'track_attributes':
@@ -250,16 +269,26 @@ def _controlled_query(context, metric_ids, candidate_sql=None, max_rows=50):
             params[key] = track_id
             bindings.append(':'+key)
         where.append('t.TrackId IN ('+','.join(bindings)+')')
+    genre_ids=[]
     for entity in context.get('entities',[]):
         entity_id=entity.get('id','')
         if entity.get('type')=='genre' and entity_id.startswith('Genre:'):
-            params['genre_id']=int(entity_id.split(':',1)[1])
-            where.append('t.GenreId = :genre_id')
+            value=int(entity_id.split(':',1)[1])
+            if value < 1: return None
+            genre_ids.append(value)
         elif entity.get('type')=='country' and entity_id.startswith('Country:'):
             params['billing_country']=entity_id.split(':',1)[1]
             where.append('i.BillingCountry = :billing_country')
         else:
             return None
+    genre_ids=sorted(set(genre_ids))
+    if len(genre_ids)==1:
+        params['genre_id']=genre_ids[0]
+        where.append('t.GenreId = :genre_id')
+    elif genre_ids:
+        names=['genre_id_'+str(i) for i in range(len(genre_ids))]
+        params.update(zip(names,genre_ids))
+        where.append('t.GenreId IN ('+','.join(':'+name for name in names)+')')
     measures=measures or ['sales_amount']
     if intent.get('include_empty'):
         return zero_media_query(context, measures)
@@ -269,7 +298,7 @@ def _controlled_query(context, metric_ids, candidate_sql=None, max_rows=50):
     sql+=' '.join(joins)+' WHERE '+' AND '.join(where)
     intent=slots.get('query_intent', {})
     candidate_limit = _candidate_limit(candidate_sql,max_rows) if candidate_sql and not (intent.get('amount_filter') or intent.get('track_ids')) else None
-    limit=min(intent['top_n'],max_rows) if intent.get('top_n') else candidate_limit
+    limit=min(intent['top_n'],max_rows) if intent.get('top_n') else (min(top_n,max_rows) if top_n is not None else candidate_limit)
     if group_by:
         sql+=' GROUP BY '+', '.join(group_by)
         if intent.get('amount_filter'):
@@ -382,33 +411,28 @@ class NLQueryService:
             else:
                 response['limitations'].append('指定指标已传入模型；本阶段未自动证明生成 SQL 与业务口径语义等价。')
             # Data is encoded as a separate JSON message, never interpolated into system instructions.
-            contract=_output_contract(metric_ids,context)
-            if context.get('resolved_slots',{}).get('query_intent',{}).get('operation') in OPERATIONS:
-                generated=build_query(context['resolved_slots'])
-                query_id='sql-'+str(uuid.uuid4())
-                result=self.executor.execute_sql(dict(query_id=query_id,profile_id=profile.id,
-                    sql=generated['sql'],params=generated['params'],max_rows=options.get('max_rows',50),
-                    timeout_ms=5000),access)
-                contract=output_columns(context['resolved_slots']['query_intent'])
-                mapping=_contract_column_mapping(result,contract)
-                if result['status']=='success' and mapping is None:
-                    raise ModuleError('SQL_EXECUTION_FAILED','业务步骤输出契约不完整','SEMANTIC_SCOPE_MISMATCH')
+            contract = _output_contract(metric_ids, context)
+            if context.get("resolved_slots", {}).get("query_intent", {}).get("operation") in OPERATIONS:
+                generated = build_query(context["resolved_slots"])
+                query_id = "sql-" + str(uuid.uuid4())
+                result = self.executor.execute_sql(dict(query_id=query_id, profile_id=profile.id, sql=generated["sql"], params=generated["params"], max_rows=options.get("max_rows", 50), timeout_ms=5000), access)
+                contract = output_columns(context["resolved_slots"]["query_intent"])
+                mapping = _contract_column_mapping(result, contract)
+                if result["status"] == "success" and mapping is None:
+                    raise ModuleError("SQL_EXECUTION_FAILED", "业务步骤输出契约不完整", "SEMANTIC_SCOPE_MISMATCH")
                 if mapping:
-                    result['columns']=[mapping.get(n,n) for n in result['columns']]
-                    result['rows']=[{mapping.get(k,k):v for k,v in row.items()} for row in result['rows']]
-                response['sql_results']=[result]
-                if result['status']!='success':
-                    response['error']=result['error']
+                    result["columns"] = [mapping.get(n, n) for n in result["columns"]]
+                    result["rows"] = [{mapping.get(k, k): v for k, v in row.items()} for row in result["rows"]]
+                response["sql_results"] = [result]
+                if result["status"] != "success":
+                    response["error"] = result["error"]
                     return response
-                response['status']='answered'
-                response['limitations'].append('文档依赖业务步骤使用服务端受控业务查询；本步骤没有调用大模型，不是模型失败降级。')
-                response['metric_definitions']=[{k:m.get(k) for k in ('metric_id','name','definition','unit','source_refs')} for m in selected]
-                response['query_artifacts']=[dict(query_id=query_id,sql=generated['sql'],params=generated['params'],
-                    selected_tables=result['source']['tables'],schema_version=snapshot['schema_version'],
-                    metric_refs=[m['metric_id']+'@'+catalog['version'] for m in selected],attempt_count=1)]
-                if options.get('show_trace',True):
-                    response['trace']=[dict(step=1,tool='sql.query',status='success',source_refs=[query_id],
-                        summary='执行参数化文档依赖业务步骤；未调用模型',duration_ms=result['execution_ms'])]
+                response["status"] = "answered"
+                response["limitations"].append("文档依赖业务步骤使用服务端受控业务查询；本步骤没有调用大模型，不是模型失败降级。")
+                response["metric_definitions"] = [{k: m.get(k) for k in ("metric_id", "name", "definition", "unit", "source_refs")} for m in selected]
+                response["query_artifacts"] = [dict(query_id=query_id, sql=generated["sql"], params=generated["params"], selected_tables=result["source"]["tables"], schema_version=snapshot["schema_version"], metric_refs=[m["metric_id"] + "@" + catalog["version"] for m in selected], attempt_count=1)]
+                if options.get("show_trace", True):
+                    response["trace"] = [dict(step=1, tool="sql.query", status="success", source_refs=[query_id], summary="执行参数化文档依赖业务步骤；未调用模型", duration_ms=result["execution_ms"])]
                 return response
             payload=dict(question=data['question'].strip(),profile_id=profile.id,dialect=profile.database['dialect'],
                          schema=snapshot,metrics=selected,dictionary=catalog['dictionary'],context=context,
@@ -455,8 +479,39 @@ class NLQueryService:
                 response['limitations'].append('模型调用重试后仍未成功（%s）；本轮改用已登记指标的受控查询计划执行，未使用模型生成的 SQL。' % '、'.join(dict.fromkeys(failures)))
             generation_ms=round((time.monotonic()-started)*1000,3)
             repaired=model_failure is not None
+            top_n = requested_top_n(data['question'])
+            nullable_media_join = 'media_type_sales' in metric_ids and bool(re.search(r'\bleft\s+(?:outer\s+)?join\s+(?:main\.)?invoice\b', generated['sql'], re.I))
+            if context.get('resolved_slots', {}).get('result_grain'):
+                controlled = _controlled_query(context, metric_ids, max_rows=max_rows)
+                if controlled is None:
+                    raise ModuleError('UNSUPPORTED_CAPABILITY', '有限跨源粒度与已确认范围不兼容')
+                generated, repaired = controlled, True
+                response['limitations'].append('跨源粒度使用已批准有限查询计划，模型候选未用于执行；仍通过现有只读校验。')
+            genres={e.get('id') for e in context.get('entities',[]) if e.get('type')=='genre'}
+            if len(genres)>1 and not context.get('resolved_slots', {}).get('result_grain'):
+                # A user's explicit union is not an AND of incompatible GenreIds.
+                # Textual candidate coverage alone cannot certify set semantics.
+                controlled=(_controlled_query(context,metric_ids,max_rows=max_rows,top_n=top_n)
+                            if all(m in MEASURE_EXPRESSIONS or m in GRAIN_PLANS for m in metric_ids) else None)
+                if controlled is None:
+                    raise ModuleError('UNSUPPORTED_CAPABILITY','已确认多品类合并范围，但当前登记指标不支持该集合查询')
+                generated,repaired=controlled,True
+                response['limitations'].append('用户明确多品类合并；使用参数化IN受控查询计划保留完整集合，模型候选未用于执行；仍通过只读校验。')
+            if len(metric_ids)>1 and all(m in MEASURE_EXPRESSIONS for m in metric_ids) and not context.get('resolved_slots', {}).get('result_grain'):
+                controlled=_controlled_query(context,metric_ids,max_rows=max_rows)
+                if controlled is None:
+                    raise ModuleError('UNSUPPORTED_CAPABILITY','已确认多个交易指标，但已登记计划缺少完整执行条件')
+                generated,repaired=controlled,True
+                response['limitations'].append('已确认的多个交易指标使用受控查询计划逐项保留；模型候选（如有）未用于执行；仍通过只读校验。')
+            if (top_n is not None and any(metric in GRAIN_PLANS for metric in metric_ids)) or nullable_media_join:
+                if top_n is not None and top_n > max_rows:
+                    raise ModuleError('UNSUPPORTED_CAPABILITY','请求排名数量超过本轮max_rows上限，请提高行数限制或缩小排名范围')
+                controlled = _controlled_query(context, metric_ids, max_rows=max_rows, top_n=top_n)
+                if controlled is not None:
+                    generated, repaired = controlled, True
+                    response['limitations'].append('媒体类型金额的日期过滤存在可空订单连接风险；改用已登记指标的明细日期受控查询计划。' if nullable_media_join else '显式Top-N通过已登记指标的受控查询计划执行：按度量降序、同分按维度键稳定排序；未用max_rows代替排名。')
             if not _candidate_covers_context(generated,context):
-                controlled=_controlled_query(context,metric_ids,candidate_sql=generated['sql'],max_rows=max_rows)
+                controlled=_controlled_query(context,metric_ids,candidate_sql=generated['sql'],max_rows=max_rows,top_n=top_n)
                 if controlled is None:
                     raise ModuleError('SQL_EXECUTION_FAILED','模型候选遗漏已确认的业务筛选条件','SEMANTIC_SCOPE_MISMATCH')
                 generated=controlled
@@ -474,7 +529,7 @@ class NLQueryService:
             if contract and result.get('status')=='success':
                 mapping=_contract_column_mapping(result,contract)
                 if mapping is None:
-                    controlled=_controlled_query(context,metric_ids,candidate_sql=generated['sql'],max_rows=max_rows)
+                    controlled=_controlled_query(context,metric_ids,candidate_sql=generated['sql'],max_rows=max_rows,top_n=top_n)
                     if controlled is not None:
                         generated=controlled
                         repaired=True
