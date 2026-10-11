@@ -219,12 +219,15 @@ def compare_interface(case, response):
     return problems
 
 
-def judge(case, response):
+def legacy_judge(case, response):
     problems = compare_interface(case, response)
     problems += compare_gold_result(case, response)
     problems += compare_calculation(case, response)
     problems += compare_documents(case, response)
     return problems
+
+
+from scripts.eval_scoring import judge, interface_diagnostics
 
 
 async def run_single(service, case, mode):
@@ -253,6 +256,7 @@ async def run_single(service, case, mode):
     return {
         "id": case["id"], "question": case["question"], "capability": case.get("capability"),
         "passed": not problems, "problems": problems, "elapsed_ms": elapsed,
+        "interface_diagnostics": interface_diagnostics(case, response),
         "status": str(response.status), "route": str(getattr(response.route, "value", response.route)),
         "answer": (response.answer or "")[:300],
         "rows": success_rows(response)[:6],
@@ -261,7 +265,7 @@ async def run_single(service, case, mode):
     }
 
 
-async def run_session(service, case):
+async def legacy_run_session(service, case):
     from services.agent_api.app.contracts import AskRequest, AskOptions
 
     turns = case.get("turns", [])
@@ -311,17 +315,44 @@ async def run_session(service, case):
             "turns": details}
 
 
+async def run_session(service, case):
+    from services.agent_api.app.contracts import AskRequest, AskOptions
+    session_id = f"eval-{case['id']}"
+    problems, details, started = [], [], time.monotonic()
+    for turn in case['turns']:
+        expectation = turn.get('interface_expectation', {})
+        body = expectation.get('request', {})
+        turn_case = {**turn, 'id': f"{case['id']}-t{turn['turn']}"}
+        try:
+            response = await service.ask(AskRequest(question=turn['question'],
+                profile_id=body.get('profile_id', expectation.get('profile_id', 'chinook-music')),
+                session_id=session_id, user_role=body.get('user_role', 'operator'),
+                options=AskOptions(**body.get('options', {}))), request_id=f"eval-{turn_case['id']}")
+            turn_problems = judge(turn_case, response)
+            diagnostics = interface_diagnostics(turn_case, response)
+        except Exception as exc:
+            turn_problems, diagnostics = [f'调用异常 {type(exc).__name__}'], []
+        problems.extend(f"第{turn['turn']}轮 {p}" for p in turn_problems)
+        details.append({'turn': turn['turn'], 'question': turn['question'],
+                        'problems': turn_problems, 'interface_diagnostics': diagnostics})
+    return {'id': case['id'], 'question': f"{len(case['turns'])} 轮会话", 'capability': 'multiturn',
+            'passed': not problems, 'problems': problems, 'turns': details,
+            'elapsed_ms': round((time.monotonic()-started)*1000)}
+
+
 async def main():
     parser = argparse.ArgumentParser(description="运行 Agent 评测集")
     parser.add_argument("--files", help="逗号分隔的题库文件名（不含 .jsonl）")
     parser.add_argument("--all", action="store_true", help="运行 manifest 里的全部题库")
     parser.add_argument("--mode", default="live", choices=["live", "offline"], help="模型模式")
     parser.add_argument("--model", default="", help="覆盖 LLM_MODEL，用于横向对比不同模型")
-    parser.add_argument("--concurrency", type=int, default=3)
+    parser.add_argument("--concurrency", type=int, default=1)
     parser.add_argument("--limit", type=int, default=0, help="每个题库最多跑几题，0 表示不限")
     parser.add_argument("--out", default="", help="JSON 报告输出路径")
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args()
+    if args.out and Path(args.out).exists():
+        parser.error('输出已存在；请使用新的运行目录以保留旧证据')
 
     if args.model:
         # 必须在创建 integration 之前设置：C 的模型适配器在启动时读取一次环境变量。
@@ -403,5 +434,45 @@ async def main():
     return 0 if passed == len(all_results) else 1
 
 
+async def recorded_main():
+    """Direct live CLI keeps the same command and saves append-only evidence."""
+    probe = argparse.ArgumentParser(add_help=False)
+    probe.add_argument('--mode', default='offline')
+    probe.add_argument('--out', default='')
+    probe.add_argument('--concurrency', type=int, default=1)
+    args, _ = probe.parse_known_args()
+    if args.mode != 'live' or '--help' in sys.argv or '-h' in sys.argv:
+        return await main()
+    from scripts import stage2_eval as audit
+    argv = list(sys.argv[1:])
+    if args.out:
+        report_path = Path(args.out).resolve()
+        if report_path.exists():
+            raise SystemExit('输出已存在；请使用新的独立目录')
+        out = report_path.parent
+        out.mkdir(parents=True, exist_ok=True)
+        index = argv.index('--out')
+        del argv[index:index+2]
+    else:
+        out = audit.new_run('live')
+        report_path = out/'report.json'
+    if args.concurrency != 1:
+        raise SystemExit('完整模型调用审计要求 --concurrency 1，以精确绑定请求和调用')
+    for name in ('run-meta.json','responses.jsonl','model-calls.jsonl'):
+        if (out/name).exists():
+            raise SystemExit('证据目录已被使用；请使用新的独立目录')
+    meta = audit.metadata('live', argv)
+    meta['external_api_failure_budget'] = 1
+    audit.write(out/'run-meta.json', meta)
+    try:
+        return await audit.live(out, argv, failure_budget=1, report_path=report_path, strict_external=True)
+    finally:
+        final = audit.metadata('live', argv)
+        from datetime import datetime, timezone
+        meta['finished_at'] = datetime.now(timezone.utc).isoformat()
+        audit.write(out/'run-meta.json',meta)
+        audit.write(out/'end-fingerprint-check.json', {key: final[key] == meta[key] for key in ('code_sha256','scorer_sha256','dataset_sha256','data_sha256')})
+
+
 if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
+    sys.exit(asyncio.run(recorded_main()))

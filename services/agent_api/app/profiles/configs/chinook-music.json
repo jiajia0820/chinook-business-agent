@@ -1,6 +1,6 @@
 {
   "profile_id": "chinook-music",
-  "config_version": "b-3c3-calculator-2026-10-06",
+  "config_version": "b-stage2-s2-009-basic-nl2sql-2026-10-11",
   "mode": "hybrid",
   "capabilities": ["sql", "rag", "calculate"],
   "sql_backend": {
@@ -11,19 +11,21 @@
       "customer_count", "sales_amount", "units_sold", "order_count",
       "purchasing_customers", "average_order_value", "genre_sales",
       "track_sales", "album_sales", "artist_sales", "media_type_sales",
-      "billing_country_sales", "playlist_track_count"
+      "billing_country_sales", "playlist_track_count", "mixed_order_count", "track_attributes"
     ],
     "declared_slots": {
       "start_date": {"type": "string"},
       "end_date": {"type": "string"},
       "media_ids": {"type": "array"},
       "playlist_id": {"type": "integer"},
-      "comparison_period": {"type": "object"}
+      "comparison_period": {"type": "object"},
+      "query_intent": {"type": "object"}
     }
   },
   "document_root": "data/knowledge",
   "catalogs": {"dictionary": null, "aliases": null, "metrics": null, "documents": null},
   "metric_definitions": [
+    {"metric_id": "track_attributes", "name": "商品目录属性", "definition": "按明确TrackId查询当前目录名称、音乐分类、媒体类型和标价；标价来自Track.UnitPrice，不是成交销售额，不要求交易期间。", "unit": "USD", "source_refs": ["schema:main.Track", "schema:main.Genre", "schema:main.MediaType"]},
     {
       "metric_id": "customer_count",
       "name": "客户记录数",
@@ -114,6 +116,13 @@
       "definition": "按 PlaylistTrack 统计播放列表收录的去重 Track 数。",
       "unit": "件",
       "source_refs": ["D03", "D12"]
+    },
+    {
+      "metric_id": "mixed_order_count",
+      "name": "音视频混合订单数",
+      "definition": "同时包含音频与视频明细的订单去重计数；音频销售额仍按明细筛选。",
+      "unit": "单",
+      "source_refs": ["D01", "D03"]
     }
   ],
   "aliases": [
@@ -162,7 +171,7 @@
     ],
     "metric_terms": {
       "customer_count": ["客户数量", "客户总数", "登记客户数", "客户记录数", "多少客户", "客户有多少"],
-      "sales_amount": ["销售额", "销售金额", "营收"],
+      "sales_amount": ["销售额", "销售金额", "营收", "消费总额", "消费金额", "消费额"],
       "purchasing_customers": ["购买客户数", "购买人数", "购买客户", "购买的客户", "购买过的客户", "多少位客户", "下单客户", "成交客户"],
       "units_sold": ["销量", "销售件数", "销售量", "卖了多少件", "卖出多少件", "多少件", "件数"],
       "order_count": ["订单数", "订单数量", "订单量", "订单张数", "多少张订单", "多少笔订单", "多少个订单", "订单有多少"],

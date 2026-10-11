@@ -41,7 +41,7 @@
 
 | 题库 | 数量 | 作用和核查重点 |
 | --- | ---: | --- |
-| [基础 NL2SQL](eval_basic_nl2sql.md) | 10 题 | 自然语言查数；核对数值、时间和统计范围 |
+| [基础 NL2SQL](eval_basic_nl2sql.md) | 15 题 | 自然语言查数；核对数值、时间和统计范围 |
 | [基础文档问答](eval_basic_rag.md) | 15 题 | 文档问答；核对事实与原文依据 |
 | [专项 澄清](eval_special_clarification.md) | 8 题 | 条件不完整；检查是否提出必要的补充问题 |
 | [专项 别名与分类](eval_special_alias_robustness.md) | 15 题 | 业务别名与相近分类；检查名称和分类是否对应正确 |

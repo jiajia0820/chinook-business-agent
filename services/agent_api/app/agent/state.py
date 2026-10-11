@@ -53,7 +53,10 @@ class AgentState(TypedDict, total=False):
     calculations: list[dict]
     calculation_binding: dict | None
     calculation_evidence: dict | None
+    calculation_audits: list[dict]
     evidence_refs: list[str]
+    business_sources: dict | None
+    business_audit: dict | None
     events: list[dict]
     node_path: list[str]
     limitations: list[str]

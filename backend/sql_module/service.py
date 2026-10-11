@@ -14,6 +14,10 @@ from .execution import SQLExecutor
 from .generation import OUTPUT_SCHEMA, decode_generated, HTTPJSONModel
 from .profiles import obj, string, strings, integer
 from .schema import SchemaService
+from .query_intent import parse_query_intent, validate_intent
+from .semantic_scope import covers_context, same_registered_query
+from .catalog_queries import CATALOG_COLUMNS, catalog_query, zero_media_query
+from .business_queries import OPERATIONS, build_query, output_columns
 
 
 def request_error(message):
@@ -28,9 +32,9 @@ GRAIN_PLANS = {
         joins=['JOIN main.Genre g ON g.GenreId = t.GenreId'], group_by=['g.GenreId', 'g.Name']),
     'track_sales': dict(columns=[('TrackId', 't.TrackId'), ('Name', 't.Name')], order_key='t.TrackId',
         joins=[], group_by=['t.TrackId', 't.Name']),
-    'album_sales': dict(columns=[('AlbumId', 'a.AlbumId'), ('Title', 'a.Title')], order_key='a.AlbumId',
+    'album_sales': dict(columns=[('AlbumId', 'a.AlbumId'), ('album', 'a.Title')], order_key='a.AlbumId',
         joins=['JOIN main.Album a ON a.AlbumId = t.AlbumId'], group_by=['a.AlbumId', 'a.Title']),
-    'artist_sales': dict(columns=[('ArtistId', 'ar.ArtistId'), ('Name', 'ar.Name')], order_key='ar.ArtistId',
+    'artist_sales': dict(columns=[('ArtistId', 'ar.ArtistId'), ('artist', 'ar.Name')], order_key='ar.ArtistId',
         joins=['JOIN main.Album a ON a.AlbumId = t.AlbumId', 'JOIN main.Artist ar ON ar.ArtistId = a.ArtistId'],
         group_by=['ar.ArtistId', 'ar.Name']),
     'media_type_sales': dict(columns=[('MediaTypeId', 'mt.MediaTypeId'), ('Name', 'mt.Name')], order_key='mt.MediaTypeId',
@@ -44,6 +48,39 @@ MEASURE_EXPRESSIONS = {
     'order_count': 'COUNT(DISTINCT i.InvoiceId) AS order_count',
     'purchasing_customers': 'COUNT(DISTINCT i.CustomerId) AS purchasing_customers',
 }
+
+DIMENSION_GRAINS = {'genre':'genre_sales','track':'track_sales','album':'album_sales','artist':'artist_sales',
+    'media_type':'media_type_sales','billing_country':'billing_country_sales'}
+EXTRA_GRAINS = {
+    'month': dict(columns=[('month', "strftime('%Y-%m', i.InvoiceDate)")],
+        order_key="strftime('%Y-%m', i.InvoiceDate)", joins=[], group_by=["strftime('%Y-%m', i.InvoiceDate)"]),
+    'customer': dict(columns=[('CustomerId','c.CustomerId'),('customer',"c.FirstName || ' ' || c.LastName")],
+        order_key='c.CustomerId', joins=['JOIN main.Customer c ON c.CustomerId = i.CustomerId'], group_by=['c.CustomerId','c.FirstName','c.LastName']),
+    'support_rep': dict(columns=[('support_rep',"e.FirstName || ' ' || e.LastName")],
+        order_key='e.EmployeeId', joins=['JOIN main.Customer c ON c.CustomerId = i.CustomerId','JOIN main.Employee e ON e.EmployeeId = c.SupportRepId'], group_by=['e.EmployeeId','e.FirstName','e.LastName']),
+}
+
+
+def _grain_plan(metric_ids, slots):
+    intent=slots.get('query_intent', {})
+    dimension=intent.get('dimension')
+    name=DIMENSION_GRAINS.get(dimension)
+    grains=[m for m in metric_ids if m in GRAIN_PLANS]
+    plan=EXTRA_GRAINS.get(dimension) or GRAIN_PLANS.get(name or (grains[0] if len(grains)==1 else None))
+    if plan is None:
+        return None
+    plan={key:list(value) if isinstance(value,list) else value for key,value in plan.items()}
+    include=intent.get('include', [])
+    if dimension=='track' and include:
+        plan['joins'].append('JOIN main.Album a ON a.AlbumId = t.AlbumId')
+        if 'album' in include:
+            plan['columns'].append(('album','a.Title'))
+            plan['group_by'].append('a.Title')
+    if dimension in {'track','album'} and 'artist' in include:
+        plan['joins'].append('JOIN main.Artist ar ON ar.ArtistId = a.ArtistId')
+        plan['columns'].append(('artist','ar.Name'))
+        plan['group_by'].append('ar.Name')
+    return plan
 LIMIT_PATTERN = re.compile(r'\blimit\s+(\d+)', re.I)
 # 只有模型调用本身的故障才降级到受控计划；配置缺失要如实报错，不能静默掩盖。
 MODEL_FAILURE_REASONS = frozenset({'MODEL_TIMEOUT', 'MODEL_HTTP_FAILED', 'MODEL_NETWORK_FAILED', 'MODEL_RESPONSE_INVALID'})
@@ -62,9 +99,20 @@ def _media_scope_applies(metric_ids, slots):
     return set(metric_ids) != {'customer_count'}
 
 
-def _output_contract(metric_ids):
+def _output_contract(metric_ids, context=None):
     """已登记指标要求的结果列；返回 None 表示本阶段不约束该组合。"""
-    measures = [m for m in metric_ids if m in MEASURE_EXPRESSIONS]
+    slots=(context or {}).get('resolved_slots', {})
+    intent=slots.get('query_intent', {})
+    if intent.get('operation') == 'track_attributes':
+        return CATALOG_COLUMNS
+    if intent.get('operation')=='mixed_media_orders':
+        return ['mixed_order_count']
+    if intent.get('dimension')=='playlist':
+        return ['PlaylistId','Name','track_count']
+    measures = ['sales_amount','order_count'] if 'average_order_value' in metric_ids else (intent.get('measures') or [m for m in metric_ids if m in MEASURE_EXPRESSIONS])
+    plan=_grain_plan(metric_ids, slots)
+    if plan:
+        return [name for name,_ in plan['columns']] + (measures or ['sales_amount'])
     grains = [m for m in metric_ids if m in GRAIN_PLANS]
     if not grains:
         return measures or None
@@ -101,6 +149,14 @@ def _contract_column_mapping(result, contract):
 
 
 def _candidate_covers_context(generated, context):
+    intent = context.get('resolved_slots', {}).get('query_intent', {})
+    if intent.get('operation') == 'track_attributes' or intent.get('include_empty') or intent.get('amount_filter') or intent.get('track_ids'):
+        if not validate_intent(intent):
+            return False
+        return same_registered_query(generated, _controlled_query(context, context.get('metric_ids', [])))
+    mixed=context.get('resolved_slots',{}).get('query_intent',{}).get('operation')=='mixed_media_orders'
+    if not covers_context(generated, context, media_applies=not mixed and _media_scope_applies(context.get('metric_ids', []), context.get('resolved_slots', {}))):
+        return False
     sql=generated['sql'].casefold().replace('"','')
     values=list(generated['params'].values())
     slots=context.get('resolved_slots',{})
@@ -109,7 +165,7 @@ def _candidate_covers_context(generated, context):
         if value is not None and value not in values and str(value).casefold() not in sql:
             return False
     metric_ids=context.get('metric_ids',[])
-    if _media_scope_applies(metric_ids,slots):
+    if not mixed and _media_scope_applies(metric_ids,slots):
         if 'mediatypeid' not in sql or any(value not in values and str(value) not in sql for value in slots['media_ids']):
             return False
     for entity in context.get('entities',[]):
@@ -128,9 +184,46 @@ def _candidate_covers_context(generated, context):
 def _controlled_query(context, metric_ids, candidate_sql=None, max_rows=50):
     """按已登记口径生成确定性只读查询；无法覆盖时返回 None，不猜测业务语义。"""
     slots=context.get('resolved_slots',{})
+    intent=slots.get('query_intent', {})
+    if not validate_intent(intent):
+        return None
+    if intent.get('operation') == 'track_attributes':
+        if metric_ids != ['track_attributes'] or context.get('entities') or any(key in slots for key in ('start_date','end_date')):
+            return None
+        return catalog_query(intent)
+    if intent.get('operation')=='mixed_media_orders':
+        return {'sql':'SELECT COUNT(*) AS mixed_order_count FROM (SELECT il.InvoiceId FROM main.InvoiceLine il JOIN main.Track t ON t.TrackId=il.TrackId GROUP BY il.InvoiceId HAVING SUM(CASE WHEN t.MediaTypeId IN (1,2,4,5) THEN 1 ELSE 0 END)>0 AND SUM(CASE WHEN t.MediaTypeId=3 THEN 1 ELSE 0 END)>0) mixed', 'params':{}}
+    if intent.get('dimension')=='playlist':
+        sql='SELECT p.PlaylistId AS PlaylistId,p.Name AS Name,COUNT(DISTINCT pt.TrackId) AS track_count FROM main.Playlist p JOIN main.PlaylistTrack pt ON pt.PlaylistId=p.PlaylistId'
+        params={}
+        if slots.get('playlist_id'):
+            sql+=' WHERE p.PlaylistId=:playlist_id'
+            params['playlist_id']=slots['playlist_id']
+        return {'sql':sql+' GROUP BY p.PlaylistId,p.Name ORDER BY p.PlaylistId','params':params}
+    if slots.get('comparison_period') and not any(m in GRAIN_PLANS for m in metric_ids):
+        period=slots['comparison_period']
+        year,quarter=period.get('year'),period.get('quarter')
+        if type(year) is not int or type(quarter) is not int or not 1 <= quarter <= 4:
+            return None
+        current_slots={key:value for key,value in slots.items() if key!='comparison_period'}
+        previous_slots={**current_slots,'start_date':f'{year:04}-{(quarter-1)*3+1:02}-01',
+            'end_date':f'{year+1:04}-01-01' if quarter==4 else f'{year:04}-{quarter*3+1:02}-01'}
+        branches=[]
+        params={}
+        for label,branch_slots in [('current',current_slots),('previous',previous_slots)]:
+            candidate=_controlled_query({**context,'resolved_slots':branch_slots},metric_ids,max_rows=max_rows)
+            if candidate is None:
+                return None
+            branch=candidate['sql'].replace('SELECT ',f"SELECT '{label}' AS period, ",1)
+            for key,value in candidate['params'].items():
+                replacement=label+'_'+key
+                branch=branch.replace(':'+key,':'+replacement)
+                params[replacement]=value
+            branches.append(branch)
+        return {'sql':' UNION ALL '.join(branches),'params':params}
     if metric_ids==['customer_count']:
         return {'sql':'SELECT COUNT(*) AS customer_count FROM main.Customer','params':{}}
-    measures=[m for m in metric_ids if m in MEASURE_EXPRESSIONS]
+    measures=['sales_amount','order_count'] if 'average_order_value' in metric_ids else (intent.get('measures') or [m for m in metric_ids if m in MEASURE_EXPRESSIONS])
     grains=[m for m in metric_ids if m in GRAIN_PLANS]
     if len(grains)>1 or not {'start_date','end_date'}<=set(slots):
         return None
@@ -142,14 +235,21 @@ def _controlled_query(context, metric_ids, candidate_sql=None, max_rows=50):
     select=[]
     group_by=[]
     order_key=None
-    if grains:
-        plan=GRAIN_PLANS[grains[0]]
+    plan=_grain_plan(metric_ids, slots)
+    if plan:
         joins=list(plan['joins'])
         group_by=list(plan['group_by'])
         order_key=plan['order_key']
         select=['%s AS %s' % (expr, name) for name, expr in plan['columns']]
     if _media_scope_applies(metric_ids,slots):
         where.append('t.MediaTypeId IN ('+','.join(str(value) for value in slots['media_ids'])+')')
+    if intent.get('track_ids'):
+        bindings = []
+        for number, track_id in enumerate(intent['track_ids']):
+            key = 'track_'+str(number)
+            params[key] = track_id
+            bindings.append(':'+key)
+        where.append('t.TrackId IN ('+','.join(bindings)+')')
     for entity in context.get('entities',[]):
         entity_id=entity.get('id','')
         if entity.get('type')=='genre' and entity_id.startswith('Genre:'):
@@ -161,15 +261,27 @@ def _controlled_query(context, metric_ids, candidate_sql=None, max_rows=50):
         else:
             return None
     measures=measures or ['sales_amount']
+    if intent.get('include_empty'):
+        return zero_media_query(context, measures)
     select+= [MEASURE_EXPRESSIONS[metric] for metric in measures]
     sql='SELECT '+', '.join(select)+' FROM main.InvoiceLine il '
     sql+='JOIN main.Invoice i ON i.InvoiceId = il.InvoiceId JOIN main.Track t ON t.TrackId = il.TrackId '
     sql+=' '.join(joins)+' WHERE '+' AND '.join(where)
-    limit=_candidate_limit(candidate_sql,max_rows) if candidate_sql else None
+    intent=slots.get('query_intent', {})
+    candidate_limit = _candidate_limit(candidate_sql,max_rows) if candidate_sql and not (intent.get('amount_filter') or intent.get('track_ids')) else None
+    limit=min(intent['top_n'],max_rows) if intent.get('top_n') else candidate_limit
     if group_by:
         sql+=' GROUP BY '+', '.join(group_by)
+        if intent.get('amount_filter'):
+            rule = intent['amount_filter']
+            operators = {'gte':'>=', 'gt':'>', 'lte':'<=', 'lt':'<', 'eq':'='}
+            params['amount_threshold'] = rule['value']
+            # Amounts have cent precision; rounding avoids float accumulation
+            # dropping customers exactly at an explicitly stated money boundary.
+            sql+=' HAVING ROUND(SUM(il.UnitPrice * il.Quantity),2) '+operators[rule['operator']]+' :amount_threshold'
         # 有取前 N 的候选时按度量降序排名，否则按维度键稳定排序。
-        sql+=' ORDER BY '+((measures[0]+' DESC, ') if limit else '')+order_key
+        order_measure = intent.get('order_by') or (measures[0] if limit else None)
+        sql+=' ORDER BY '+((order_measure+(' DESC' if intent.get('order_desc',bool(limit)) else ' ASC')+', ') if order_measure else '')+order_key
     if limit:
         sql+=' LIMIT '+str(limit)
     return {'sql':sql,'params':params}
@@ -201,6 +313,8 @@ def validate_request(request, profile):
             raise request_error('数组槽位需要唯一的正整数')
         if 'values' in rule and value not in rule['values']:
             raise request_error('槽位值未被 profile 允许')
+    if 'query_intent' in slots and not validate_intent(slots['query_intent']):
+        raise request_error('query_intent 结构或取值无效')
     if 'metric_ids' in context: strings(context['metric_ids'],'metric_ids',nonempty=False)
     entities=context.get('entities',[])
     if not isinstance(entities,list) or len(entities)>20:
@@ -245,6 +359,9 @@ class NLQueryService:
             obj(request,['request_id','profile_id','question','context','options'],['request_id','profile_id','question'],'NL 请求')
             profile,_=self.registry.resolve(data['profile_id'],access)
             context,options=validate_request(request,profile)
+            if 'query_intent' in profile.data.get('slots', {}) and 'query_intent' not in context.get('resolved_slots', {}):
+                context = {**context, 'resolved_slots': {**context.get('resolved_slots', {}),
+                    'query_intent': parse_query_intent(data['question'], context.get('metric_ids', []))}}
             snapshot=self.schemas.get_schema(profile.id,access)
             catalog=load_catalog(profile,snapshot)
             metrics_by_id={m['metric_id']:m for m in catalog['metrics']}
@@ -265,7 +382,34 @@ class NLQueryService:
             else:
                 response['limitations'].append('指定指标已传入模型；本阶段未自动证明生成 SQL 与业务口径语义等价。')
             # Data is encoded as a separate JSON message, never interpolated into system instructions.
-            contract=_output_contract(metric_ids)
+            contract=_output_contract(metric_ids,context)
+            if context.get('resolved_slots',{}).get('query_intent',{}).get('operation') in OPERATIONS:
+                generated=build_query(context['resolved_slots'])
+                query_id='sql-'+str(uuid.uuid4())
+                result=self.executor.execute_sql(dict(query_id=query_id,profile_id=profile.id,
+                    sql=generated['sql'],params=generated['params'],max_rows=options.get('max_rows',50),
+                    timeout_ms=5000),access)
+                contract=output_columns(context['resolved_slots']['query_intent'])
+                mapping=_contract_column_mapping(result,contract)
+                if result['status']=='success' and mapping is None:
+                    raise ModuleError('SQL_EXECUTION_FAILED','业务步骤输出契约不完整','SEMANTIC_SCOPE_MISMATCH')
+                if mapping:
+                    result['columns']=[mapping.get(n,n) for n in result['columns']]
+                    result['rows']=[{mapping.get(k,k):v for k,v in row.items()} for row in result['rows']]
+                response['sql_results']=[result]
+                if result['status']!='success':
+                    response['error']=result['error']
+                    return response
+                response['status']='answered'
+                response['limitations'].append('文档依赖业务步骤使用服务端受控业务查询；本步骤没有调用大模型，不是模型失败降级。')
+                response['metric_definitions']=[{k:m.get(k) for k in ('metric_id','name','definition','unit','source_refs')} for m in selected]
+                response['query_artifacts']=[dict(query_id=query_id,sql=generated['sql'],params=generated['params'],
+                    selected_tables=result['source']['tables'],schema_version=snapshot['schema_version'],
+                    metric_refs=[m['metric_id']+'@'+catalog['version'] for m in selected],attempt_count=1)]
+                if options.get('show_trace',True):
+                    response['trace']=[dict(step=1,tool='sql.query',status='success',source_refs=[query_id],
+                        summary='执行参数化文档依赖业务步骤；未调用模型',duration_ms=result['execution_ms'])]
+                return response
             payload=dict(question=data['question'].strip(),profile_id=profile.id,dialect=profile.database['dialect'],
                          schema=snapshot,metrics=selected,dictionary=catalog['dictionary'],context=context,
                          output_columns=contract or [])

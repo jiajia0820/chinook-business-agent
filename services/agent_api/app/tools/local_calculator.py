@@ -1,6 +1,7 @@
-"""Three bounded Decimal operations, never eval/exec document formulas."""
+"""Bounded named Decimal operations, never eval/exec document formulas."""
 
 import asyncio
+import re
 from decimal import Decimal, ROUND_HALF_UP, localcontext
 
 from ..contracts import ApiError, Calculation
@@ -11,6 +12,8 @@ FORMULAS = {
     "difference": "actual - target",
     "attainment_rate": "actual / target * 100",
     "growth_rate": "(current - previous) / previous * 100",
+    "average_order_value": "sales / orders",
+    "sum": "sum(monthly_values)",
 }
 OPERANDS = {"difference": {"actual", "target"}, "attainment_rate": {"actual", "target"}, "growth_rate": {"current", "previous"}}
 INPUT_UNITS = frozenset({"USD", "CNY", "人", "件", "单", "条"})
@@ -35,15 +38,20 @@ def validate_numeric(value: Decimal, unit: str) -> None:
 
 def validate_request(request: CalculationRequest) -> CalculationRequest:
     request = CalculationRequest.model_validate(request.model_dump(mode="python"))
-    if set(request.operands) != OPERANDS[request.function]:
+    expected = {'sales','orders'} if request.function=='average_order_value' else (set(request.operands) if request.function=='sum' else OPERANDS[request.function])
+    if set(request.operands) != expected or request.function=='sum' and (not 2 <= len(expected) <=12 or any(not re.fullmatch(r'month_\d{4}_\d{2}',key) for key in expected)):
         raise failure("CALCULATION_INPUT_INVALID", "计算输入名或数量不符合命名函数。")
+    if request.function=='sum' and any(not 1 <= int(key.rsplit('_',1)[1]) <=12 for key in expected):
+        raise failure('CALCULATION_INPUT_INVALID','月度输入必须使用有效月份。')
     units = {item.unit for item in request.operands.values()}
-    if len(units) != 1:
+    if request.function=='average_order_value':
+        if request.operands['sales'].unit!='USD' or request.operands['orders'].unit!='单' or request.result_unit!='USD/单':
+            raise failure('CALCULATION_INPUT_INVALID','客单价必须以同口径美元销售额除以订单数。')
+    elif len(units) != 1:
         raise failure("CALCULATION_INPUT_INVALID", "计算输入单位不同，未自动换算。")
-    unit = next(iter(units))
     for operand in request.operands.values():
         validate_numeric(operand.value, operand.unit)
-    if request.result_unit != (unit if request.function == "difference" else "%"):
+    if request.function!='average_order_value' and request.result_unit != (next(iter(units)) if request.function in {'difference','sum'} else "%"):
         raise failure("CALCULATION_INPUT_INVALID", "计算结果单位与函数不一致。")
     return request
 
@@ -60,10 +68,16 @@ def calculate_decimal(request: CalculationRequest) -> Decimal:
             if values["target"] == 0:
                 raise failure("CALCULATION_ZERO_DENOMINATOR", "目标值为零，不能计算达成率。")
             result = values["actual"] / values["target"] * 100
-        else:
+        elif request.function=='growth_rate':
             if values["previous"] == 0:
                 raise failure("CALCULATION_ZERO_DENOMINATOR", "基期为零，不能计算增长率。")
             result = (values["current"] - values["previous"]) / values["previous"] * 100
+        elif request.function=='average_order_value':
+            if values['orders']==0:
+                raise failure('CALCULATION_ZERO_DENOMINATOR','没有可计算订单，不能计算客单价。')
+            result=values['sales']/values['orders']
+        else:
+            result=sum(values.values(),Decimal(0))
         result = result.quantize(QUANTUM, rounding=ROUND_HALF_UP)
     # Public v0.3 uses a JSON number, not Decimal text. Reject magnitude or
     # float conversion that cannot preserve the already-rounded decimal value.

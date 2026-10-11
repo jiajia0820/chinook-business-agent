@@ -1,7 +1,7 @@
 {
   "files": {
     "eval_basic_nl2sql.jsonl": {
-      "count": 10,
+      "count": 15,
       "duplicate_ids": []
     },
     "eval_basic_rag.jsonl": {
@@ -46,7 +46,7 @@
     }
   },
   "errors": [],
-  "sql_checks": 22,
+  "sql_checks": 27,
   "global_duplicate_ids": [],
   "interface_errors": [],
   "result_mismatches": [],

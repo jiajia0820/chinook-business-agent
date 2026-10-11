@@ -14,6 +14,7 @@ from langgraph.graph import END, START, StateGraph
 from ..contracts import ApiError, AskRequest, AskResponse, Calculation, Intent, RetrievalRequest, RetrievalResponse
 from ..evidence.binding import authorize_calculation
 from ..evidence.models import EvidenceResolver
+from ..evidence.business_workflows import WORKFLOWS, WorkflowGap, resolve_sources, conclude
 from ..profiles import ProfileRegistry
 from ..runtime import ToolContext, ToolEvent, ToolRuntime, events_to_trace
 from ..response.models import ComposeContext, ResponseComposer
@@ -181,8 +182,9 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
         return {
             "memory": memory, "parsed": {}, "status": "", "route": "clarification",
             "tool_plan": [], "sql_outcome": None, "retrieval_outcome": None,
-            "calculations": [], "calculation_binding": None, "calculation_evidence": None, "evidence_refs": [],
+            "calculations": [], "calculation_binding": None, "calculation_evidence": None, "calculation_audits":[], "evidence_refs": [],
             "events": [], "node_path": ["initialize_turn"], "error": None, "response": None,
+            "business_sources":None,"business_audit":None,
             "limitations": [source_banner, "当前解析覆盖已登记的业务指标、时间和实体范围；会话仅在本进程内保留。", *profile_limitations],
         }
 
@@ -220,6 +222,8 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
     def start_route(state):
         if state["status"] != "ready":
             return compose_node
+        if ParsedTurn.model_validate(state['parsed']).task.intent in WORKFLOWS:
+            return 'rag'
         return "sql" if state["route"] in ("sql", "cross_source") else "rag"
 
     def context(state):
@@ -236,7 +240,8 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
             query_id="task-" + str(uuid.uuid4()), profile_id=profile.profile_id,
             question=task.original_question, normalized_question=task.normalized_question,
             entities=task.entities, time_range=task.time_range,
-            resolved_slots={key: value for key, value in task.slots.items() if key in profile.sql_backend.declared_slots},
+            resolved_slots=(state['business_sources']['slots'] if state.get('business_sources') else
+                {key: value for key, value in task.slots.items() if key in profile.sql_backend.declared_slots}),
             metric_ids=[metric for metric in task.business_metric_ids if metric in profile.sql_backend.registered_metric_ids],
             business_context=[BusinessContextItem(ref_id=ref, text=text) for ref, text in business_context.items()][:20],
             max_rows=request.options.max_rows, show_trace=request.options.show_trace,
@@ -273,6 +278,9 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
             filters.update({"preferred_doc": "D06", "answer_type": "table_cell"})
         if "活动" in question or "海报" in question:
             filters.update({"required_sources": ["D10", "D11"], "answer_type": "activity_entity"})
+        if task.needs_calculation:
+            retrieval_query += " " + {"target_difference": "目标 销售额差额 销售额达成率", "target_attainment": "目标 销售额达成率 销售额差额",
+                "growth_rate": "销售额 增长率", "average_order_value": "客单价", "document_sum": "月度分解"}.get(task.intent, "")
         plan = _rag_plan(question, task.intent)
         if plan["required_sources"]:
             filters["required_sources"] = list(dict.fromkeys([*filters.get("required_sources", []), *plan["required_sources"]]))
@@ -280,6 +288,8 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
             filters["evidence_requirements"] = plan["evidence_requirements"]
         if plan["query_terms"]:
             filters["query_terms"] = list(dict.fromkeys([*filters.get("query_terms", []), *plan["query_terms"]]))
+        if task.intent == "poster_candidates":
+            filters["required_sources"] = ["D05", "D11"]
         if os.getenv("RAG_ENABLE_DENSE", "0") == "1":
             filters["dense_retrieval"] = True
         payload = RetrievalRequest(retrieval_id="retrieval-" + str(uuid.uuid4()), profile_id=state["profile_id"], query=retrieval_query, filters=filters, top_k=request.options.top_k)
@@ -302,6 +312,8 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
     def after_sql(state):
         if state["status"] != "ready":
             return "evidence_check"
+        if state.get('business_sources'):
+            return 'evidence_check'
         if not any(result["rows"] for result in state["sql_outcome"]["data"]["sql_results"]):
             return "evidence_check"
         return "rag" if state["route"] == "cross_source" else "calculate" if "calculator.calculate" in state["tool_plan"] else "evidence_check"
@@ -310,11 +322,70 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
         rag = state["retrieval_outcome"]
         if state["status"] != "ready" or not rag["data"]["chunks"]:
             return "evidence_check"
+        if ParsedTurn.model_validate(state['parsed']).task.intent in WORKFLOWS:
+            return 'prepare_business'
         return "calculate" if "calculator.calculate" in state["tool_plan"] else "evidence_check"
+
+    def prepare_business(state):
+        parsed=ParsedTurn.model_validate(state['parsed'])
+        _,rag=_models(state)
+        try:
+            sources=resolve_sources(parsed.task,rag,profiles.get(state['profile_id']))
+        except WorkflowGap as exc:
+            parsed.reason=str(exc)
+            return mark(state,'prepare_business',status='insufficient_evidence',parsed=parsed.model_dump(mode='json'))
+        return mark(state,'prepare_business',business_sources=sources)
+
+    def after_business_plan(state):
+        if state['status']!='ready': return 'evidence_check'
+        sources=state['business_sources']
+        if sources['intent']=='poster_candidates' and not sources['selected_candidates']:
+            return 'evidence_check'
+        return 'sql'
 
     async def calculate(state: AgentState):
         task = ParsedTurn.model_validate(state["parsed"]).task
         sql, rag = _models(state)
+        if execution_mode=='offline_sql_d12_integration' and evidence_resolver is not None:
+            jobs=[]
+            for metric in task.business_metric_ids:
+                if metric not in {'sales_amount','units_sold','average_order_value'}:
+                    continue
+                primary=task.model_copy(deep=True)
+                primary.business_metric_ids=[metric]
+                jobs.append(primary)
+                secondary={'target_attainment':'target_difference','target_difference':'target_attainment','growth_rate':'period_difference'}.get(task.intent)
+                if secondary:
+                    jobs.append(primary.model_copy(update={'intent':secondary},deep=True))
+            current=state
+            completed=[]
+            audits=[]
+            try:
+                for job in jobs:
+                    calculation_id='calc-'+str(uuid.uuid4())
+                    invocation_context=context(current)
+                    bundle=evidence_resolver(job,sql,rag,calculation_id,invocation_context)
+                    if bundle is None:
+                        raise ValueError('incomplete operation binding')
+                    authorized=authorize_calculation(bundle,task=job,sql=sql,rag=rag,profile=profiles.get(state['profile_id']),
+                        context=invocation_context,calculation_id=calculation_id,expected_mode='verified_business')
+                    invocation_context=invocation_context.model_copy(update={'calculation_permit':authorized.permit})
+                    outcome=await runtime.run('calculator.calculate',authorized.request,invocation_context)
+                    updates=tool_update(current,'calculate',outcome,'calculation_binding',[])
+                    if not outcome.succeeded:
+                        raise ValueError('calculation tool failed')
+                    current={**current,**updates}
+                    completed.append(outcome.data.model_dump(mode='json'))
+                    audits.append({'task':job.model_dump(mode='json'),'binding':authorized.request.model_dump(mode='json'),
+                        'audit':authorized.audit,'calculation_id':calculation_id})
+                if not completed:
+                    raise ValueError('no bound operations')
+                return {**{key:current[key] for key in ('events','node_path','status','route','error','evidence_refs')},
+                    'calculations':completed,'calculation_audits':audits,'calculation_binding':audits[0]['binding'],
+                    'calculation_evidence':audits[0]['audit']}
+            except Exception:
+                return mark(state,'calculate',status='insufficient_evidence',calculations=[],calculation_audits=[],
+                    limitations=[*state['limitations'],'至少一项计算缺少实体、周期、单位或本轮来源绑定；未输出完整计算结论。'])
         calculation_id = "calc-" + str(uuid.uuid4())
         invocation_context = context(state)
         audit = None
@@ -350,6 +421,16 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
         status = state["status"]
         if status == "ready":
             sql, rag = _models(state)
+            parsed=ParsedTurn.model_validate(state['parsed'])
+            if parsed.task.intent in WORKFLOWS:
+                try:
+                    sources=resolve_sources(parsed.task,rag,profiles.get(state['profile_id']))
+                    if sources!=state.get('business_sources'): raise WorkflowGap('本轮文档依赖未完整执行。')
+                    audit=conclude(sources,sql)
+                except WorkflowGap as exc:
+                    parsed.reason=str(exc)
+                    return mark(state,'evidence_check',status='insufficient_evidence',parsed=parsed.model_dump(mode='json'))
+                return mark(state,'evidence_check',status='answered',business_audit=audit)
             if state["route"] in ("sql", "cross_source") and (not sql or not any(result.rows for result in sql.sql_results)):
                 status = "insufficient_evidence"
             if state["route"] in ("rag", "cross_source") and (not rag or not rag.chunks):
@@ -403,6 +484,8 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
                 calculations=tuple(Calculation.model_validate(item) for item in state["calculations"]),
                 binding=CalculationRequest.model_validate(state["calculation_binding"]) if state["calculation_binding"] else None,
                 binding_audit=state["calculation_evidence"], available_source_refs=tuple(state["evidence_refs"]),
+                calculation_audits=tuple(state.get('calculation_audits',[])),
+                business_audit=state.get('business_audit'),
                 events=tuple(events), limitations=tuple(limitations), clarification=clarification,
                 error=ApiError.model_validate(state["error"]) if status == "error" else None,
                 parser_reason=parsed.reason, reset_context=parsed.decision == "cancelled",
@@ -432,6 +515,7 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
         ("initialize_turn", initialize), ("parse_question", parse),
         ("validate_slots_and_capabilities", validate), ("sql", call_sql),
         ("rag", call_rag), ("calculate", calculate),
+        ('prepare_business',prepare_business),
         ("evidence_check", evidence_check), (compose_node, compose),
     ]:
         builder.add_node(name, node)
@@ -440,7 +524,8 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
     builder.add_edge("parse_question", "validate_slots_and_capabilities")
     builder.add_conditional_edges("validate_slots_and_capabilities", start_route, ["sql", "rag", compose_node])
     builder.add_conditional_edges("sql", after_sql, ["rag", "calculate", "evidence_check"])
-    builder.add_conditional_edges("rag", after_rag, ["calculate", "evidence_check"])
+    builder.add_conditional_edges("rag", after_rag, ["calculate", "evidence_check",'prepare_business'])
+    builder.add_conditional_edges('prepare_business',after_business_plan,['sql','evidence_check'])
     builder.add_edge("calculate", "evidence_check")
     builder.add_edge("evidence_check", compose_node)
     builder.add_edge(compose_node, END)

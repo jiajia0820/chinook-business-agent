@@ -17,7 +17,8 @@ from ..tools.references import sql_cell_ref
 from .models import CalculationEvidenceBundle, DocumentLocator, DocumentScalarEvidence, EvidencePeriod, EvidenceScope, SqlScalarEvidence
 
 
-FUNCTION_BY_INTENT = {"target_difference": "difference", "target_attainment": "attainment_rate", "growth_rate": "growth_rate"}
+FUNCTION_BY_INTENT = {"target_difference": "difference", "target_attainment": "attainment_rate", "growth_rate": "growth_rate",
+    'average_order_value':'average_order_value','document_sum':'sum','period_difference':'difference'}
 
 
 def text_hash(value: str) -> str:
@@ -38,6 +39,12 @@ def task_period(task: BusinessTask) -> EvidencePeriod:
         raise ValueError("invalid period slots")
     start = date(year, (quarter - 1) * 3 + 1 if quarter else 1, 1)
     end = date(year + 1, 1, 1) if not quarter or quarter == 4 else date(year, quarter * 3 + 1, 1)
+    if task.slots.get('month') is not None:
+        month=task.slots['month']
+        if type(month) is not int or not 1 <=month<=12:
+            raise ValueError('invalid month slot')
+        start=date(year,month,1)
+        end=date(year+1,1,1) if month==12 else date(year,month+1,1)
     if period.start != start.isoformat() or period.end != end.isoformat():
         raise ValueError("period does not match explicit slots")
     return period
@@ -92,6 +99,8 @@ def _document_text(locator: DocumentLocator, chunks: dict, mode: str) -> str:
             return FORMULAS["difference"]
         if "增长率" in chunks[locator.chunk_id].text or "period_over_period_growth" in chunks[locator.chunk_id].text:
             return FORMULAS["growth_rate"]
+        if '客单价' in chunks[locator.chunk_id].text:
+            return FORMULAS['average_order_value']
         raise ValueError("verified business document formula is not approved")
     return chunk.text[locator.start:locator.end]
 
@@ -112,7 +121,8 @@ def authorize_calculation(bundle: CalculationEvidenceBundle, *, task: BusinessTa
     if (bundle.request_id, bundle.session_id, bundle.profile_id, bundle.calculation_id) != (context.request_id, context.session_id, context.profile_id, calculation_id) or profile.profile_id != context.profile_id or bundle.source_mode != expected_mode or not profile.supports("calculate"):
         raise ValueError("wrong turn/profile/source mode")
     function = FUNCTION_BY_INTENT.get(task.intent)
-    if not task.needs_calculation or function is None or bundle.function != function or set(bundle.operands) != OPERANDS[function]:
+    expected_roles={'sales','orders'} if function=='average_order_value' else (set(bundle.operands) if function=='sum' else OPERANDS.get(function,set()))
+    if not task.needs_calculation or function is None or bundle.function != function or set(bundle.operands) != expected_roles:
         raise ValueError("wrong intent/function/operand names")
     if len(task.business_metric_ids) != 1:
         raise ValueError("missing/ambiguous metric")
@@ -120,35 +130,39 @@ def authorize_calculation(bundle: CalculationEvidenceBundle, *, task: BusinessTa
     metric = profile.metric(metric_id)
     if metric is None:
         raise ValueError("unregistered business metric")
+    if function=='sum' and metric_id!='sales_amount':
+        raise ValueError('monthly monetary plan cannot substitute for other units')
     period, scope = task_period(task), task_scope(task)
-    prior = comparison_period(task) if function == "growth_rate" else None
-    if sql is None or sql.status != "success" or sql.profile_id != profile.profile_id or rag is None or rag.status != "success" or rag.profile_id != profile.profile_id:
+    prior = comparison_period(task) if function == "growth_rate" or task.intent=='period_difference' else None
+    if (function!='sum' and (sql is None or sql.status != "success" or sql.profile_id != profile.profile_id)) or rag is None or rag.status != "success" or rag.profile_id != profile.profile_id:
         raise ValueError("missing successful source objects")
-    results = {result.query_id: result for result in sql.sql_results}
+    results = {result.query_id: result for result in sql.sql_results} if sql else {}
     chunks = {chunk.chunk_id: chunk for chunk in rag.chunks}
     if len(chunks) != len(rag.chunks) or any(chunk.retrieval_id != rag.retrieval_id for chunk in rag.chunks):
         raise ValueError("ambiguous/stale retrieval objects")
     formula = bundle.formula
-    expected_unit = metric.unit if function == "difference" else "%"
+    expected_unit = metric.unit if function in {'difference','sum','average_order_value'} else "%"
     if not formula.confirmed or formula.function != function or formula.metric_id != metric_id or formula.period != period or formula.scope != scope or formula.input_unit != metric.unit or formula.result_unit != expected_unit:
         raise ValueError("formula semantics mismatch")
     formula_text = _document_text(formula.locator, chunks, bundle.source_mode)
     if formula_text != FORMULAS[function]:
         labels = {
-            "difference": "销售额差额",
-            "attainment_rate": "销售额达成率",
-            "growth_rate": "增长率",
+            "difference": ('差额','本期销售额 - 上期销售额'),
+            "attainment_rate": ('达成率',),
+            "growth_rate": ('增长率','period_over_period_growth'),
+            'average_order_value':('客单价',), 'sum':('月度分解',),
         }
-        if bundle.source_mode != "verified_business" or labels[function] not in chunks[formula.locator.chunk_id].text:
+        if bundle.source_mode != "verified_business" or not any(label in chunks[formula.locator.chunk_id].text for label in labels[function]):
             raise ValueError("formula does not match approved named function")
     operands = {}
     for role, evidence in bundle.operands.items():
-        expected_period = prior if role == "previous" else period
-        if not evidence.confirmed or evidence.metric_id != metric_id or evidence.period != expected_period or evidence.scope != scope or evidence.unit != metric.unit:
+        expected_period = prior if role == "previous" or role=='target' and task.intent=='period_difference' else period
+        operand_metric=profile.metric('sales_amount' if role=='sales' else 'order_count') if function=='average_order_value' else metric
+        if not evidence.confirmed or evidence.metric_id != operand_metric.metric_id or evidence.period != expected_period or evidence.scope != scope or evidence.unit != operand_metric.unit:
             raise ValueError("operand semantics mismatch")
         validate_numeric(evidence.value, evidence.unit)
         if isinstance(evidence, SqlScalarEvidence):
-            if role == "target":
+            if role == "target" and task.intent!='period_difference':
                 raise ValueError("target must be confirmed document evidence")
             result = results.get(evidence.query_id)
             if result is None or result.status != "success" or result.truncated or result.row_count != len(result.rows) or len(result.columns) != len(set(result.columns)) or any(set(row) != set(result.columns) for row in result.rows) or result_hash(result) != evidence.result_sha256 or evidence.row_index >= len(result.rows) or evidence.column not in result.columns:
@@ -167,7 +181,7 @@ def authorize_calculation(bundle: CalculationEvidenceBundle, *, task: BusinessTa
                 raise ValueError("SQL scalar mismatch")
             ref = sql_cell_ref(result.query_id, evidence.row_index, evidence.column)
         elif isinstance(evidence, DocumentScalarEvidence):
-            if role != "target":
+            if role != "target" and function!='sum':
                 raise ValueError("actual/current/previous require SQL evidence")
             raw = _document_text(evidence.locator, chunks, bundle.source_mode)
             text = chunks[evidence.locator.chunk_id].text
@@ -177,6 +191,23 @@ def authorize_calculation(bundle: CalculationEvidenceBundle, *, task: BusinessTa
                 raise ValueError("document number is a partial/signed/date token")
             if not re.fullmatch(r"\d+(?:\.\d{1,6})?", raw) or Decimal(raw) != evidence.value:
                 raise ValueError("document scalar span mismatch")
+            if bundle.source_mode=='verified_business':
+                from ..integrations.business_calculation import quarterly_targets, monthly_plan
+                title=chunks[evidence.locator.chunk_id].title
+                stamp=re.search(r'(\d{4})Q([1-4])',title)
+                if not stamp or (int(stamp[1]),int(stamp[2])) != (task.slots.get('year'),task.slots.get('quarter')):
+                    raise ValueError('target document period mismatch')
+                if function=='sum':
+                    plans=monthly_plan(rag.chunks,scope)
+                    expected_plan={f'month_{year}_{month:02}':(chunk,value,start,end)
+                        for month,value,chunk,start,end in plans for year in [task.slots['year']]}
+                    if set(bundle.operands)!=set(expected_plan):
+                        raise ValueError('monthly plan coverage mismatch')
+                    bound=expected_plan[role]
+                else:
+                    bound=quarterly_targets(rag.chunks,scope,metric_id)
+                if bound is None or (bound[0].chunk_id,bound[1],bound[2],bound[3]) != (evidence.locator.chunk_id,evidence.value,evidence.locator.start,evidence.locator.end):
+                    raise ValueError('document entity/metric/column mismatch')
             ref = evidence.locator.chunk_id
         else:
             raise ValueError("unsupported evidence type")

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import hashlib
+from basic_nl2sql_extension import extension_cases, render_extension
 from datetime import datetime
 from pathlib import Path
 
@@ -19,7 +20,8 @@ PROFILE_ID = "chinook-music"
 Q2_START, Q2_END = "2025-04-01", "2025-07-01"
 Q3_START, Q3_END = "2025-07-01", "2025-10-01"
 
-conn = sqlite3.connect(DB)
+conn = sqlite3.connect(DB.resolve().as_uri() + '?mode=ro', uri=True)
+conn.execute('PRAGMA query_only=ON')
 conn.row_factory = sqlite3.Row
 
 
@@ -164,6 +166,8 @@ FROM Invoice i JOIN InvoiceLine il ON il.InvoiceId=i.InvoiceId JOIN Track t ON t
 WHERE t.MediaTypeId IN {AUDIO} AND i.InvoiceDate>='{Q3_START}' AND i.InvoiceDate<'{Q3_END}'
 GROUP BY i.BillingCountry ORDER BY sales_amount DESC,i.BillingCountry LIMIT 5;"""
 basic_sql.append(item("basic-nl2sql-010", "basic", "billing_country_ranking", "2025年第三季度音频销售额最高的五个账单国家是什么？", tables=["Invoice","InvoiceLine","Track"], gold_sql=country_sql, gold_result=run(country_sql), gold_answer="返回按 Invoice.BillingCountry 汇总的前五个国家及销售额，不使用Customer所在地替代账单国家。", requirements=["使用账单国家", "按销售额降序"], difficulty="medium"))
+
+basic_sql.extend(extension_cases(basic_sql[0], conn))
 
 basic_rag = [
     item("basic-rag-001","basic","metric_definition","销售额、销量、订单数和购买客户数分别怎么计算？",docs=["D01"],evidence=[source("D01","销售额/销量/订单数/购买客户数",1)],gold_answer="销售额是InvoiceLine.UnitPrice乘Quantity的合计；销量是Quantity合计；订单数按InvoiceId去重；购买客户数按CustomerId去重。",requirements=["四项定义准确"],difficulty="easy"),
@@ -436,7 +440,7 @@ readme = f"""# 人工核查版评测集说明
 
 测试配置名为 `chinook-music`，定义见 [测试配置](../agent/interface_profile_fixture.json)。正式测试前，开发同学需要在应用中接入这个配置。
 
-当前包含 {manifest['single_turn_total']} 道单轮题和 {manifest['multiturn_sessions']} 组多轮会话，机器文件清单见 [eval_manifest.json](../agent/eval_manifest.json)。
+当前包含 {manifest['single_turn_total']} 道单轮题和 {manifest['multiturn_sessions']} 组多轮会话，共{sum(len(records) for records in groups.values())}个评分单位、{sum(len(record.get('turns',[record])) for records in groups.values() for record in records)}次请求。机器文件清单见 [eval_manifest.json](../agent/eval_manifest.json)。
 
 ## 目录结构
 
@@ -541,6 +545,10 @@ for filename, records in groups.items():
     safe = filename.replace(".jsonl", ".md")
     lines = [f"# {title}", "", f"题库文件：`eval/agent/{filename}`", f"题量：{len(records)}", ""]
     for record in records:
+        if filename == 'eval_basic_nl2sql.jsonl' and record['id'] in {f'basic-nl2sql-{i:03}' for i in range(11,16)}:
+            lines.extend(render_extension(record).splitlines())
+            lines.append('')
+            continue
         if filename == "eval_multiturn.jsonl":
             lines.extend([f"## {record['id']}", "", f"会话能力：{record.get('capability','')}", ""])
             for turn in record.get("turns", []):

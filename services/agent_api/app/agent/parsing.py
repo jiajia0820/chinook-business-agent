@@ -6,6 +6,7 @@ import re
 from ..contracts import Clarification, MissingSlot, TimeRange
 from ..profiles.models import BusinessProfile
 from .state import BusinessTask, ParsedTurn, SessionMemory
+from backend.sql_module.query_intent import parse_query_intent, DIMENSION_METRICS
 
 
 SLOT_DESCRIPTIONS = {
@@ -20,7 +21,12 @@ SLOT_DESCRIPTIONS = {
     "intent": "请明确查询指标或要解释的业务规则",
     "context": "当前没有可继承的任务，请补充完整问题",
     "condition_conflict": "补充条件与已确认条件冲突；请使用“改成……”明确更正",
-    "time_range": "年份/季度必须有效；本阶段仅支持整年或完整季度",
+    "time_range": "请提供有效且明确的整年、季度或月份",
+    "media_scope": "分别列示音频和视频，还是统计全店合计",
+    "entity_dimension": "查询 Genre、MediaType、Album 还是 Playlist",
+    "observation_period": "客户分层的观察年份和季度",
+    "period": "目标比较的年份和季度",
+    "genre_scope": "仅 Rock，还是明确合并 Rock And Roll",
     "filter_scope": "该限定条件尚不能可靠解析，请改为已支持的明确条件",
 }
 
@@ -69,12 +75,28 @@ def _metric_scan_text(question):
 def _matched_metrics(question, rules):
     """Return registered metric ids named by the question, in catalog order."""
     scan = _metric_scan_text(question)
-    return [metric for metric, terms in rules.metric_terms.items()
+    metrics = [metric for metric, terms in rules.metric_terms.items()
             if _contains(question, terms) or _contains(scan, terms)]
+    intent = parse_query_intent(question, metrics)
+    if intent.get('operation') == 'track_attributes':
+        return ['track_attributes']
+    if intent.get('operation') == 'mixed_media_orders':
+        return ['mixed_order_count']
+    grain = DIMENSION_METRICS.get(intent.get('dimension'))
+    if grain:
+        metrics = [m for m in metrics if m not in DIMENSION_METRICS.values() or m == grain]
+        if grain not in metrics:
+            metrics.append(grain)
+    for measure in intent.get('measures', []):
+        if measure not in metrics:
+            metrics.append(measure)
+    return metrics
 
 
 def _periods(question):
     """Return explicitly stated periods only, never a wall-clock default."""
+    from .entity_ids import mask_identifiers
+    question = mask_identifiers(question)
     quarter_pattern = r"(?:第?([一二三四1234])季度|Q([1-4]))"
     year_scan = re.sub(r"TrackId\s*\d+(?:-\d+)?", "", question, flags=re.I)
     year_matches = re.findall(r"(?<![A-Za-z0-9])(\d{4})(?:\s*年)?(?!\d)", year_scan)
@@ -87,7 +109,10 @@ def _periods(question):
         slots["year"] = years[0]
     if quarters:
         slots["quarter"] = quarters[0]
-    if months:
+    month_match = re.search(r"(?:\d{4}\s*年\s*(\d{1,2})\s*月|\d{4}-(\d{2})(?![-\d])|(?<!\d)(\d{1,2})\s*月)", question)
+    if month_match:
+        slots["month"] = int(next(value for value in month_match.groups() if value))
+    elif months:
         slots["month"] = months[0]
     if len(quarters) == 2 and years:
         slots["comparison_period"] = {
@@ -106,6 +131,8 @@ def _entities(question, profile):
             if term.isascii():
                 pattern = r"(?<![A-Za-z])" + pattern + r"(?![A-Za-z])"
             for match in re.finditer(pattern, question, flags=re.I):
+                if re.search(r'(?:不包含|不包括|不含|不并入|不合并|排除)\s*$', question[max(0,match.start()-8):match.start()]):
+                    continue
                 candidates.append((match.start(), match.end(), alias))
     used, result = [], []
     for start, end, alias in sorted(candidates, key=lambda x: -(x[1] - x[0])):
@@ -127,8 +154,8 @@ def _time_range(slots):
     if month:
         start = date(year, month, 1)
         end = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
-        return TimeRange(start=start.isoformat(), end=end.isoformat(), end_inclusive=False, label=f"{year}-{month:02d}")
-    if quarter:
+        label = f"{year}-{month:02d}"
+    elif quarter:
         month = (quarter - 1) * 3 + 1
         start = date(year, month, 1)
         end = date(year + 1, 1, 1) if quarter == 4 else date(year, month + 3, 1)
@@ -163,7 +190,13 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
         return clarify(None, ["intent"], rules=["empty_new_question"])
     for metric, terms in rules.unsupported_terms.items():
         if _contains(q, terms):
-            return ParsedTurn(decision="unsupported", reason=f"当前数据与工具不支持指标 {metric}，不能用其他指标替代。", rules=[f"data_gap:{metric}"])
+            reasons = {'profit':'当前没有成本与利润数据，不能用销售额代替利润。','inventory':'当前没有库存快照，无法计算库存数量。',
+                'play_count':'当前只有播放列表收录关系，没有播放次数或收听日志，不能推断播放量。'}
+            return ParsedTurn(decision="unsupported", reason=reasons.get(metric,f"当前数据与工具不支持指标 {metric}，不能用其他指标替代。"), rules=[f"data_gap:{metric}"])
+    if _contains(q,['点击','转化','曝光']) and _contains(q,['活动','页面']):
+        return ParsedTurn(decision='unsupported',reason='当前没有活动点击、曝光或转化事件数据；交易变化不能替代这些事件。',rules=['data_gap:activity_events'])
+    if _contains(q,['SupportRep','支持负责人']) and _contains(q,['员工','个人','贡献']) and _contains(q,['销售','排名']):
+        return ParsedTurn(decision='unsupported',reason='SupportRep 表示客户维护责任，不等于个人销售归属，不能用于员工销售额排名。',rules=['support_rep_boundary'])
 
     # Whole-question document aliases are configured vocabulary, not a list
     # of gold answers. Unknown filters never get removed to match an alias.
@@ -190,7 +223,10 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
 
     explicit_slots, years, quarters = _periods(q)
     entities = _entities(q, profile)
-    metric_ids = _matched_metrics(q, rules)
+    try:
+        metric_ids = _matched_metrics(q, rules)
+    except ValueError:
+        return clarify(None, ['filter_scope'], rules=['identifier_range'])
     hits = {name: _contains(q, terms) for name, terms in rules.intent_terms.items()}
     followup = q.startswith(("换成", "改成", "那", "和目标比", "仅", "按", "对比", "环比", "同比"))
     # Slot-only responses are safe supplements; arbitrary text is not silently ignored.
@@ -216,6 +252,10 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
         if memory.pending and (conflicts or entity_conflict or metric_conflict) and not q.startswith(("改成", "换成", "更正")):
             return clarify(task, ["condition_conflict"], reused=True, rules=["preserve_confirmed_slots"])
         task.slots.update(explicit_slots)
+        if 'month' in explicit_slots:
+            task.slots.pop('quarter',None)
+        elif 'quarter' in explicit_slots:
+            task.slots.pop('month',None)
         if entities:
             task.entities = entities
             task.slots["scope"] = ", ".join(e["label"] for e in entities)
@@ -227,7 +267,7 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
         if entities:
             task.slots["scope"] = ", ".join(e["label"] for e in entities)
             task.slots["data_scope"] = task.slots["scope"]
-    if _contains(q, ["全部音乐", "全部音频", "全音乐", "全音频"]):
+    if _contains(q, ["全部音乐", "全部音频", "全音乐", "全音频"]) or ("音频" in q and not entities):
         task.entities = []
         task.slots["scope"] = task.slots["data_scope"] = "全部音频"
     if _contains(q, ["仅", "合并", "全部"]) and (entities or task.slots.get("scope") == "全部音频"):
@@ -235,6 +275,17 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
     task.slots.setdefault("media_ids", list(profile.default_media_ids))
     if task.business_metric_ids:
         task.slots["target_metric"] = task.business_metric_ids[0]
+    if task.business_metric_ids==['units_sold'] and _contains(q,['完成','达成']) and not _contains(q,['定义','口径']):
+        hits['target_attainment']=True
+    if _contains(q,['分开看还是','合计还是']) and _contains(q,['音频','音乐']) and '视频' in q:
+        return clarify(task,['media_scope'],reused=reused,rules=['media_aggregation_choice'])
+    if _contains(q,['属于什么类型','类型是哪种']) and _contains(q,['商品','单曲']):
+        return clarify(task,['entity_dimension'],reused=reused,rules=['dimension_choice'])
+    if _contains(q,['高价值客户','客户怎么分层']) and not ('year' in task.slots and ('quarter' in task.slots or 'month' in task.slots)):
+        task.intent,task.route='document_rule','rag'
+        return clarify(task,['observation_period'],reused=reused,rules=['customer_observation_period'])
+    if _contains(q,rules.ambiguous_scope_terms) and not task.slots.get('genre_boundary_resolved'):
+        return clarify(task,['genre_scope'],reused=reused,rules=['genre_boundary'])
     if hits.get("document_calculation"):
         task.intent, task.route, task.needs_calculation = "document_calculation", "rag", True
     elif hits.get("target_difference"):
@@ -258,19 +309,62 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
         task.route, task.needs_calculation = "sql", False
     elif not base:
         task.intent = "unknown"
+    if _contains(q,['目标表','计划','目标呢']) and not _contains(q,['实际','差多少','达成','完成','达到','合计','计算']):
+        task.intent,task.route,task.needs_calculation='document_rule','rag',False
+    if 'average_order_value' in task.business_metric_ids:
+        task.intent,task.route,task.needs_calculation='average_order_value','sql',True
+    if '计划' in q and _contains(q,['合计','求和','合并金额']):
+        task.intent,task.route,task.needs_calculation='document_sum','rag',True
+    advice = _contains(q,['运营','建议','下一步','重点看','活动方案'])
+    if base and followup and advice and not metric_ids:
+        task.intent,task.route,task.needs_calculation='document_rule','rag',False
+        hits['document_rule'] = True
+    elif '复盘' in q and len(quarters)>1 and not _contains(q,['增长率','达成率','差额']):
+        task.intent,task.route,task.needs_calculation='document_rule','rag',False
+    elif _contains(q,['距离目标','未达目标']) and task.entities and advice:
+        task.intent,task.route,task.needs_calculation='target_difference','cross_source',True
+        if not task.business_metric_ids:
+            task.business_metric_ids=['sales_amount']
+    elif parse_query_intent(q,task.business_metric_ids).get('dimension') in {'genre','month'} and (
+            advice or _contains(q,['实际','目标计划'])):
+        task.intent,task.route,task.needs_calculation='cross_source_query','cross_source',False
+    if task.intent=='growth_rate' and _contains(q,['D02','销售分析']) and task.slots.get('quarter'):
+        task.route='cross_source'
+        task.slots.setdefault('scope','全部音频')
+        task.slots.setdefault('data_scope','全部音频')
 
+    # Document-dependent business steps must not terminate at a rule quotation.
+    if '客户' in q and _contains(q, ['购买', '买过']) and _contains(q, ['A层', 'A 层', '重点维护']):
+        task.intent, task.route, task.needs_calculation = 'customer_segmentation', 'cross_source', False
+        task.business_metric_ids = ['sales_amount']
+        task.slots['business_workflow'] = 'customer_segmentation'
+    elif _contains(q, ['海报', '主页面']) and _contains(q, ['成交', '卖出', '销售']) and _contains(q, ['TrackId', '商品编号', '商品ID']):
+        from .entity_ids import track_selection
+        try:
+            selection = track_selection(q)
+        except ValueError:
+            return clarify(task, ['filter_scope'], rules=['identifier_range'])
+        task.intent, task.route, task.needs_calculation = 'poster_candidates', 'cross_source', False
+        task.business_metric_ids = ['sales_amount']
+        task.slots.update(business_workflow='poster_candidates', track_selection=selection)
     # A comparison of multiple business documents is a RAG task. Keep it on
     # the document route so the query planner can require each quarter's
     # authoritative review instead of sending it to SQL.
     if task.route == "rag" and task.intent == "document_rule" and (
             len(quarters) >= 2 or ("复盘" in q and any(term in q for term in ("比较", "变化", "对比")))):
         task.intent = "multidoc_query"
-
+    # Catalog attributes and mixed-media counts are deterministic SQL queries;
+    # cross-source vocabulary must not reroute them through document retrieval.
+    if 'track_attributes' in task.business_metric_ids:
+        task.intent, task.route, task.needs_calculation = 'track_attributes', 'sql', False
+    elif 'mixed_order_count' in task.business_metric_ids:
+        task.intent, task.route, task.needs_calculation = 'mixed_media_orders', 'sql', False
     # 三分法第二类：带明确季度但缺年份，且意图引用按年绑定的经营资料
     # （目标/复盘/方案/增长对比）。年份由资料锚定，声明口径后直接答，不反问。
-    anchored_intents = {"target_attainment", "target_difference", "cross_source_query",
-                        "document_calculation", "growth_rate"}
-    if task.intent in anchored_intents and "quarter" in task.slots and "year" not in task.slots:
+    anchored_intents = {"target_attainment", "target_difference", "cross_source_query", 'average_order_value','document_sum',
+                        "document_calculation", "growth_rate", 'customer_segmentation','poster_candidates'}
+    scoped_fact = task.intent=='quarterly_sales' and task.entities and profile.sql_backend is not None and 'sales_amount' in profile.sql_backend.registered_metric_ids
+    if (task.intent in anchored_intents or scoped_fact) and "quarter" in task.slots and "year" not in task.slots:
         anchor = _anchor_year(profile)
         if anchor:
             task.slots["year"] = anchor
@@ -280,12 +374,16 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
 
     if not task.business_metric_ids:
         task.business_metric_ids = list(rules.intent_default_metric_ids.get(task.intent, []))
-        if task.business_metric_ids:
-            task.slots["target_metric"] = task.business_metric_ids[0]
+    if task.business_metric_ids:
+        task.slots["target_metric"] = task.business_metric_ids[0]
     # Defaults are declared in profile; no year or numeric target is inferred.
     if task.intent == "target_attainment" and not task.business_metric_ids:
         return clarify(task, ["target_metric"] + ([] if task.slots.get("year") else ["year"]), reused=reused, rules=["target_metric_not_inferred"])
     missing = []
+    if task.intent == 'growth_rate' and 'comparison_period' not in task.slots and 'quarter' not in task.slots:
+        return clarify(task,['comparison_period','data_scope'],reused=reused,rules=['comparison_context'])
+    if task.intent in {'target_attainment','target_difference'} and not task.slots.get('quarter') and not task.slots.get('month'):
+        return clarify(task,['period','scope','target_metric'],reused=reused,rules=['target_context'])
     # 自由问法先交给多文档检索：检索不到证据时仍返回 insufficient_evidence，不会编造答案。
     # offline 模式保持严格，只回答配置过的固定问法，避免把离线演示当成自由检索。
     offline_backend = profile.sql_backend is not None and profile.sql_backend.model_mode == "offline"
@@ -311,6 +409,8 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
     if re.search(r"\d{1,2}月|\d{1,2}日|最近|今年|去年|本季度|本月", q):
         if "month" not in task.slots or "year" not in task.slots:
             missing.append("time_range")
+    if task.slots.get("month") is not None and not 1 <= task.slots["month"] <= 12:
+        missing.append("time_range")
     if re.search(r"第?(?:[五六七八九]|[5-9])季度", q) and not re.search(r"第?[一二三四1-4]季度", q):
         missing.append("time_range")
     if len(years) > 1 or len(quarters) > 1:
@@ -319,7 +419,7 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
                       and any(term in q for term in ("对比", "相比", "比", "变化", "增长", "环比", "同比")))
         if not comparable:
             missing.append("time_range")
-    if task.intent not in {"unknown", "cross_source_query", "growth_rate", "target_difference", "target_attainment"} and task.route not in {"rag", "cross_source"} and profile.sql_backend.model_mode == "offline" and _unparsed_query_text(q, profile):
+    if task.intent not in {"unknown", "cross_source_query", "growth_rate", "target_difference", "target_attainment"} and task.route not in {"rag", "cross_source"} and profile.sql_backend.model_mode == "offline" and 'track_attributes' not in task.business_metric_ids and _unparsed_query_text(q, profile):
         missing.append("filter_scope")
     try:
         task.time_range = _time_range(task.slots)
@@ -333,6 +433,8 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
     if missing:
         return clarify(task, list(dict.fromkeys(missing)), reused=reused, rules=["required_slots", "finite_grammar"])
     coverage_rules = []
+    if task.route != 'rag':
+        task.slots['query_intent'] = parse_query_intent(task.original_question, task.business_metric_ids)
     if task.route != "rag" and task.time_range and profile.data_start and profile.data_end:
         start, end = date.fromisoformat(task.time_range.start), date.fromisoformat(task.time_range.end)
         available_start = date.fromisoformat(profile.data_start)
@@ -349,7 +451,7 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
         # Keep this turn's document wording, including any new unknown topic.
         # Explicit inherited metrics still travel as hints; old question text
         # must not conceal a changed rule question and retrieve old evidence.
-        task.normalized_question = q if task.route == "rag" else task.original_question
+        task.normalized_question = (base.original_question+' '+q if base and ((slot_only or supplement) and not any(hits.values()) and not metric_ids or followup and advice) else q) if task.route == "rag" else task.original_question
     required = {"sql": ["sql"], "rag": ["rag"], "cross_source": ["sql", "rag"]}[task.route]
     if task.needs_calculation:
         required.append("calculate")

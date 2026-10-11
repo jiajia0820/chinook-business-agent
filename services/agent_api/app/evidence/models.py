@@ -77,7 +77,7 @@ class DocumentScalarEvidence(ScalarSemantics):
 
 
 class FormulaEvidence(InternalModel):
-    function: Literal["difference", "attainment_rate", "growth_rate"]
+    function: Literal["difference", "attainment_rate", "growth_rate", "average_order_value", "sum"]
     metric_id: NonEmptyString
     period: EvidencePeriod
     scope: EvidenceScope
@@ -93,8 +93,8 @@ class CalculationEvidenceBundle(InternalModel):
     profile_id: NonEmptyString
     calculation_id: NonEmptyString
     source_mode: Literal["fixture", "verified_business"]
-    function: Literal["difference", "attainment_rate", "growth_rate"]
-    operands: dict[str, Annotated[SqlScalarEvidence | DocumentScalarEvidence, Field(discriminator="kind")]] = Field(min_length=2, max_length=2)
+    function: Literal["difference", "attainment_rate", "growth_rate", "average_order_value", "sum"]
+    operands: dict[str, Annotated[SqlScalarEvidence | DocumentScalarEvidence, Field(discriminator="kind")]] = Field(min_length=2, max_length=12)
     formula: FormulaEvidence
 
 
