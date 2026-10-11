@@ -92,7 +92,9 @@ def expected_result_evidence(metric_ids):
     """
     expected, grouped = set(), False
     for metric in metric_ids:
-        if metric in MEASURE_COLUMNS:
+        if metric == 'track_attributes':
+            expected.update({'TrackId', 'Name', 'genre', 'media_type', 'unit_price'})
+        elif metric in MEASURE_COLUMNS:
             expected.add(metric)
         elif metric.endswith("_sales") or metric == "playlist_track_count":
             if metric == 'playlist_track_count':
@@ -280,6 +282,10 @@ class FormalResponseComposer:
             "AlbumId": "专辑 ID",
             "ArtistId": "艺术家 ID",
             "MediaTypeId": "媒体类型 ID",
+            "media_type": "媒体类型",
+            "CustomerId": "客户编号",
+            "customer": "客户",
+            "unit_price": "标价",
             "Name": "名称",
             "Title": "标题",
         }
@@ -289,6 +295,7 @@ class FormalResponseComposer:
             "units_sold": "件",
             "order_count": "单",
             "purchasing_customers": "人",
+            "unit_price": "USD",
         }
         expected, grouped = expected_result_evidence(task.business_metric_ids)
         rendered_results = []

@@ -15,7 +15,8 @@ from .generation import OUTPUT_SCHEMA, decode_generated, HTTPJSONModel
 from .profiles import obj, string, strings, integer
 from .schema import SchemaService
 from .query_intent import parse_query_intent, validate_intent
-from .semantic_scope import covers_context
+from .semantic_scope import covers_context, same_registered_query
+from .catalog_queries import CATALOG_COLUMNS, catalog_query, zero_media_query
 from .business_queries import OPERATIONS, build_query, output_columns
 
 
@@ -102,6 +103,8 @@ def _output_contract(metric_ids, context=None):
     """已登记指标要求的结果列；返回 None 表示本阶段不约束该组合。"""
     slots=(context or {}).get('resolved_slots', {})
     intent=slots.get('query_intent', {})
+    if intent.get('operation') == 'track_attributes':
+        return CATALOG_COLUMNS
     if intent.get('operation')=='mixed_media_orders':
         return ['mixed_order_count']
     if intent.get('dimension')=='playlist':
@@ -146,6 +149,11 @@ def _contract_column_mapping(result, contract):
 
 
 def _candidate_covers_context(generated, context):
+    intent = context.get('resolved_slots', {}).get('query_intent', {})
+    if intent.get('operation') == 'track_attributes' or intent.get('include_empty') or intent.get('amount_filter') or intent.get('track_ids'):
+        if not validate_intent(intent):
+            return False
+        return same_registered_query(generated, _controlled_query(context, context.get('metric_ids', [])))
     mixed=context.get('resolved_slots',{}).get('query_intent',{}).get('operation')=='mixed_media_orders'
     if not covers_context(generated, context, media_applies=not mixed and _media_scope_applies(context.get('metric_ids', []), context.get('resolved_slots', {}))):
         return False
@@ -177,6 +185,12 @@ def _controlled_query(context, metric_ids, candidate_sql=None, max_rows=50):
     """按已登记口径生成确定性只读查询；无法覆盖时返回 None，不猜测业务语义。"""
     slots=context.get('resolved_slots',{})
     intent=slots.get('query_intent', {})
+    if not validate_intent(intent):
+        return None
+    if intent.get('operation') == 'track_attributes':
+        if metric_ids != ['track_attributes'] or context.get('entities') or any(key in slots for key in ('start_date','end_date')):
+            return None
+        return catalog_query(intent)
     if intent.get('operation')=='mixed_media_orders':
         return {'sql':'SELECT COUNT(*) AS mixed_order_count FROM (SELECT il.InvoiceId FROM main.InvoiceLine il JOIN main.Track t ON t.TrackId=il.TrackId GROUP BY il.InvoiceId HAVING SUM(CASE WHEN t.MediaTypeId IN (1,2,4,5) THEN 1 ELSE 0 END)>0 AND SUM(CASE WHEN t.MediaTypeId=3 THEN 1 ELSE 0 END)>0) mixed', 'params':{}}
     if intent.get('dimension')=='playlist':
@@ -229,6 +243,13 @@ def _controlled_query(context, metric_ids, candidate_sql=None, max_rows=50):
         select=['%s AS %s' % (expr, name) for name, expr in plan['columns']]
     if _media_scope_applies(metric_ids,slots):
         where.append('t.MediaTypeId IN ('+','.join(str(value) for value in slots['media_ids'])+')')
+    if intent.get('track_ids'):
+        bindings = []
+        for number, track_id in enumerate(intent['track_ids']):
+            key = 'track_'+str(number)
+            params[key] = track_id
+            bindings.append(':'+key)
+        where.append('t.TrackId IN ('+','.join(bindings)+')')
     for entity in context.get('entities',[]):
         entity_id=entity.get('id','')
         if entity.get('type')=='genre' and entity_id.startswith('Genre:'):
@@ -240,16 +261,27 @@ def _controlled_query(context, metric_ids, candidate_sql=None, max_rows=50):
         else:
             return None
     measures=measures or ['sales_amount']
+    if intent.get('include_empty'):
+        return zero_media_query(context, measures)
     select+= [MEASURE_EXPRESSIONS[metric] for metric in measures]
     sql='SELECT '+', '.join(select)+' FROM main.InvoiceLine il '
     sql+='JOIN main.Invoice i ON i.InvoiceId = il.InvoiceId JOIN main.Track t ON t.TrackId = il.TrackId '
     sql+=' '.join(joins)+' WHERE '+' AND '.join(where)
     intent=slots.get('query_intent', {})
-    limit=min(intent['top_n'],max_rows) if intent.get('top_n') else (_candidate_limit(candidate_sql,max_rows) if candidate_sql else None)
+    candidate_limit = _candidate_limit(candidate_sql,max_rows) if candidate_sql and not (intent.get('amount_filter') or intent.get('track_ids')) else None
+    limit=min(intent['top_n'],max_rows) if intent.get('top_n') else candidate_limit
     if group_by:
         sql+=' GROUP BY '+', '.join(group_by)
+        if intent.get('amount_filter'):
+            rule = intent['amount_filter']
+            operators = {'gte':'>=', 'gt':'>', 'lte':'<=', 'lt':'<', 'eq':'='}
+            params['amount_threshold'] = rule['value']
+            # Amounts have cent precision; rounding avoids float accumulation
+            # dropping customers exactly at an explicitly stated money boundary.
+            sql+=' HAVING ROUND(SUM(il.UnitPrice * il.Quantity),2) '+operators[rule['operator']]+' :amount_threshold'
         # 有取前 N 的候选时按度量降序排名，否则按维度键稳定排序。
-        sql+=' ORDER BY '+((measures[0]+' DESC, ') if limit else '')+order_key
+        order_measure = intent.get('order_by') or (measures[0] if limit else None)
+        sql+=' ORDER BY '+((order_measure+(' DESC' if intent.get('order_desc',bool(limit)) else ' ASC')+', ') if order_measure else '')+order_key
     if limit:
         sql+=' LIMIT '+str(limit)
     return {'sql':sql,'params':params}

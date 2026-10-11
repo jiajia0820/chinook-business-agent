@@ -78,6 +78,8 @@ def _matched_metrics(question, rules):
     metrics = [metric for metric, terms in rules.metric_terms.items()
             if _contains(question, terms) or _contains(scan, terms)]
     intent = parse_query_intent(question, metrics)
+    if intent.get('operation') == 'track_attributes':
+        return ['track_attributes']
     if intent.get('operation') == 'mixed_media_orders':
         return ['mixed_order_count']
     grain = DIMENSION_METRICS.get(intent.get('dimension'))
@@ -217,7 +219,10 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
 
     explicit_slots, years, quarters = _periods(q)
     entities = _entities(q, profile)
-    metric_ids = _matched_metrics(q, rules)
+    try:
+        metric_ids = _matched_metrics(q, rules)
+    except ValueError:
+        return clarify(None, ['filter_scope'], rules=['identifier_range'])
     hits = {name: _contains(q, terms) for name, terms in rules.intent_terms.items()}
     followup = q.startswith(("换成", "改成", "那", "和目标比", "仅", "按", "对比", "环比", "同比"))
     # Slot-only responses are safe supplements; arbitrary text is not silently ignored.
@@ -393,7 +398,7 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
                       and any(term in q for term in ("对比", "相比", "比", "增长", "环比", "同比")))
         if not comparable:
             missing.append("time_range")
-    if task.intent != "unknown" and task.route != "rag" and profile.sql_backend.model_mode == "offline" and _unparsed_query_text(q, profile):
+    if task.intent != "unknown" and task.route != "rag" and profile.sql_backend.model_mode == "offline" and 'track_attributes' not in task.business_metric_ids and _unparsed_query_text(q, profile):
         missing.append("filter_scope")
     try:
         task.time_range = _time_range(task.slots)

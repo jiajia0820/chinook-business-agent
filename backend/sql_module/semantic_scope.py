@@ -6,6 +6,30 @@ forms are repaired with a disclosed registered plan rather than guessed valid.
 import sqlglot
 from sqlglot import exp
 from datetime import date
+from sqlglot.optimizer.normalize_identifiers import normalize_identifiers
+
+
+def same_registered_query(candidate, expected):
+    """Conservative AST match for newly registered shapes, binding actual values.
+
+    Equivalent unsupported forms go through disclosed plan repair. Never accept
+    outer joins just because a date literal occurs somewhere in the statement.
+    """
+    if expected is None:
+        return False
+    def bound_tree(query):
+        tree = normalize_identifiers(sqlglot.parse_one(query['sql'], read='sqlite'))
+        def bind(node):
+            if isinstance(node, exp.Placeholder):
+                if node.name not in query['params']:
+                    raise ValueError('unbound parameter')
+                return exp.convert(query['params'][node.name])
+            return node
+        return tree.transform(bind)
+    try:
+        return bound_tree(candidate) == bound_tree(expected)
+    except (sqlglot.errors.SqlglotError, KeyError, TypeError, ValueError):
+        return False
 
 
 def covers_context(candidate, context, *, media_applies=True):
