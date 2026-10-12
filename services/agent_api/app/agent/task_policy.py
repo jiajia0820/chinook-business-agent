@@ -431,7 +431,12 @@ def parse_c_v1(question, profile, memory):
     except (KeyError, ValueError):
         gate = None
     if gate is not None and gate.status == "unsupported":
+        task.semantic_status = gate.status
+        task.semantic_blockers = gate.blockers
         return ParsedTurn(decision="unsupported", task=task, reason=gate.reason, rules=["semantic_gate"])
+    if gate is not None:
+        task.semantic_status = gate.status
+        task.semantic_blockers = gate.blockers
     if gate is not None and gate.status == "answerable" and task.question_ir.task_type == "business_rule":
         task.intent, task.route, task.needs_calculation = "document_rule", "rag", False
         task.information_needs = ["rag"]

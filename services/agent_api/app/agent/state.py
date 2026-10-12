@@ -35,6 +35,8 @@ class BusinessTask(InternalModel):
     time_issues: list[str] = Field(default_factory=list)
     # New semantic IR is optional so old checkpoints and callers remain valid.
     question_ir: QuestionIR | None = None
+    semantic_status: Literal["answerable", "clarification_required", "unsupported"] | None = None
+    semantic_blockers: list[str] = Field(default_factory=list)
 
 
 class SessionMemory(InternalModel):
