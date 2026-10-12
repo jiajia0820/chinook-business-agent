@@ -2,7 +2,7 @@ import json
 import asyncio
 import unittest
 
-from services.agent_api.app.agent.semantic_router import parse_route_proposal
+from services.agent_api.app.agent.semantic_router import parse_route_proposal, task_from_proposal
 from services.agent_api.app.agent.state import SessionMemory
 from services.agent_api.app.agent.task_policy import parse_c_v1
 from services.agent_api.app.contracts import AskRequest
@@ -38,6 +38,18 @@ class SemanticRouterContractTests(unittest.TestCase):
             "tool": "database",
         })))
         self.assertIsNone(parse_route_proposal("not-json"))
+
+    def test_business_rule_proposal_only_maps_to_read_only_document_route(self):
+        proposal = parse_route_proposal(json.dumps({
+            "question_type": "business_rule",
+            "needs_tool": True,
+            "confidence": 0.9,
+        }))
+
+        task = task_from_proposal("这个规定怎么执行", proposal)
+
+        self.assertEqual(task.route, "rag")
+        self.assertEqual(task.intent, "document_rule")
 
     def test_ambiguous_turn_can_be_routed_to_general_answer_without_tools(self):
         profile = ProfileRegistry.defaults().get("chinook-music")

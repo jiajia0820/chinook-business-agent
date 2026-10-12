@@ -223,7 +223,14 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
             proposal = await executor.run(generate, deadline=deadline)
         except Exception:
             return state
-        if proposal is None or proposal.question_type != "general_knowledge" or proposal.needs_tool:
+        if proposal is None:
+            return state
+        allowed = (
+            proposal.question_type == "general_knowledge" and not proposal.needs_tool
+        ) or (
+            proposal.question_type == "business_rule" and proposal.needs_tool
+        )
+        if not allowed:
             return state
         task = task_from_proposal(request.question, proposal)
         if task is None:
