@@ -37,6 +37,30 @@ def policy_clarify(task, missing, *, reused=False):
     return build_clarification(task, missing, SLOT_SPECS, reused=reused)
 
 
+GENERAL_CONTEXT_TERMS = (
+    "公司", "企业", "业务", "项目", "系统", "数据库", "本地", "我们", "本项目",
+    "实际", "销售", "销售额", "销量", "成交", "交易", "订单", "客户", "购买", "目标", "达标",
+    "经营", "活动", "海报", "报名", "选品", "分层", "音乐", "音频", "视频", "媒体",
+    "音乐类型", "Genre", "Rock", "Metal", "商品", "单曲", "曲目", "专辑", "艺术家",
+    "播放列表", "TrackId", "CustomerId", "PlaylistId", "GenreId", "MediaType", "Chinook", "AdventureWorks",
+    "数据表", "字段", "记录", "查询", "口径", "D01", "D02", "D03", "D04", "D05", "D06",
+    "D07", "D08", "D09", "D10", "D11", "D12", "季度", "月份", "Q1", "Q2", "Q3", "Q4",
+)
+
+GENERAL_QUESTION_MARKERS = (
+    "什么是", "是什么", "怎么理解", "如何理解", "有哪些", "哪一些", "举例", "介绍一下",
+    "简单介绍", "通常包括", "一般包括", "常见的",
+)
+
+
+def looks_general_knowledge(question: str) -> bool:
+    """Recognize low-risk general questions before business capability gates."""
+    q = question.strip()
+    if not q or any(term.casefold() in q.casefold() for term in GENERAL_CONTEXT_TERMS):
+        return False
+    return any(marker in q for marker in GENERAL_QUESTION_MARKERS)
+
+
 @lru_cache(maxsize=1)
 def metric_requirements():
     # Read-only server catalog, not eval data; required slots remain B-owned.
@@ -156,6 +180,15 @@ def semantic_task(question, profile):
     slots, years, quarters = typed_periods(question)
     entities, excluded = split_entities(question, profile)
     metrics = _matched_metrics(question, profile.question_rules)
+    if looks_general_knowledge(question):
+        return BusinessTask(
+            original_question=question,
+            normalized_question=question,
+            intent="general_knowledge",
+            route="general",
+            retrieval_question=question,
+            source_roles=["general_knowledge"],
+        )
     metric_explicit = bool(metrics) or ("销售" in question and "增长" in question)
     q = question
     doc_terms = ("口径", "定义", "怎么计算", "如何计算", "规则", "手册", "方案", "海报", "复盘", "建议", "解读", "选品", "分层", "维护", "对应", "归类", "分类表", "Genre", "MediaType", "报名", "阈值", "一个分类", "分开", "并入", "范围差异", "范围怎么写", "核心结果", "包括哪些", "包含哪些", "按哪个分类", "媒体格式", "活动什么时候", "提交材料", "截止")
@@ -317,6 +350,8 @@ def finalize_task(task, profile):
             task.slots.update(start_date=task.time_range.start, end_date=task.time_range.end)
     except (ValueError, TypeError):
         missing.append("time_range")
+    if task.route == "general":
+        return ParsedTurn(decision="ready", task=task, rules=[POLICY_VERSION, "general_knowledge"])
     if task.route == "sql" and task.intent == "unknown":
         if "卖得怎么样" in task.original_question:
             deferred = [] if task.time_range else ["year" if task.slots.get("quarter") else "period"]
@@ -367,13 +402,15 @@ def parse_c_v1(question, profile, memory):
         memory.active_task_id = None
     if q in {"取消", "取消当前问题", "重新开始", "清空上下文"}:
         return ParsedTurn(decision="cancelled", reason="已清空当前任务。", rules=["reset_context"])
-    for metric, terms in profile.question_rules.unsupported_terms.items():
-        if any(term.casefold() in q.casefold() for term in terms):
-            return ParsedTurn(decision="unsupported", reason=f"当前数据不支持{metric}，不能用其他指标替代。", rules=["data_gap"])
-    if any(term in q for term in ("点击", "转化")):
-        return ParsedTurn(decision="unsupported", reason="没有页面事件/归因数据，无法计算点击或转化。", rules=["event_data_gap"])
-    if "SupportRep" in q and "员工" in q and "销售额" in q:
-        return ParsedTurn(decision="unsupported", reason="SupportRep仅表示客户维护责任，不能据此认定员工个人销售贡献。", rules=["invalid_attribution"])
+    general_question = looks_general_knowledge(q)
+    if not general_question:
+        for metric, terms in profile.question_rules.unsupported_terms.items():
+            if any(term.casefold() in q.casefold() for term in terms):
+                return ParsedTurn(decision="unsupported", reason=f"当前数据不支持{metric}，不能用其他指标替代。", rules=["data_gap"])
+        if any(term in q for term in ("点击", "转化")):
+            return ParsedTurn(decision="unsupported", reason="没有页面事件/归因数据，无法计算点击或转化。", rules=["event_data_gap"])
+        if "SupportRep" in q and "员工" in q and "销售额" in q:
+            return ParsedTurn(decision="unsupported", reason="SupportRep仅表示客户维护责任，不能据此认定员工个人销售贡献。", rules=["invalid_attribution"])
     if (re.search(r"(?:音乐|音频).*(?:和|与|及).*视频.*(?:分开|分别).*还是.*(?:合计|合并)", q)
             and memory.pending is None):
         return policy_clarify(semantic_task(q, profile), ["media_scope"])

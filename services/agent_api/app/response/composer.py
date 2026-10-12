@@ -18,6 +18,7 @@ from ..tools.local_calculator import FORMULAS, calculate_decimal
 from ..tools.models import CalculationRequest
 from .models import ComposeContext, ExecutionMode
 from .document_answer import draft_answer, comparison, poster, model_messages, validate_model_answer
+from .general_answer import general_model_messages, validate_general_answer
 
 
 logger = logging.getLogger("agent_api.response")
@@ -189,6 +190,25 @@ class FormalResponseComposer:
         return composer
 
     async def prepare(self, context: ComposeContext) -> ComposeContext:
+        if context.status == "answered" and context.route == "general":
+            limits = list(context.limitations)
+            if self.answer_model is None or self.executor is None:
+                return replace(context, status="insufficient_evidence", limitations=tuple([
+                    *limits, "当前未配置通用回答模型，未调用业务数据库或业务文档代答。"
+                ]))
+            deadline = time.monotonic() + MODEL_ANSWER_SECONDS
+            try:
+                answer = await self.executor.run(
+                    lambda: validate_general_answer(self.answer_model.generate_json(
+                        general_model_messages(context.task.original_question), {"type": "object"}, deadline
+                    )),
+                    deadline=deadline,
+                )
+            except Exception as exc:
+                note = f"通用回答模型输出未被接受（{rejection_reason(exc)}）。"
+                logger.warning("%s", note)
+                return replace(context, status="insufficient_evidence", limitations=tuple([*limits, note]))
+            return replace(context, general_answer=answer, limitations=tuple(limits))
         if context.status != "answered" or context.route != "rag" or not self.policy.allow_business_calculation or not context.rag or not context.task:
             return context
         try:
@@ -663,7 +683,9 @@ class FormalResponseComposer:
         status, answer, error = context.status, None, context.error
         banner = self.source_banner
         if self.policy.model_mode == 'live':
-            if context.sql and context.sql.sql_results:
+            if context.route == "general":
+                banner = '来源：通用大模型知识回答；本轮未调用本地业务数据库或业务文档。'
+            elif context.sql and context.sql.sql_results:
                 if any('受控业务查询' in text for text in context.sql.limitations):
                     banner='来源：真实 Chinook 样例库 + 文档证据驱动的服务端受控业务查询；本业务步骤未调用模型。'
                 elif any('受控查询' in text for text in context.sql.limitations):
@@ -707,6 +729,10 @@ class FormalResponseComposer:
                     answer = self._calculation_answer(context)
                     if context.route == 'cross_source':
                         answer += '\n' + self._generic_document_answer(context)
+                elif context.route == "general":
+                    if not context.general_answer:
+                        raise EvidenceGap()
+                    answer = context.general_answer
                 elif context.route == "sql":
                     answer = self._sql_answer(context)
                 elif context.route == "cross_source" and self.policy.allow_business_calculation:
@@ -739,7 +765,9 @@ class FormalResponseComposer:
         elif status == "unsupported":
             answer = context.parser_reason or "当前工具明确不支持这项任务，未生成业务结论。"
         elif status == "insufficient_evidence" and answer is None:
-            if context.task and context.task.intent in WORKFLOWS:
+            if context.route == "general":
+                answer = "当前未能生成通用回答，请检查大模型配置或稍后重试。"
+            elif context.task and context.task.intent in WORKFLOWS:
                 answer=context.parser_reason or '缺少必要规则、候选或数据库查询，业务链路尚未完成。'
             elif context.task and {"purchasing_customers", "customer_count"} <= set(context.task.business_metric_ids):
                 answer = "D12 未直接定义登记客户记录数，现有证据不能完整回答它与购买客户数的区别；需要 A 补充正式字段口径来源。"

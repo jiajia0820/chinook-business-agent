@@ -568,6 +568,7 @@
     },
     "Route": {
       "enum": [
+        "general",
         "sql",
         "rag",
         "cross_source",

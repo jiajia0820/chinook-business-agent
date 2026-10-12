@@ -207,7 +207,7 @@ export interface components {
          * Route
          * @enum {string}
          */
-        Route: "sql" | "rag" | "cross_source" | "clarification" | "unsupported";
+        Route: "general" | "sql" | "rag" | "cross_source" | "clarification" | "unsupported";
         /**
          * SqlExecutionStatus
          * @enum {string}

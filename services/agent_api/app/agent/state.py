@@ -13,7 +13,7 @@ class BusinessTask(InternalModel):
     original_question: Question
     normalized_question: Question
     intent: str
-    route: Literal["sql", "rag", "cross_source"]
+    route: Literal["general", "sql", "rag", "cross_source"]
     slots: dict[str, JsonValue] = Field(default_factory=dict)
     entities: list[dict[str, JsonValue]] = Field(default_factory=list)
     business_metric_ids: list[str] = Field(default_factory=list)

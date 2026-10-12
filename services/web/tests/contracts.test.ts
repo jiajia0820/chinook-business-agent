@@ -19,7 +19,7 @@ describe('OpenAPI contract and recorded HTTP evidence', () => {
   it('keeps generated nullable, optional, dynamic JSON and enum types', () => {
     expectTypeOf<AskResponse['answer']>().toEqualTypeOf<string | null>();
     expectTypeOf<AskStatus>().toEqualTypeOf<'answered' | 'clarification_required' | 'insufficient_evidence' | 'unsupported' | 'error'>();
-    expectTypeOf<Route>().toEqualTypeOf<'sql' | 'rag' | 'cross_source' | 'clarification' | 'unsupported'>();
+    expectTypeOf<Route>().toEqualTypeOf<'sql' | 'rag' | 'cross_source' | 'general' | 'clarification' | 'unsupported'>();
     expectTypeOf<SqlQueryResponse['params']>().toEqualTypeOf<Record<string, JsonValue> | null | undefined>();
     const values: JsonValue = { number: 0, boolean: false, nil: null, array: ['x', { nested: [1] }] };
     expect(isJsonValue(values)).toBe(true);

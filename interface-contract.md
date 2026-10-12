@@ -20,9 +20,9 @@
 
 | `mode` | 允许的主要 `route` |
 |---|---|
-| `sql_only` | `sql`、`clarification`、`unsupported` |
-| `rag_only` | `rag`、`clarification`、`unsupported` |
-| `hybrid` | `sql`、`rag`、`cross_source`、`clarification`、`unsupported` |
+| `sql_only` | `sql`、`general`、`clarification`、`unsupported` |
+| `rag_only` | `rag`、`general`、`clarification`、`unsupported` |
+| `hybrid` | `sql`、`rag`、`cross_source`、`general`、`clarification`、`unsupported` |
 
 ## 2. 提问接口
 
@@ -89,7 +89,7 @@
 | 字段 | 说明 |
 |---|---|
 | `status` | `answered`、`clarification_required`、`insufficient_evidence`、`unsupported`、`error` |
-| `route` | `sql`、`rag`、`cross_source`、`clarification`、`unsupported` |
+| `route` | `sql`、`rag`、`cross_source`、`general`、`clarification`、`unsupported` |
 | `intent` | `{ "name": string, "confidence": number|null }` |
 | `entities` | 实体识别结果数组；具体实体类型和标准值由 profile 配置解释 |
 | `time_range` | `{ "start": string, "end": string, "end_inclusive": boolean, "label": string }`；无法确定时为 `null` |

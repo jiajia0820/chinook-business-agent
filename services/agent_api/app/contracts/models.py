@@ -37,6 +37,7 @@ class AskStatus(str, Enum):
 
 
 class Route(str, Enum):
+    GENERAL = "general"
     SQL = "sql"
     RAG = "rag"
     CROSS_SOURCE = "cross_source"

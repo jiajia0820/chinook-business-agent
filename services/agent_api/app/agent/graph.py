@@ -210,6 +210,8 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
                 parsed.task.route = "cross_source"  # E.g. growth needs formula evidence too.
         statuses = {"clarification": "clarification_required", "unsupported": "unsupported", "cancelled": "clarification_required", "ready": "ready"}
         route = parsed.task.route if parsed.decision == "ready" else "unsupported" if parsed.decision == "unsupported" else "clarification"
+        if parsed.decision == "ready" and route == "general":
+            statuses["ready"] = "answered"
         plan = []
         if parsed.decision == "ready":
             if route in ("sql", "cross_source"):
@@ -234,6 +236,8 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
         if state["status"] != "ready":
             return compose_node
         task = ParsedTurn.model_validate(state["parsed"]).task
+        if state["route"] == "general":
+            return compose_node
         if task.intent in WORKFLOWS or (task.subtask_plan and task.subtask_plan[0]["kind"] == "rag"):
             return "rag"
         return "sql" if state["route"] in ("sql", "cross_source") else "rag"
