@@ -378,7 +378,16 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
                 if not outcome.succeeded:
                     break
             primary = next((r for r in recorded if r["data"] and r["data"]["chunks"]), recorded[0] if recorded else None)
-            all_chunks = [c for r in recorded if r["data"] for c in r["data"]["chunks"]]
+            all_chunks, seen_chunk_ids = [], set()
+            for recorded_item in recorded:
+                if not recorded_item["data"]:
+                    continue
+                for chunk in recorded_item["data"]["chunks"]:
+                    chunk_id = chunk.get("chunk_id")
+                    if chunk_id in seen_chunk_ids:
+                        continue
+                    seen_chunk_ids.add(chunk_id)
+                    all_chunks.append(chunk)
             if primary and primary.get("data") and all_chunks:
                 merged = dict(primary)
                 merged_data = dict(primary["data"])
