@@ -19,6 +19,12 @@ from .models import ComposeContext, ExecutionMode
 from .document_answer import draft_answer, comparison, poster, model_messages, validate_model_answer
 
 
+# Single-shot budget for the model-composed document answer: on expiry the
+# composer silently falls back to an evidence extract, so it must cover real
+# gateway latency. 60s matches the HTTP cap in sql_module.generation.
+MODEL_ANSWER_SECONDS = 60
+
+
 class EvidenceGap(ValueError):
     """No approved renderer or complete comparable evidence."""
 
@@ -177,7 +183,7 @@ class FormalResponseComposer:
         question, documents = context.task.normalized_question, context.rag.chunks
         answer = comparison(question, documents) or poster(question, documents)
         if answer is None and self.answer_model is not None and self.executor is not None:
-            deadline = time.monotonic() + 15
+            deadline = time.monotonic() + MODEL_ANSWER_SECONDS
             def generate():
                 payload = self.answer_model.generate_json(model_messages(question, documents), {"type": "object"}, deadline)
                 return validate_model_answer(payload, documents)
