@@ -334,6 +334,12 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
             from .parsing import _time_range
             prior = task.slots["comparison_period"]
             period = _time_range(prior)
+            if period is None:
+                return {
+                    **update,
+                    "status": "insufficient_evidence",
+                    "limitations": [*state["limitations"], "增长率比较周期未形成有效时间范围，未执行基期查询。"],
+                }
             slots = dict(payload.resolved_slots)
             slots.update(start_date=period.start, end_date=period.end)
             slots.pop("comparison_period", None)
