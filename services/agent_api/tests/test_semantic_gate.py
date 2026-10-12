@@ -3,6 +3,9 @@ import unittest
 from services.agent_api.app.agent.semantic_gate import decide
 from services.agent_api.app.agent.semantic_ir import QuestionIR
 from services.agent_api.app.agent.query_rewrite import rewrite_question
+from services.agent_api.app.agent.parsing import parse_question
+from services.agent_api.app.agent.state import SessionMemory
+from services.agent_api.app.profiles import ProfileRegistry
 
 
 class SemanticGateTests(unittest.TestCase):
@@ -33,6 +36,21 @@ class SemanticGateTests(unittest.TestCase):
         self.assertIn("target", third.requested_outputs)
         self.assertIn("operation_advice", third.requested_outputs)
         self.assertEqual(third.task_type, "business_rule")
+
+    def test_parser_multiturn_keeps_ir_context_and_switches_to_advice(self):
+        profile = ProfileRegistry.defaults().get("chinook-music")
+        memory = SessionMemory(profile_id=profile.profile_id, config_version=profile.config_version)
+        first = parse_question("2025年第三季度 Rock 销售额是多少？", profile, memory)
+        memory.last_task = first.task
+        second = parse_question("和目标比呢？", profile, memory)
+        memory.last_task = second.task
+        third = parse_question("那下一步重点看什么？", profile, memory)
+        ir = third.task.question_ir
+        self.assertEqual((ir.time_scope.year, ir.time_scope.quarter), (2025, 3))
+        self.assertEqual(ir.entity_scope[0].entity_id, 1)
+        self.assertEqual(ir.metrics, ["sales_amount"])
+        self.assertEqual(third.task.intent, "document_rule")
+        self.assertEqual(third.task.route, "rag")
 
 
 if __name__ == "__main__":
