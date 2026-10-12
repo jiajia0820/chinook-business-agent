@@ -184,7 +184,7 @@ def _unparsed_query_text(question, profile):
     return residue
 
 
-def parse_question(question: str, profile: BusinessProfile, memory: SessionMemory) -> ParsedTurn:
+def _parse_question(question: str, profile: BusinessProfile, memory: SessionMemory) -> ParsedTurn:
     if profile.orchestration_policy == "c_v1":
         from .task_policy import parse_c_v1
         parsed = parse_c_v1(question, profile, memory)
@@ -483,3 +483,20 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
     if any(not profile.supports(cap) for cap in required):
         return ParsedTurn(decision="unsupported", task=task, reason="当前 profile 的 mode/capabilities 不支持该完整任务。", reused_context=reused, rules=["capability_gate"])
     return ParsedTurn(decision="ready", task=task, reused_context=reused, rules=["profile_vocabulary", "explicit_slots", "capability_gate", *coverage_rules])
+
+
+def parse_question(question: str, profile: BusinessProfile, memory: SessionMemory) -> ParsedTurn:
+    """兼容入口：保留旧解析结果，同时附加共享 QuestionIR。"""
+    parsed = _parse_question(question, profile, memory)
+    if parsed.task is not None and parsed.task.question_ir is None:
+        from .query_rewrite import rewrite_question
+
+        try:
+            parsed.task.question_ir = rewrite_question(
+                parsed.task.original_question,
+                profile_id=profile.profile_id,
+            )
+        except (KeyError, ValueError):
+            # 自定义 profile 可能尚未提供实体目录；旧解析结果仍必须可用。
+            parsed.task.question_ir = None
+    return parsed

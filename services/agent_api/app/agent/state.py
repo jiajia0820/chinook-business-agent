@@ -7,6 +7,7 @@ from pydantic import Field, JsonValue
 
 from ..contracts import Clarification, TimeRange
 from ..tools.models import InternalModel, Question
+from .semantic_ir import QuestionIR
 
 
 class BusinessTask(InternalModel):
@@ -32,6 +33,8 @@ class BusinessTask(InternalModel):
     assumptions: list[str] = Field(default_factory=list)
     evidence_coverage: list[dict[str, JsonValue]] = Field(default_factory=list)
     time_issues: list[str] = Field(default_factory=list)
+    # New semantic IR is optional so old checkpoints and callers remain valid.
+    question_ir: QuestionIR | None = None
 
 
 class SessionMemory(InternalModel):

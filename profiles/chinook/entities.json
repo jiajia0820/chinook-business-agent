@@ -1,0 +1,17 @@
+{
+  "genres": [
+    {"id": 1, "name": "Rock", "aliases": ["摇滚", "摇滚类"]},
+    {"id": 5, "name": "Rock And Roll", "aliases": ["摇滚乐"]},
+    {"id": 3, "name": "Metal", "aliases": ["金属", "金属类"]},
+    {"id": 13, "name": "Heavy Metal", "aliases": ["重金属"]},
+    {"id": 7, "name": "Latin", "aliases": ["拉丁"]}
+  ],
+  "countries": [
+    {"id": "USA", "name": "USA", "aliases": ["美国"]}
+  ],
+  "media_scope": {
+    "audio": [1, 2, 4, 5],
+    "video": [3],
+    "all_store": [1, 2, 3, 4, 5]
+  }
+}
