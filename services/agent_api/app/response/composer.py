@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, replace
 from decimal import Decimal, ROUND_HALF_UP
+import logging
 import re
 import unicodedata
 import time
@@ -19,10 +20,24 @@ from .models import ComposeContext, ExecutionMode
 from .document_answer import draft_answer, comparison, poster, model_messages, validate_model_answer
 
 
+logger = logging.getLogger("agent_api.response")
+
+
 # Single-shot budget for the model-composed document answer: on expiry the
 # composer silently falls back to an evidence extract, so it must cover real
 # gateway latency. 60s matches the HTTP cap in sql_module.generation.
 MODEL_ANSWER_SECONDS = 60
+
+
+def rejection_reason(exc: Exception) -> str:
+    """Short user-safe label for a dropped model answer.
+
+    Validation failures raise ValueError with fixed literals, so their message
+    is safe to surface; anything else (gateway/timeout) only exposes its type.
+    """
+    if isinstance(exc, ValueError) and str(exc):
+        return str(exc)[:80]
+    return type(exc).__name__
 
 
 class EvidenceGap(ValueError):
@@ -182,6 +197,7 @@ class FormalResponseComposer:
             return context
         question, documents = context.task.normalized_question, context.rag.chunks
         answer = comparison(question, documents) or poster(question, documents)
+        limits = list(context.limitations)
         if answer is None and self.answer_model is not None and self.executor is not None:
             deadline = time.monotonic() + MODEL_ANSWER_SECONDS
             def generate():
@@ -189,15 +205,18 @@ class FormalResponseComposer:
                 return validate_model_answer(payload, documents)
             try:
                 answer = await self.executor.run(generate, deadline=deadline)
-            except Exception:
+            except Exception as exc:
                 # Cancellation is not swallowed. Invalid/late model output
                 # falls back to an evidence-based extract, never raw pages.
                 answer = None
+                note = f"文档合成模型输出被拒（{rejection_reason(exc)}），已降级为证据摘录作答。"
+                limits.append(note)
+                logger.warning("%s", note)
         answer = answer or draft_answer(question, documents)
         if answer is None:
             return replace(context, status="insufficient_evidence", parser_reason=None,
-                           limitations=(*context.limitations, "现有文档片段未覆盖问题所需事实。"))
-        return replace(context, document_answer=answer)
+                           limitations=(*limits, "现有文档片段未覆盖问题所需事实。"))
+        return replace(context, document_answer=answer, limitations=tuple(limits))
 
     @classmethod
     def for_calculation_fixture(cls, profile):

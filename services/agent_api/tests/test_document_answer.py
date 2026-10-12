@@ -43,6 +43,25 @@ class DocumentAnswerTests(unittest.TestCase):
         payload = json.dumps({"claims": [{"text": "Metal为Genre:3，不自动合并Heavy Metal。", "evidence": [{"chunk_id": "D03-1", "quote": docs[0].text}]}]})
         self.assertEqual(validate_model_answer(payload, docs), "Metal为Genre:3，不自动合并Heavy Metal。\n依据：[D03]。")
 
+    def test_numeric_format_and_table_pipes_do_not_break_grounding(self):
+        docs = [chunk("D07", "| 指标 | 金额 |\n| 音频 | 50.00 |")]
+        payload = json.dumps({"claims": [{"text": "音频金额为50美元。",
+                                          "evidence": [{"chunk_id": "D07-1", "quote": "| 音频 | 50.00 |"}]}]})
+        self.assertEqual(validate_model_answer(payload, docs), "音频金额为50美元。\n依据：[D07]。")
+
+    def test_invented_number_still_rejected_after_relaxation(self):
+        docs = [chunk("D07", "| 指标 | 金额 |\n| 音频 | 50.00 |")]
+        payload = json.dumps({"claims": [{"text": "音频金额为60美元。",
+                                          "evidence": [{"chunk_id": "D07-1", "quote": "| 音频 | 50.00 |"}]}]})
+        with self.assertRaises(ValueError):
+            validate_model_answer(payload, docs)
+
+    def test_answer_may_use_more_than_six_claims(self):
+        docs = [chunk("D03", "Metal为Genre:3，不自动合并Heavy Metal。")]
+        claims = [{"text": "Metal为Genre:3。", "evidence": [{"chunk_id": "D03-1", "quote": docs[0].text}]}] * 7
+        answer = validate_model_answer(json.dumps({"claims": claims}), docs)
+        self.assertEqual(answer.count("Metal为Genre:3。"), 7)
+
     def test_rock_alias_answer_preserves_rock_and_roll_boundary(self):
         docs = [chunk("D03", "“Rock”“摇滚”“Rock类”默认映射Genre:1。Rock And Roll是Genre:5。")]
         answer = draft_answer("“摇滚乐”在分类表里通常对应什么？", docs)
