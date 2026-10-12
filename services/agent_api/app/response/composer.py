@@ -384,6 +384,16 @@ class FormalResponseComposer:
                     documents.append(chunk)
         return documents
 
+    def _partial_document_answer(self, context):
+        """Keep grounded document facts visible when coverage is incomplete."""
+        if not context.rag or not context.rag.chunks or not context.task or context.task.intent in WORKFLOWS:
+            return None
+        documents = self._documents(context)
+        answer = context.document_answer or draft_answer(context.task.original_question, documents)
+        if not answer:
+            return None
+        return "已确认部分：\n" + answer + "\n\n完整结论暂不能确认：本轮文档覆盖不完整，请补充或核对缺少的资料。"
+
     def _cross_answer(self, context):
         if "customer_tiers" in context.task.required_outputs:
             from ..agent.cross_templates import thresholds, completed
@@ -765,7 +775,11 @@ class FormalResponseComposer:
         elif status == "unsupported":
             answer = context.parser_reason or "当前工具明确不支持这项任务，未生成业务结论。"
         elif status == "insufficient_evidence" and answer is None:
-            if context.route == "general":
+            if context.route == "rag":
+                answer = self._partial_document_answer(context)
+                if answer is None:
+                    answer = "本轮证据、适用范围或计算绑定不完整，不能形成确定结论。"
+            elif context.route == "general":
                 answer = "当前未能生成通用回答，请检查大模型配置或稍后重试。"
             elif context.task and context.task.intent in WORKFLOWS:
                 answer=context.parser_reason or '缺少必要规则、候选或数据库查询，业务链路尚未完成。'

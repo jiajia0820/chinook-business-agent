@@ -559,10 +559,13 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
                     parsed.reason=str(exc)
                     return mark(state,'evidence_check',status='insufficient_evidence',parsed=parsed.model_dump(mode='json'))
                 return mark(state,'evidence_check',status='answered',business_audit=audit)
+            gaps = []
             if state["route"] in ("sql", "cross_source") and (not sql or not any(result.rows for result in sql.sql_results)):
                 status = "insufficient_evidence"
+                gaps.append("数据库查询没有返回可用于本轮结论的结果行")
             if state["route"] in ("rag", "cross_source") and (not rag or not rag.chunks):
                 status = "insufficient_evidence"
+                gaps.append("文档检索没有返回可定位的片段")
             if state.get("retrieval_outcomes"):
                 from .task_plan import document_needs
                 task = ParsedTurn.model_validate(state["parsed"]).task
@@ -570,10 +573,13 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
                 present = {c["doc_id"] for outcome in state["retrieval_outcomes"] if outcome["data"] for c in outcome["data"]["chunks"]}
                 if not required_docs <= present:
                     status = "insufficient_evidence"
+                    gaps.append("缺少必要文档：" + "、".join(sorted(required_docs - present)))
                 if any(not item["complete"] for item in task.evidence_coverage):
                     status = "insufficient_evidence"
+                    gaps.append("本轮证据只覆盖了部分问题条件")
             if "calculator.calculate" in state["tool_plan"] and not state["calculations"]:
                 status = "insufficient_evidence"
+                gaps.append("计算所需的有效绑定或结果不存在")
             task = ParsedTurn.model_validate(state["parsed"]).task
             from .cross_templates import completed
             chunks = [DocumentChunk.model_validate(c) for r in state.get("retrieval_outcomes", []) if r["data"] for c in r["data"]["chunks"]]
@@ -586,6 +592,8 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
                 return mark(state, "evidence_check", status="insufficient_evidence", limitations=[*state["limitations"], "尚未解锁必要的客户分层/月度粒度/文档合计算子：" + ", ".join(sorted(blocked)) + "；不把片段命中当作完整结论。"])
             if status == "ready":
                 status = "answered"
+            if gaps:
+                return mark(state, "evidence_check", status=status, limitations=[*state["limitations"], "证据检查缺口：" + "；".join(dict.fromkeys(gaps)) + "。"])
         return mark(state, "evidence_check", status=status)
 
     async def compose(state: AgentState):
