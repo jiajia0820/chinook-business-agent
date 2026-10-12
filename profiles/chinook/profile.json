@@ -5,7 +5,7 @@
     "display_name": "Chinook 样例库", "allowed_schemas": ["main"],
     "allowed_tables": ["main.Album", "main.Artist", "main.Customer", "main.Employee", "main.Genre", "main.Invoice", "main.InvoiceLine", "main.MediaType", "main.Playlist", "main.PlaylistTrack", "main.Track"]
   },
-  "catalog_files":{"metrics":"metrics.json"},
+  "catalog_files":{"metrics":"metrics.json", "entities":"entities.json"},
   "slots": {
     "start_date": {"type":"string"},
     "end_date": {"type":"string"},

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-
 from .ledger import EvidenceItem
 from .models import EvidenceScope
 
@@ -19,16 +17,21 @@ def _canonical_entity(value: int | str) -> str:
 def _scope_key(item: EvidenceItem) -> tuple[tuple[int, ...], tuple[str, ...], tuple[str, ...]] | None:
     scope: EvidenceScope | None = item.scope
     if scope is not None:
-        entities = tuple(sorted((*scope.genre_ids, *scope.country_ids)))
-        return tuple(scope.media_ids), entities, tuple(scope.country_ids)
+        return (
+            tuple(scope.media_ids),
+            tuple(scope.genre_ids),
+            tuple(scope.country_ids),
+        )
 
     # Legacy records carry entity_scope/media_scope separately.  Treat these
     # collections as sets because scope order does not change the fact.
     if not item.entity_scope and not item.media_scope:
         return None
-    entities = tuple(sorted({_canonical_entity(value) for value in item.entity_scope}))
+    entities = {_canonical_entity(value) for value in item.entity_scope}
+    genres = tuple(sorted(value for value in entities if value.startswith("Genre:")))
+    countries = tuple(sorted(value for value in entities if value.startswith("Country:")))
     media = tuple(sorted(set(item.media_scope)))
-    return media, entities, tuple()
+    return media, genres, countries
 
 
 def _metric(item: EvidenceItem) -> str | None:
