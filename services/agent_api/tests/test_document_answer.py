@@ -62,6 +62,30 @@ class DocumentAnswerTests(unittest.TestCase):
         answer = validate_model_answer(json.dumps({"claims": claims}), docs)
         self.assertEqual(answer.count("Metal为Genre:3。"), 7)
 
+    def test_table_quote_with_escaped_newlines_is_still_grounded(self):
+        docs = [chunk("D06", "统计范围\n销售额目标 美元\nRock\n50.00\n主要增长品类")]
+        payload = json.dumps({"claims": [{
+            "text": "Rock 销售额目标为50.00美元，定位主要增长品类。",
+            "evidence": [{"chunk_id": "D06-1", "quote": "Rock\\n50.00\\n主要增长品类"}]}]})
+        self.assertEqual(validate_model_answer(payload, docs),
+                         "Rock 销售额目标为50.00美元，定位主要增长品类。\n依据：[D06]。")
+
+    def test_extra_keys_and_one_bad_claim_do_not_void_the_answer(self):
+        docs = [chunk("D06", "Rock 销售额目标为50.00美元。"), chunk("D08", "第三季度音频销售额105.00美元。")]
+        claims = [
+            {"text": "Rock 目标为50.00美元。",
+             "evidence": [{"chunk_id": "D06-1", "doc_id": "D06", "quote": "Rock 销售额目标为50.00美元。"}]},
+            {"text": "第三季度音频销售额为105.00美元。",
+             "evidence": [{"chunk_id": "D06-1", "doc_id": "D06", "quote": "第三季度音频销售额105.00美元。"}]},
+            {"text": "无任何依据的结论。", "evidence": []},
+        ]
+        answer = validate_model_answer(json.dumps({"claims": claims}), docs)
+        self.assertIn("Rock 目标为50.00美元。", answer)
+        self.assertIn("第三季度音频销售额为105.00美元。", answer)
+        self.assertNotIn("无任何依据的结论。", answer)
+        self.assertIn("[D06]", answer)
+        self.assertIn("[D08]", answer)
+
     def test_rock_alias_answer_preserves_rock_and_roll_boundary(self):
         docs = [chunk("D03", "“Rock”“摇滚”“Rock类”默认映射Genre:1。Rock And Roll是Genre:5。")]
         answer = draft_answer("“摇滚乐”在分类表里通常对应什么？", docs)
