@@ -232,6 +232,8 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
         )
         if not allowed:
             return state
+        if proposal.question_type == "business_rule" and not profiles.get(state["profile_id"]).supports("rag"):
+            return state
         task = task_from_proposal(request.question, proposal)
         if task is None:
             return state
