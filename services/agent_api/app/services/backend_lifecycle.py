@@ -23,8 +23,13 @@ def unavailable(reason: str, *, retryable: bool = False) -> UnavailableAskServic
 
 
 async def create_default_backend(settings: Settings) -> OfflineKnowledgeIntegration:
-    return await create_canonical_knowledge_integration(max_workers=settings.sql_workers,
-        sql_timeout_ms=settings.sql_timeout_ms, rag_timeout_ms=settings.rag_timeout_ms, model_mode=settings.model_mode)
+    if settings.enabled_profiles == ("adventureworks",):
+        from ..integrations.c_offline import create_canonical_sql_integration
+        return await create_canonical_sql_integration(profile_ids=settings.enabled_profiles,
+            max_workers=settings.sql_workers, timeout_ms=settings.sql_timeout_ms, model_mode=settings.model_mode)
+    return await create_canonical_knowledge_integration(profile_ids=settings.enabled_profiles,
+        max_workers=settings.sql_workers, sql_timeout_ms=settings.sql_timeout_ms,
+        rag_timeout_ms=settings.rag_timeout_ms, model_mode=settings.model_mode)
 
 
 class ManagedAskService:
@@ -74,9 +79,10 @@ class BackendLifecycle:
         try:
             async with asyncio.timeout(self.settings.startup_timeout_seconds):
                 self.integration = await self.factory(self.settings)
-            profile = self.integration.profiles.get("chinook-music")
-            if profile.capabilities != ["sql", "rag", "calculate"] or profile.document_root != "data/knowledge":
-                raise ValueError("backend configuration mismatch")
+            for profile_id in self.settings.enabled_profiles:
+                profile = self.integration.profiles.get(profile_id)
+                if not profile.supports("sql"):
+                    raise ValueError("enabled profile has no SQL capability")
             delegate = self.integration.create_formal_graph_service()
             self.service = ManagedAskService(delegate, self.settings.max_inflight_requests)
             self.app.state.ask_service = self.service

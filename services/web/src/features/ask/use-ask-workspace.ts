@@ -3,7 +3,7 @@ import type { AskOptions, AskRequest } from '../../contracts';
 import { createAskClient, type AskClient, type AskClientResult } from '../../api/client';
 import { createLatestAskRunner } from '../../api/latest-request';
 
-export const PROFILE_ID = 'chinook-music';
+export const PROFILE_ID = import.meta.env.VITE_PROFILE_ID?.trim() || 'chinook-music';
 export const RESET_QUESTION = '取消当前问题';
 export const EXAMPLES = [
   '客户数量是多少？', '美国客户数量是多少？', '有哪些音乐类型？',

@@ -1,0 +1,102 @@
+{
+  "version": "adventureworks-business-1",
+  "metrics": [
+    {
+      "metric_id": "sales_amount",
+      "name": "销售额",
+      "definition": "按 SalesOrderDetail.OrderQty * UnitPrice * (1 - UnitPriceDiscount) 汇总销售订单明细；日期使用 SalesOrderHeader.OrderDate，时间范围采用左闭右开。",
+      "unit": "USD",
+      "grain": "period_scope",
+      "required_columns": [
+        "Sales.SalesOrderDetail.OrderQty",
+        "Sales.SalesOrderDetail.UnitPrice",
+        "Sales.SalesOrderDetail.UnitPriceDiscount",
+        "Sales.SalesOrderHeader.OrderDate"
+      ],
+      "aggregation": "sum(SalesOrderDetail.OrderQty * UnitPrice * (1 - UnitPriceDiscount))",
+      "required_slots": [
+        "start_date",
+        "end_date"
+      ],
+      "source_refs": [
+        "AW.CATALOG"
+      ]
+    },
+    {
+      "metric_id": "units_sold",
+      "name": "销量",
+      "definition": "按 SalesOrderDetail.OrderQty 汇总销售数量；日期使用 SalesOrderHeader.OrderDate。",
+      "unit": "件",
+      "grain": "period_scope",
+      "required_columns": [
+        "Sales.SalesOrderDetail.OrderQty",
+        "Sales.SalesOrderHeader.OrderDate"
+      ],
+      "aggregation": "sum(SalesOrderDetail.OrderQty)",
+      "required_slots": [
+        "start_date",
+        "end_date"
+      ],
+      "source_refs": [
+        "AW.CATALOG"
+      ]
+    },
+    {
+      "metric_id": "order_count",
+      "name": "订单数",
+      "definition": "在筛选的订单日期范围内按 SalesOrderHeader.SalesOrderID 去重计数。",
+      "unit": "单",
+      "grain": "period_scope",
+      "required_columns": [
+        "Sales.SalesOrderHeader.SalesOrderID",
+        "Sales.SalesOrderHeader.OrderDate"
+      ],
+      "aggregation": "count(distinct SalesOrderHeader.SalesOrderID)",
+      "required_slots": [
+        "start_date",
+        "end_date"
+      ],
+      "source_refs": [
+        "AW.CATALOG"
+      ]
+    },
+    {
+      "metric_id": "customer_count",
+      "name": "客户数",
+      "definition": "Sales.Customer 表中的客户记录数。",
+      "unit": "人",
+      "grain": "customer",
+      "required_columns": [
+        "Sales.Customer.CustomerID"
+      ],
+      "aggregation": "count(rows)",
+      "required_slots": [],
+      "source_refs": [
+        "AW.CATALOG"
+      ]
+    },
+    {
+      "metric_id": "product_sales",
+      "name": "产品销售额",
+      "definition": "按 Production.Product 汇总关联销售订单明细的 OrderQty * UnitPrice * (1 - UnitPriceDiscount)。",
+      "unit": "USD",
+      "grain": "product",
+      "required_columns": [
+        "Production.Product.ProductID",
+        "Production.Product.Name",
+        "Sales.SalesOrderDetail.ProductID",
+        "Sales.SalesOrderDetail.OrderQty",
+        "Sales.SalesOrderDetail.UnitPrice",
+        "Sales.SalesOrderDetail.UnitPriceDiscount"
+      ],
+      "aggregation": "sum(SalesOrderDetail.OrderQty * UnitPrice * (1 - UnitPriceDiscount)) group by product",
+      "required_slots": [
+        "start_date",
+        "end_date"
+      ],
+      "source_refs": [
+        "AW.CATALOG"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,176 @@
+{
+  "profile_id": "adventureworks",
+  "config_version": "adventureworks-sql-1",
+  "mode": "sql_only",
+  "capabilities": [
+    "sql"
+  ],
+  "sql_backend": {
+    "profile_id": "adventureworks",
+    "display_name": "AdventureWorks PostgreSQL",
+    "model_mode": "live",
+    "registered_metric_ids": [
+      "sales_amount",
+      "units_sold",
+      "order_count",
+      "customer_count",
+      "product_sales"
+    ],
+    "declared_slots": {
+      "start_date": {
+        "type": "string"
+      },
+      "end_date": {
+        "type": "string"
+      }
+    }
+  },
+  "metric_definitions": [
+    {
+      "metric_id": "sales_amount",
+      "name": "销售额",
+      "definition": "按 SalesOrderDetail.OrderQty * UnitPrice * (1 - UnitPriceDiscount) 汇总销售订单明细；日期使用 SalesOrderHeader.OrderDate。",
+      "unit": "USD",
+      "source_refs": [
+        "AW.CATALOG"
+      ]
+    },
+    {
+      "metric_id": "units_sold",
+      "name": "销量",
+      "definition": "按 SalesOrderDetail.OrderQty 汇总销售数量；日期使用 SalesOrderHeader.OrderDate。",
+      "unit": "件",
+      "source_refs": [
+        "AW.CATALOG"
+      ]
+    },
+    {
+      "metric_id": "order_count",
+      "name": "订单数",
+      "definition": "按 SalesOrderHeader.SalesOrderID 去重计数。",
+      "unit": "单",
+      "source_refs": [
+        "AW.CATALOG"
+      ]
+    },
+    {
+      "metric_id": "customer_count",
+      "name": "客户数",
+      "definition": "Sales.Customer 表中的客户记录数。",
+      "unit": "人",
+      "source_refs": [
+        "AW.CATALOG"
+      ]
+    },
+    {
+      "metric_id": "product_sales",
+      "name": "产品销售额",
+      "definition": "按 Production.Product 汇总关联销售订单明细的 OrderQty * UnitPrice * (1 - UnitPriceDiscount)。",
+      "unit": "USD",
+      "source_refs": [
+        "AW.CATALOG"
+      ]
+    }
+  ],
+  "question_rules": {
+    "metric_terms": {
+      "sales_amount": [
+        "销售额",
+        "销售金额",
+        "营收"
+      ],
+      "units_sold": [
+        "销量",
+        "销售数量",
+        "销售件数",
+        "件数"
+      ],
+      "order_count": [
+        "订单数",
+        "订单数量",
+        "订单量"
+      ],
+      "customer_count": [
+        "客户数",
+        "客户数量",
+        "客户总数"
+      ],
+      "product_sales": [
+        "产品销售额",
+        "按产品",
+        "产品排名"
+      ]
+    },
+    "unsupported_terms": {
+      "profit": [
+        "利润",
+        "profit"
+      ],
+      "cost": [
+        "成本"
+      ],
+      "inventory": [
+        "库存"
+      ],
+      "refund": [
+        "退款"
+      ]
+    },
+    "intent_terms": {
+      "document_rule": [
+        "口径",
+        "定义",
+        "规则",
+        "公式",
+        "怎么计算"
+      ],
+      "vague_metric": [
+        "卖得怎么样",
+        "销售情况"
+      ]
+    },
+    "query_fillers": [
+      "请问",
+      "请",
+      "帮我",
+      "查一下",
+      "查询",
+      "统计",
+      "计算",
+      "是多少",
+      "多少",
+      "是什么",
+      "什么",
+      "的",
+      "各",
+      "每个",
+      "按"
+    ],
+    "intent_default_metric_ids": {},
+    "ambiguous_scope_terms": [],
+    "offline_queries": [],
+    "document_queries": []
+  },
+  "required_slots_by_intent": {},
+  "unsupported_metrics": [
+    "profit",
+    "cost",
+    "inventory",
+    "refund"
+  ],
+  "data_start": "2011-05-31",
+  "data_end": "2014-06-30",
+  "currency": "USD",
+  "sources": [
+    {
+      "ref_id": "AW.CATALOG",
+      "status": "snapshot_verified",
+      "description": "AdventureWorks PostgreSQL 官方构建产物的表结构和字段口径。"
+    }
+  ],
+  "limitations": [
+    "AdventureWorks 当前仅接入 SQL，不包含配套经营知识文档或 RAG。",
+    "SQL 生成使用已配置的大模型；候选仍须通过只读、授权表、字段和参数安全校验。",
+    "销售额采用 SalesOrderDetail.OrderQty * UnitPrice * (1 - UnitPriceDiscount)，不等同于含税 TotalDue。"
+  ]
+}

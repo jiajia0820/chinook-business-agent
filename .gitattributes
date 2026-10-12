@@ -4,3 +4,4 @@
 third_party/chinook_c/** -text
 data/knowledge/D12_经营查询与数据使用FAQ.md -text
 services/web/src/contracts/generated/** -text
+data/adventureworks/install-d.sql filter=lfs diff=lfs merge=lfs -text

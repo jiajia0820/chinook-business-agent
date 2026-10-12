@@ -1,0 +1,13 @@
+{
+  "generated_at": "2026-10-11T21:31:29",
+  "profile_id": "adventureworks",
+  "database": "data/adventureworks",
+  "files": {
+    "eval_basic_nl2sql.jsonl": 25,
+    "eval_clarification.jsonl": 8,
+    "eval_schema_linking.jsonl": 8,
+    "eval_multitable.jsonl": 12
+  },
+  "standard_sql_verified": true,
+  "standard_sql_validation_report": "agent/capability_eval_validation_report.json"
+}

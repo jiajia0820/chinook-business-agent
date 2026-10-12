@@ -1,0 +1,31 @@
+{
+  "profile_id": "adventureworks",
+  "database": "data/adventureworks",
+  "source_ref": "AW.CATALOG",
+  "record_count": 25,
+  "sql_record_count": 21,
+  "errors": [],
+  "checks": [
+    "aw-basic-001",
+    "aw-basic-002",
+    "aw-basic-003",
+    "aw-basic-004",
+    "aw-basic-005",
+    "aw-basic-006",
+    "aw-basic-007",
+    "aw-basic-008",
+    "aw-basic-009",
+    "aw-basic-010",
+    "aw-basic-011",
+    "aw-basic-012",
+    "aw-basic-013",
+    "aw-basic-014",
+    "aw-basic-015",
+    "aw-basic-016",
+    "aw-basic-017",
+    "aw-basic-018",
+    "aw-basic-019",
+    "aw-basic-020",
+    "aw-special-025"
+  ]
+}

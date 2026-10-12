@@ -35,6 +35,18 @@ class ProfileRegistry:
         # Consumers cannot mutate the registry's trusted shared configuration.
         return self._profiles[profile_id].model_copy(deep=True)
 
+    def ids(self) -> tuple[str, ...]:
+        return tuple(self._profiles)
+
+    def select(self, profile_ids: tuple[str, ...] | list[str]) -> ProfileRegistry:
+        selected = tuple(profile_ids)
+        if not selected or len(selected) != len(set(selected)):
+            raise ValueError("profile selection must contain unique IDs")
+        missing = [profile_id for profile_id in selected if profile_id not in self._profiles]
+        if missing:
+            raise KeyError(missing[0])
+        return ProfileRegistry(self._profiles[profile_id] for profile_id in selected)
+
     @classmethod
     def from_directory(cls, directory: Path | str) -> ProfileRegistry:
         files = sorted(Path(directory).glob("*.json"))

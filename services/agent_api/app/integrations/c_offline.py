@@ -84,12 +84,19 @@ def verify_vendor(root: Path) -> ArtifactManifest:
 
 
 def _load_backend(root: Path, profiles: ProfileRegistry, tables: frozenset[str] | None,
-                  model_mode: str = "offline", canonical: bool = False):
+                  model_mode: str = "offline", canonical: bool = False,
+                  profile_ids: tuple[str, ...] | None = None):
+    selected_ids = profile_ids or profiles.ids()
     if canonical:
-        required = (root / "profiles/chinook/profile.json", root / "profiles/chinook/metrics.json",
-                    root / "data/chinook/Chinook.db")
-        if any(not path.is_file() for path in required):
-            raise ValueError("canonical backend artifact missing")
+        for public_id in selected_ids:
+            public = profiles.get(public_id)
+            backend_id = public.sql_backend.profile_id if public.sql_backend else None
+            required = (root / "profiles" / str(backend_id) / "profile.json",
+                        root / "profiles" / str(backend_id) / "metrics.json")
+            if backend_id == "chinook":
+                required += (root / "data/chinook/Chinook.db",)
+            if any(not path.is_file() for path in required):
+                raise ValueError("canonical backend artifact missing")
     else:
         if root != VENDOR_ROOT:
             verify_vendor(VENDOR_ROOT)
@@ -109,33 +116,52 @@ def _load_backend(root: Path, profiles: ProfileRegistry, tables: frozenset[str] 
         from third_party.chinook_c.backend.sql_module.service import NLQueryService
 
     registry = Registry.load(root / "profiles")
-    backend = registry.profiles["chinook"]
-    if backend.data["mode"] != "sql_only" or backend.database["dialect"] != "sqlite":
-        raise ValueError("unexpected backend mode")
-    if Path(backend.connection_url().database).resolve() != (root / "data/chinook/Chinook.db").resolve():
-        raise ValueError("unexpected database path")
-    allowed = frozenset(backend.database["allowed_tables"])
-    if tables is not None and (not isinstance(tables, frozenset) or not tables <= allowed):
-        raise ValueError("invalid trusted table configuration")
-    access = AccessContext({"chinook": allowed if tables is None else tables})
+    access_tables = {}
+    for public_id in selected_ids:
+        public = profiles.get(public_id)
+        backend_id = public.sql_backend.profile_id if public.sql_backend else None
+        if backend_id not in registry.profiles:
+            raise ValueError("backend profile missing")
+        backend = registry.profiles[backend_id]
+        if backend.data["mode"] != "sql_only":
+            raise ValueError("unexpected backend mode")
+        allowed = frozenset(backend.database["allowed_tables"])
+        selected_tables = tables if len(selected_ids) == 1 and tables is not None else allowed
+        if not isinstance(selected_tables, frozenset) or not selected_tables <= allowed:
+            raise ValueError("invalid trusted table configuration")
+        access_tables[backend_id] = selected_tables
+    access = AccessContext(access_tables)
     if model_mode == "live":
         service = NLQueryService(registry, model=HTTPJSONModel.from_env())
     elif model_mode == "offline":
         service = NLQueryService(registry, model=DemoJSONModel())
     else:
         raise ValueError("unsupported model mode")
-    snapshot = service.schemas.get_schema("chinook", access)
-    catalog = load_catalog(backend, snapshot)
-    profile = profiles.get("chinook-music")
-    registered = {metric["metric_id"] for metric in catalog["metrics"]}
-    declared = {name: rule.model_dump(mode="python", exclude_none=True, exclude_defaults=True) for name, rule in profile.sql_backend.declared_slots.items()}
-    metrics_match = bool(profile.sql_backend) and (set(profile.sql_backend.registered_metric_ids) == registered if tables is None else registered <= set(profile.sql_backend.registered_metric_ids))
-    if not profile.supports("sql") or not profile.sql_backend or profile.sql_backend.profile_id != "chinook" or profile.sql_backend.model_mode != model_mode or not metrics_match or declared != backend.data.get("slots", {}):
-        raise ValueError("B/C profile mapping drift")
-    for metric in catalog["metrics"]:
-        if metric.get("unit") != profile.metric(metric["metric_id"]).unit:
-            raise ValueError("B/C unit drift")
-    return service, access, {"backend_profile_id": "chinook", "model_mode": model_mode, "database_sha256": DATABASE_SHA256, "schema_version": snapshot["schema_version"], "table_count": len(snapshot["tables"])}
+    provenance = {"model_mode": model_mode, "profiles": {}}
+    for public_id in selected_ids:
+        public = profiles.get(public_id)
+        backend_id = public.sql_backend.profile_id
+        backend = registry.profiles[backend_id]
+        snapshot = service.schemas.get_schema(backend_id, access)
+        catalog = load_catalog(backend, snapshot)
+        registered = {metric["metric_id"] for metric in catalog["metrics"]}
+        declared = {name: rule.model_dump(mode="python", exclude_none=True, exclude_defaults=True) for name, rule in public.sql_backend.declared_slots.items()}
+        if (not public.supports("sql") or public.sql_backend.model_mode != model_mode
+                or set(public.sql_backend.registered_metric_ids) != registered
+                or declared != backend.data.get("slots", {})):
+            raise ValueError("B/C profile mapping drift")
+        for metric in catalog["metrics"]:
+            configured = public.metric(metric["metric_id"])
+            if configured is None or metric.get("unit") != configured.unit:
+                raise ValueError("B/C unit drift")
+        record = {"backend_profile_id": backend_id, "schema_version": snapshot["schema_version"], "table_count": len(snapshot["tables"])}
+        if backend_id == "chinook":
+            record["database_sha256"] = DATABASE_SHA256
+        provenance["profiles"][public_id] = record
+    if selected_ids == ("chinook-music",) and "chinook-music" in provenance["profiles"]:
+        provenance.update(provenance["profiles"]["chinook-music"])
+        provenance["profiles"] = {"chinook-music": provenance["profiles"]["chinook-music"]}
+    return service, access, provenance
 
 
 class OfflineCSqlAdapter:
@@ -144,8 +170,8 @@ class OfflineCSqlAdapter:
 
     async def run(self, task: SqlTaskRequest, context: ToolContext) -> SqlTaskOutcome:
         profile = self.profiles.get(context.profile_id)
-        if not profile.sql_backend or profile.sql_backend.model_mode not in {"offline", "live"} or profile.sql_backend.profile_id != "chinook":
-            raise ToolFailure(ApiError(code="UNSUPPORTED_CAPABILITY", message="此适配器仅支持已确认的 chinook SQL 后端。", retryable=False))
+        if not profile.sql_backend or profile.sql_backend.model_mode not in {"offline", "live"}:
+            raise ToolFailure(ApiError(code="UNSUPPORTED_CAPABILITY", message="当前 profile 没有已确认的 SQL 后端。", retryable=False))
         request = build_c_request(task, request_id=context.request_id, profile=profile)
         raw = await self.executor.run(lambda: self._service.answer_sql(request.payload(), self._access), deadline=context.deadline)
         outcome = normalize_c_response(raw, task=task, request_id=context.request_id, profile=profile)
@@ -175,7 +201,8 @@ class OfflineSqlIntegration:
         """3C-4 opt-in; does not replace the default API or historical demo."""
         from ..response import FormalResponseComposer
         from ..services.graph_ask_service import GraphAskService
-        composer = FormalResponseComposer.for_sql(self.profiles.get("chinook-music"))
+        profile_id = self.profiles.ids()[0]
+        composer = FormalResponseComposer.for_sql(self.profiles.get(profile_id))
         return GraphAskService(self.profiles, self.runtime, response_composer=composer, execution_mode="offline_sql_integration")
 
     async def aclose(self, *, grace_seconds: float = 10) -> bool:
@@ -212,19 +239,25 @@ async def create_offline_sql_integration(*, profiles: ProfileRegistry | None = N
 
 
 async def create_canonical_sql_integration(*, profiles: ProfileRegistry | None = None,
+    profile_ids: tuple[str, ...] | None = None,
     trusted_tables: frozenset[str] | None = None, max_workers: int = 2,
     timeout_ms: int = 60000, model_mode: str = "offline") -> OfflineSqlIntegration:
     executor = None
     try:
         if profiles is None:
-            profile = ProfileRegistry.defaults().get("chinook-music")
+            profiles = ProfileRegistry.defaults().select(profile_ids or ("chinook-music",))
+        selected = profile_ids or profiles.ids()
+        profiles = profiles.select(selected)
+        configured = []
+        for profile_id in profiles.ids():
+            profile = profiles.get(profile_id)
             profile.sql_backend.model_mode = model_mode
-            profile.capabilities = ["sql", "rag"]
-            profiles = ProfileRegistry([profile])
+            configured.append(profile)
+        profiles = ProfileRegistry(configured)
         root = PROJECT_ROOT.resolve()
         executor = BoundedExecutor(max_workers)
         service, access, provenance = await executor.run(
-            lambda: _load_backend(root, profiles, trusted_tables, model_mode, canonical=True)
+            lambda: _load_backend(root, profiles, trusted_tables, model_mode, canonical=True, profile_ids=selected)
         )
         adapter = OfflineCSqlAdapter(profiles, service, access, executor, provenance)
         runtime = ToolRuntime(profiles)

@@ -25,7 +25,12 @@ class Settings:
 
     def __post_init__(self):
         # Never include environment values in validation errors or logs.
-        if type(self.backend_mode) is not str or self.backend_mode not in {"offline_sql_d12", "unavailable"} or self.model_mode not in {"offline", "live"} or self.enabled_profiles != ("chinook-music",):
+        supported_profiles = {"chinook-music", "adventureworks"}
+        if (type(self.backend_mode) is not str or self.backend_mode not in {"offline_sql_d12", "unavailable"}
+                or self.model_mode not in {"offline", "live"}
+                or len(self.enabled_profiles) != 1
+                or any(profile not in supported_profiles for profile in self.enabled_profiles)
+                or len(self.enabled_profiles) != len(set(self.enabled_profiles))):
             raise ValueError("unsupported backend/profile configuration")
         # sql_timeout_ms 上限要覆盖 C 的整轮预算（模型重试 + 受控降级 = 115 秒），
         # 否则真实模型稍慢就会在降级前被切断，只能返回超时错误。

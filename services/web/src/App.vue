@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { AskClient } from './api/client';
 import AskResult from './components/AskResult.vue';
-import { CLARIFICATION_EXAMPLE, EXAMPLES, useAskWorkspace } from './features/ask/use-ask-workspace';
+import { CLARIFICATION_EXAMPLE, EXAMPLES, PROFILE_ID, useAskWorkspace } from './features/ask/use-ask-workspace';
 
 // Explicit test dependency injection; main.ts always uses the real default client.
 const props = defineProps<{ client?: AskClient }>();
@@ -26,11 +26,11 @@ function shortcut(event: KeyboardEvent) {
 <template>
   <main class="workspace">
     <header class="page-heading">
-      <div><p class="eyebrow">CHINOOK · 完整产品闭环</p><h1>多模态数据驱动的可解释精准问数/问答智能体</h1><p class="intro">提问、澄清与证据展示 · 实时 NL2SQL＋D01-D12</p></div>
+      <div><p class="eyebrow">DATA AGENT · 完整产品闭环</p><h1>多模态数据驱动的可解释精准问数/问答智能体</h1><p class="intro">提问、澄清与证据展示 · 实时 NL2SQL</p></div>
       <button type="button" class="secondary" data-testid="new-session" @click="newSession">新会话</button>
     </header>
     <section class="session-bar" aria-label="会话信息">
-      <p>Profile：chinook-music</p>
+      <p>Profile：{{ PROFILE_ID }}</p>
     </section>
     <section class="composer" aria-labelledby="question-label">
       <form data-testid="ask-form" @submit.prevent="submit">

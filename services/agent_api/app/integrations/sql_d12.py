@@ -128,12 +128,15 @@ async def create_offline_knowledge_integration(*, profiles: ProfileRegistry | No
 
 
 async def create_canonical_knowledge_integration(*, profiles: ProfileRegistry | None = None,
+    profile_ids: tuple[str, ...] | None = None,
     knowledge_root: Path | None = None, trusted_tables: frozenset[str] | None = None,
     max_workers: int = 2, sql_timeout_ms: int = 60000, rag_timeout_ms: int = 5000,
     max_chars: int = 1200, model_mode: str = "offline") -> OfflineKnowledgeIntegration:
     sql = None
     try:
         root = (knowledge_root or Path(__file__).resolve().parents[4] / "data" / "knowledge").resolve()
+        if profile_ids and profile_ids != ("chinook-music",):
+            raise ValueError("D01-D12 knowledge integration only supports chinook-music")
         if profiles is None:
             profile = ProfileRegistry.defaults().get("chinook-music")
             profile.sql_backend.model_mode = model_mode

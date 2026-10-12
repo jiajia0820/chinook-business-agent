@@ -1,0 +1,35 @@
+{
+  "profile_id": "adventureworks",
+  "errors": [],
+  "checks": {
+    "eval_schema_linking.jsonl": [
+      "aw-schema-001",
+      "aw-schema-002",
+      "aw-schema-003",
+      "aw-schema-004",
+      "aw-schema-005",
+      "aw-schema-006",
+      "aw-schema-007",
+      "aw-schema-008"
+    ],
+    "eval_multitable.jsonl": [
+      "aw-multi-001",
+      "aw-multi-002",
+      "aw-multi-003",
+      "aw-multi-004",
+      "aw-multi-005",
+      "aw-multi-006",
+      "aw-multi-007",
+      "aw-multi-008",
+      "aw-multi-009",
+      "aw-multi-010",
+      "aw-multi-011",
+      "aw-multi-012"
+    ]
+  },
+  "record_counts": {
+    "eval_schema_linking.jsonl": 8,
+    "eval_multitable.jsonl": 12,
+    "eval_clarification.jsonl": 8
+  }
+}
