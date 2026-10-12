@@ -500,4 +500,20 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
         except (KeyError, ValueError):
             # 自定义 profile 可能尚未提供实体目录；旧解析结果仍必须可用。
             parsed.task.question_ir = None
+    if parsed.task is not None:
+        from .route_policy import route_question
+
+        try:
+            ir = route_question(parsed.task.original_question, profile_id=profile.profile_id)
+        except (KeyError, ValueError):
+            ir = None
+        if ir is not None:
+            previous_ir = parsed.task.question_ir
+            if previous_ir is not None:
+                from .query_rewrite import merge_question_ir
+                ir = merge_question_ir(previous_ir, ir)
+            parsed.task.question_ir = ir
+            if ir.route == "cross_source" or (ir.route == "sql" and ir.task_type == "database_fact"):
+                parsed.task.route = ir.route
+                parsed.task.required_outputs = list(dict.fromkeys([*parsed.task.required_outputs, *ir.requested_outputs]))
     return parsed

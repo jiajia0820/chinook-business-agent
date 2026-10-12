@@ -335,6 +335,15 @@ def semantic_task(question, profile):
         task.source_roles.append("plan")
     if premise_only and "未达" in q:
         task.assumptions = [q.split("，")[0].split(",")[0]]
+    # RoutePolicy is the shared semantic decision point.  Preserve the rich
+    # legacy intent/slot parsing above, while replacing only the route and
+    # output roles when the policy has a concrete classification.
+    from .route_policy import route_question
+    task.question_ir = route_question(q, profile_id=profile.profile_id)
+    if task.question_ir.route == "cross_source" or (
+            task.question_ir.route == "sql" and task.question_ir.task_type == "database_fact"):
+        task.route = task.question_ir.route
+        task.required_outputs = list(dict.fromkeys([*task.required_outputs, *task.question_ir.requested_outputs]))
     from .clarification_reply import augment_task
     return augment_task(task, q)
 

@@ -109,6 +109,7 @@ class QuestionIR(InternalModel):
     original_question: Question
     rewritten_question: Question
     task_type: str
+    route: Literal["general", "sql", "rag", "cross_source"] = "sql"
     metrics: list[str] = Field(default_factory=list)
     time_scope: TimeScope = Field(default_factory=TimeScope)
     entity_scope: list[EntityMention] = Field(default_factory=list)
@@ -133,13 +134,28 @@ class QuestionIR(InternalModel):
         for mention in sorted(mentions, key=lambda item: len(item.surface), reverse=True):
             rewritten = rewritten.replace(mention.surface, mention.canonical_name)
 
-        requested: list[str] = []
+        # RoutePolicy is the single source of truth for task type, route, and
+        # requested outputs.  Keep a lazy import here to avoid a module cycle
+        # because route_policy accepts QuestionIR as input.
+        from .route_policy import classify_question
+
+        _policy_type, route, requested = classify_question(cleaned, metrics)
+        # Keep the historical semantic labels on the raw IR (notably
+        # ``business_rule`` for formula/definition questions).  route_question
+        # upgrades this to the explicit policy labels when callers ask for a
+        # routed IR.
+        task_type = _task_type(cleaned, metrics)
+        # Preserve the historical output vocabulary while adding the explicit
+        # route-policy roles.  This keeps multi-turn target/growth/advice
+        # obligations available to downstream planners.
+        legacy_requested: list[str] = []
         if any(term in cleaned for term in ("目标", "达标", "和目标比")):
-            requested.append("target")
+            legacy_requested.append("target")
         if any(term in cleaned for term in ("增长", "环比", "同比", "变化")):
-            requested.append("growth_rate")
-        if any(term in cleaned for term in ("建议", "重点", "怎么运营", "运营手册")):
-            requested.append("operation_advice")
+            legacy_requested.append("growth_rate")
+        if any(term in cleaned for term in ("建议", "重点", "怎么运营", "运营手册", "下一步")):
+            legacy_requested.append("operation_advice")
+        requested = list(dict.fromkeys([*legacy_requested, *requested]))
 
         provenance = {
             "time_scope": FieldProvenance(
@@ -153,7 +169,8 @@ class QuestionIR(InternalModel):
         return cls(
             original_question=cleaned,
             rewritten_question=rewritten,
-            task_type=_task_type(cleaned, metrics),
+            task_type=task_type,
+            route=route,
             metrics=metrics,
             time_scope=time_scope,
             entity_scope=linked.entities,
