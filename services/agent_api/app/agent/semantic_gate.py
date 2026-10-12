@@ -66,7 +66,8 @@ def _unsupported_reason(question: str, profile: BusinessProfile) -> str | None:
     folded = question.casefold()
     for metric, terms in profile.question_rules.unsupported_terms.items():
         if any(term.casefold() in folded for term in terms):
-            return f"当前数据不支持{metric}，不能用其他指标替代。"
+            from .task_policy import unsupported_metric_label
+            return f"当前数据不支持{unsupported_metric_label(metric)}，不能用其他指标替代。"
     return None
 
 
