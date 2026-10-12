@@ -22,10 +22,12 @@ from ..response.models import ComposeContext, ResponseComposer
 from ..tools.models import BusinessContextItem, CalculationRequest, SqlTaskOutcome, SqlTaskRequest
 from ..tools.references import sql_cell_ref
 from .parsing import parse_question
+from .semantic_router import parse_route_proposal, semantic_route_messages, task_from_proposal
 from .state import AgentState, BusinessTask, ParsedTurn, SessionMemory, logical_copy
 
 
 CalculationBinder = Callable[[BusinessTask, SqlTaskOutcome | None, RetrievalResponse | None, str], CalculationRequest | None]
+SEMANTIC_ROUTE_SECONDS = 8
 
 
 def _rag_plan(question: str, intent: str) -> dict:
@@ -200,6 +202,39 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
         memory = SessionMemory.model_validate(state["memory"])
         parsed = parse_question(request.question, profiles.get(state["profile_id"]), memory)
         return mark(state, "parse_question", parsed=parsed.model_dump(mode="json"), memory=memory.model_dump(mode="json"))
+
+    async def semantic_route(state: AgentState):
+        parsed = ParsedTurn.model_validate(state["parsed"])
+        if parsed.decision != "clarification" or (parsed.task and parsed.task.intent != "unknown"):
+            return state
+        model = getattr(response_composer, "answer_model", None)
+        executor = getattr(response_composer, "executor", None)
+        if model is None or executor is None:
+            return state
+        request = AskRequest.model_validate(state["request"])
+        deadline = time.monotonic() + SEMANTIC_ROUTE_SECONDS
+
+        def generate():
+            return parse_route_proposal(model.generate_json(
+                semantic_route_messages(request.question), {"type": "object"}, deadline
+            ))
+
+        try:
+            proposal = await executor.run(generate, deadline=deadline)
+        except Exception:
+            return state
+        if proposal is None or proposal.question_type != "general_knowledge" or proposal.needs_tool:
+            return state
+        task = task_from_proposal(request.question, proposal)
+        if task is None:
+            return state
+        parsed = ParsedTurn(
+            decision="ready",
+            task=task,
+            reused_context=parsed.reused_context,
+            rules=[*parsed.rules, "semantic_router"],
+        )
+        return mark(state, "semantic_route", parsed=parsed.model_dump(mode="json"))
 
     def validate(state: AgentState):
         parsed = ParsedTurn.model_validate(state["parsed"])
@@ -634,7 +669,7 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
 
     builder = StateGraph(AgentState)
     for name, node in [
-        ("initialize_turn", initialize), ("parse_question", parse),
+        ("initialize_turn", initialize), ("parse_question", parse), ("semantic_route", semantic_route),
         ("validate_slots_and_capabilities", validate), ("sql", call_sql),
         ("rag", call_rag), ("calculate", calculate),
         ('prepare_business',prepare_business),
@@ -643,7 +678,8 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
         builder.add_node(name, node)
     builder.add_edge(START, "initialize_turn")
     builder.add_edge("initialize_turn", "parse_question")
-    builder.add_edge("parse_question", "validate_slots_and_capabilities")
+    builder.add_edge("parse_question", "semantic_route")
+    builder.add_edge("semantic_route", "validate_slots_and_capabilities")
     builder.add_conditional_edges("validate_slots_and_capabilities", start_route, ["sql", "rag", compose_node])
     builder.add_conditional_edges("sql", after_sql, ["rag", "calculate", "evidence_check"])
     builder.add_conditional_edges("rag", after_rag, ["sql", "calculate", "evidence_check", "prepare_business"])
