@@ -43,6 +43,17 @@ def document_needs(task):
         docs = [primary, *[d for d in docs if d != primary]]
         if primary == "D06":
             docs = [d for d in docs if d != "D01"]  # D06 itself defines the target formulas.
+        # Cross-source calculations also need the period review source.  D06
+        # supplies the approved target/formula, while D08 is the authoritative
+        # Q3 review evidence used by the answer and conflict checks.  Keep it
+        # as a retrieval requirement without turning document text into SQL.
+        if task.route == "cross_source":
+            if task.intent == "growth_rate":
+                docs.extend(doc for doc in ("D07", "D08") if doc not in docs)
+            elif task.intent in {"target_attainment", "target_difference", "document_calculation"}:
+                review_doc = {2: "D07", 3: "D08"}.get(task.slots.get("quarter"))
+                if review_doc and review_doc not in docs:
+                    docs.append(review_doc)
     if not docs and task.route in {"rag", "cross_source"}:
         return [None]  # Known document request without a catalog cue: bounded ordinary retrieval.
     return list(dict.fromkeys(docs))

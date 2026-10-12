@@ -16,7 +16,7 @@ from ..knowledge.d12 import D12_SHA256, SOURCE_PREFIX
 from ..runtime import ToolContext, events_to_trace
 from ..tools.local_calculator import FORMULAS, calculate_decimal
 from ..tools.models import CalculationRequest
-from .models import ComposeContext, ExecutionMode
+from .models import ComposeContext, ExecutionMode, normalize_answer_contract
 from .document_answer import draft_answer, comparison, poster, model_messages, validate_model_answer
 from .general_answer import general_model_messages, validate_general_answer
 
@@ -271,11 +271,20 @@ class FormalResponseComposer:
                 self._verify_sources(replace(context, rag=retrieval, retrievals=()))
             if context.rag.profile_id != self.policy.profile_id:
                 raise SourceMismatch()
-            seen = set()
+            seen = {}
             for chunk in context.rag.chunks:
-                if chunk.chunk_id in seen or chunk.chunk_id not in context.available_source_refs:
+                previous = seen.get(chunk.chunk_id)
+                if previous is not None:
+                    # Retrieval fan-out may return the same authorized chunk
+                    # more than once. Accept only equivalent duplicates so
+                    # source authorization remains strict.
+                    source_fields = ("chunk_id", "doc_id", "title", "section", "text", "source_uri", "page", "bbox", "doc_type")
+                    if any(getattr(chunk, field) != getattr(previous, field) for field in source_fields):
+                        raise SourceMismatch()
+                    continue
+                if chunk.chunk_id not in context.available_source_refs:
                     raise SourceMismatch()
-                seen.add(chunk.chunk_id)
+                seen[chunk.chunk_id] = chunk
                 if real:
                     snapshots = {item.chunk_id: item for item in self.policy.documents}
                     item = snapshots.get(chunk.chunk_id)
@@ -324,7 +333,7 @@ class FormalResponseComposer:
                 raise EvidenceGap()
             lead = f"本轮返回 {result.row_count} 个 Genre 分类"
             lead += "（结果已截断，不能据此确定分类总数）" if result.truncated else "（该查询未截断）"
-            names = "；".join(f'{row["genreid"]}: {row["name"]}' for row in result.rows)
+            names = "；".join(f'Genre:{row["genreid"]}: {row["name"]}' for row in result.rows)
             return f"{lead}：{names}。查询覆盖整个 Genre 表，含影视分类，不是仅音频风格清单。\n来源：SQL {result.query_id}。{SQL_NOTE}"
         values = []
         for result in sql.sql_results:
@@ -796,7 +805,7 @@ class FormalResponseComposer:
         elif self.policy.model_mode == "live" and not context.sql:
             banner = "来源：本轮业务资料检索；本轮未调用大模型生成SQL。"
             limits = [item for item in limits if item != self.source_banner]
-        answer = banner + "\n" + answer
+        answer = banner + "\n" + normalize_answer_contract(answer)
         return AskResponse(request_id=context.request_id, session_id=context.session_id, profile_id=context.profile.profile_id,
             status=status, answer=answer, route=context.route, intent=Intent(name=context.task.intent if context.task else "reset_context" if context.reset_context else "unknown"),
             entities=context.task.entities if context.task else [], time_range=context.task.time_range if context.task else None,

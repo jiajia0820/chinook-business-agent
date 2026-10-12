@@ -15,10 +15,58 @@ from ..tools.local_calculator import FORMULAS, OPERANDS, validate_numeric, valid
 from ..tools.models import CalculationRequest, SqlTaskOutcome
 from ..tools.references import sql_cell_ref
 from .models import CalculationEvidenceBundle, DocumentLocator, DocumentScalarEvidence, EvidencePeriod, EvidenceScope, SqlScalarEvidence
+from .ledger import EvidenceItem, EvidenceLedger
+from .verification import verify_same_scope
 
 
 FUNCTION_BY_INTENT = {"target_difference": "difference", "target_attainment": "attainment_rate", "growth_rate": "growth_rate",
     'average_order_value':'average_order_value','document_sum':'sum','period_difference':'difference'}
+
+
+def _verify_cross_source_scope(bundle: CalculationEvidenceBundle, *, allow_period_difference: bool = False) -> None:
+    """Check the semantic dimensions of operands that come from different sources.
+
+    The per-operand checks below bind each value to the task.  This ledger check
+    additionally verifies the relationship between the SQL/document pair before
+    issuing a calculator permit, so a cross-source mismatch cannot pass merely
+    because each scalar looks individually plausible.  Period-difference uses
+    the named ``difference`` function with intentionally distinct periods and
+    is excluded by the caller.
+    """
+    if allow_period_difference and bundle.function == "difference":
+        return
+    pair = {
+        "difference": ("actual", "target"),
+        "attainment_rate": ("actual", "target"),
+        "growth_rate": ("current", "previous"),
+    }.get(bundle.function)
+    if pair is None or not all(role in bundle.operands for role in pair):
+        return
+    items = []
+    for role in pair:
+        evidence = bundle.operands[role]
+        if isinstance(evidence, SqlScalarEvidence):
+            source_kind = "sql"
+            source_ref = evidence.query_id
+        else:
+            source_kind = "document"
+            source_ref = evidence.locator.chunk_id
+        items.append(EvidenceItem(
+            fact_role=role,
+            metric=evidence.metric_id,
+            value=evidence.value,
+            unit=evidence.unit,
+            period=evidence.period,
+            scope=evidence.scope,
+            source_ref=source_ref,
+            source_kind=source_kind,
+            validation_status="verified" if evidence.confirmed else "unverified",
+            confirmed=evidence.confirmed,
+        ))
+    ledger = EvidenceLedger(items=items)
+    left, right = (ledger.required(role) for role in pair)
+    if not verify_same_scope(left, right):
+        raise ValueError("cross-source evidence scope mismatch")
 
 
 def text_hash(value: str) -> str:
@@ -121,6 +169,7 @@ def authorize_calculation(bundle: CalculationEvidenceBundle, *, task: BusinessTa
     expected_roles={'sales','orders'} if function=='average_order_value' else (set(bundle.operands) if function=='sum' else OPERANDS.get(function,set()))
     if not task.needs_calculation or function is None or bundle.function != function or set(bundle.operands) != expected_roles:
         raise ValueError("wrong intent/function/operand names")
+    _verify_cross_source_scope(bundle, allow_period_difference=task.intent == "period_difference")
     if len(task.business_metric_ids) != 1:
         raise ValueError("missing/ambiguous metric")
     metric_id = task.business_metric_ids[0]

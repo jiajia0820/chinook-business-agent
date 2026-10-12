@@ -519,6 +519,7 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
 
     async def calculate_many(state, task, sql, rag):
         current, records, calculations = dict(state), [], []
+        binding_failures = []
         functions = ["growth_rate"] if task.intent == "growth_rate" else ["attainment_rate"]
         if "difference" in task.required_outputs or task.intent == "target_difference":
             functions.append("difference")
@@ -535,7 +536,13 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
                     child.slots["month"] = month
                     y = child.slots["year"]
                     child.time_range = TimeRange(start=date(y, month, 1).isoformat(), end=date(y + (month == 12), 1 if month == 12 else month + 1, 1).isoformat(), end_inclusive=False, label=f"{y}年{month}月")
-                selected_rag = next((RetrievalResponse.model_validate(r["data"]) for r in state.get("retrieval_outcomes", []) if r["data"] and any(c["doc_id"] == ("D01" if function == "growth_rate" else "D06") for c in r["data"]["chunks"])), rag)
+                # Use the merged, this-turn retrieval response so formula,
+                # target and review evidence can be checked together.  The
+                # old D01/D06 selector discarded D08 and made valid bindings
+                # depend on which single retrieval happened to be primary.
+                selected_rag = rag
+                if selected_rag is None or not selected_rag.chunks:
+                    selected_rag = next((RetrievalResponse.model_validate(r["data"]) for r in state.get("retrieval_outcomes", []) if r["data"] and r["data"].get("chunks")), None)
                 calculation_id = "calc-" + str(uuid.uuid4())
                 invocation_context = context(current)
                 try:
@@ -544,13 +551,22 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
                         raise ValueError("missing binding")
                     authorized = authorize_calculation(bundle, task=child, sql=sql, rag=selected_rag, profile=profiles.get(state["profile_id"]), context=invocation_context, calculation_id=calculation_id, expected_mode="verified_business")
                 except Exception:
-                    return mark(current, "calculate", status="insufficient_evidence", calculations=calculations, calculation_records=records, limitations=[*current["limitations"], f"{metric}/{function}缺少同周期/范围的有效目标与公式绑定，未执行该项。"])
+                    binding_failures.append(f"{metric}/{function}")
+                    continue
+                prior_status, prior_error = current.get("status"), current.get("error")
                 outcome = await runtime.run("calculator.calculate", authorized.request, invocation_context.model_copy(update={"calculation_permit": authorized.permit}))
                 current.update(tool_update(current, "calculate", outcome, "calculation_binding", []))
                 if not outcome.succeeded:
-                    return {**current, "calculations": calculations, "calculation_records": records}
+                    # A failed child calculation must not erase successful
+                    # siblings.  Keep the tool event for traceability while
+                    # restoring the parent readiness for the remaining loop.
+                    current["status"], current["error"] = prior_status, prior_error
+                    binding_failures.append(f"{metric}/{function}")
+                    continue
                 calculations.append(outcome.data.model_dump(mode="json"))
                 records.append({"task": child.model_dump(mode="json"), "binding": authorized.request.model_dump(mode="json"), "audit": authorized.audit, "retrieval_id": selected_rag.retrieval_id})
+        if binding_failures:
+            current["limitations"] = [*current["limitations"], "部分计算绑定失败，已保留其余成功结果：" + "、".join(dict.fromkeys(binding_failures)) + "。"]
         return {**current, "calculations": calculations, "calculation_records": records,
             "calculation_binding": records[0]["binding"] if records else None, "calculation_evidence": records[0]["audit"] if records else None}
 

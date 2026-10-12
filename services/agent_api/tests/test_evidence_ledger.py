@@ -4,6 +4,8 @@ from decimal import Decimal
 from services.agent_api.app.evidence.ledger import EvidenceItem, EvidenceLedger
 from services.agent_api.app.evidence.models import EvidencePeriod, EvidenceScope, ScalarSemantics
 from services.agent_api.app.evidence.verification import verify_same_scope
+from services.agent_api.app.evidence.binding import _verify_cross_source_scope
+from services.agent_api.app.evidence.models import DocumentLocator, DocumentScalarEvidence, SqlScalarEvidence
 
 
 class EvidenceLedgerTests(unittest.TestCase):
@@ -67,6 +69,24 @@ class EvidenceLedgerTests(unittest.TestCase):
         self.assertFalse(verify_same_scope(current, self.item("previous", period=previous.period, metric="units_sold", value="19.50")))
         self.assertFalse(verify_same_scope(current, self.item("previous", period=previous.period, scope=self.scope("Genre:13"), value="19.50")))
         self.assertFalse(verify_same_scope(current, self.item("previous", period=previous.period, unit="件", value="19.50")))
+
+    def test_cross_source_binding_rejects_mismatched_operand_scope(self):
+        sql = SqlScalarEvidence(
+            metric_id="sales_amount", period=self.period(), scope=self.scope(), unit="USD",
+            value=Decimal("21.78"), confirmed=True, query_id="q1", row_index=0,
+            column="sales_amount", result_sha256="0" * 64,
+        )
+        locator = DocumentLocator(
+            chunk_id="D06#P1", doc_id="D06", version="V1.0", content_sha256="0" * 64,
+            source_uri="data/knowledge/D06.pdf#P1", start=0, end=4,
+        )
+        target = DocumentScalarEvidence(
+            metric_id="sales_amount", period=self.period(), scope=self.scope("Genre:13"), unit="USD",
+            value=Decimal("24.00"), confirmed=True, locator=locator,
+        )
+        bundle = type("Bundle", (), {"function": "attainment_rate", "operands": {"actual": sql, "target": target}})()
+        with self.assertRaisesRegex(ValueError, "cross-source evidence scope mismatch"):
+            _verify_cross_source_scope(bundle)
 
 
 if __name__ == "__main__":

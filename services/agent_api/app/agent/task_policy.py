@@ -11,6 +11,23 @@ from .state import BusinessTask, ParsedTurn
 
 POLICY_VERSION = "c-clarification-v3-20261011"
 
+# Internal metric keys are useful for routing and capability checks, but they
+# must not leak into user-facing unsupported answers.
+UNSUPPORTED_METRIC_LABELS = {
+    "profit": "利润",
+    "cost": "成本",
+    "inventory": "库存",
+    "refund": "退款",
+    "ad_impressions": "广告曝光",
+    "play_count": "播放量",
+    "ad_conversion": "广告点击/转化",
+    "employee_sales_ranking": "SupportRep 员工销售排名",
+}
+
+
+def unsupported_metric_label(metric: str) -> str:
+    return UNSUPPORTED_METRIC_LABELS.get(metric, metric)
+
 SLOT_SPECS = {
     "period": ("完整观察期间，例如2025Q3、2025年全年或明确起止日期", []),
     "year": ("目标/查询年度，请回复四位年份（例如2025年），不会自动补年度", ["2025年", "2024年"]),
@@ -407,7 +424,8 @@ def parse_c_v1(question, profile, memory):
     if not general_question:
         for metric, terms in profile.question_rules.unsupported_terms.items():
             if any(term.casefold() in q.casefold() for term in terms):
-                return ParsedTurn(decision="unsupported", reason=f"当前数据不支持{metric}，不能用其他指标替代。", rules=["data_gap"])
+                label = unsupported_metric_label(metric)
+                return ParsedTurn(decision="unsupported", reason=f"当前数据不支持{label}，不能用其他指标替代。", rules=["data_gap"])
         if any(term in q for term in ("点击", "转化")):
             return ParsedTurn(decision="unsupported", reason="没有页面事件/归因数据，无法计算点击或转化。", rules=["event_data_gap"])
         if "SupportRep" in q and "员工" in q and "销售额" in q:
