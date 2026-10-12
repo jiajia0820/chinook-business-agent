@@ -420,6 +420,24 @@ def parse_c_v1(question, profile, memory):
         task.intent, task.route, task.needs_calculation = "document_rule", "rag", False
     else:
         task = semantic_task(q, profile)
+    # Apply the shared QuestionIR gate before legacy slot checks.  A formula
+    # or metric-definition question is a document task even when its wording
+    # contains transaction metric names; it must not inherit SQL period gates.
+    from .query_rewrite import rewrite_question
+    from .semantic_gate import decide
+    try:
+        task.question_ir = rewrite_question(q, profile_id=profile.profile_id)
+        gate = decide(task.question_ir, profile)
+    except (KeyError, ValueError):
+        gate = None
+    if gate is not None and gate.status == "unsupported":
+        return ParsedTurn(decision="unsupported", task=task, reason=gate.reason, rules=["semantic_gate"])
+    if gate is not None and gate.status == "answerable" and task.question_ir.task_type == "business_rule":
+        task.intent, task.route, task.needs_calculation = "document_rule", "rag", False
+        task.information_needs = ["rag"]
+        task.required_outputs = ["document_facts"]
+        task.retrieval_question = ("分析方法 公式 分母 " + q) if any(term in q for term in ("客单价", "成交均价", "分母")) else q
+        task.source_roles = ["document_rule"]
     if "track_attributes" in task.business_metric_ids:
         for key in ("year", "quarter", "month", "period_grain", "start_date", "end_date"):
             task.slots.pop(key, None)
