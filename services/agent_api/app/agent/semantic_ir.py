@@ -90,7 +90,13 @@ def _metric_ids(question: str, profile_id: str) -> list[str]:
 
 
 def _task_type(question: str, metrics: list[str]) -> str:
-    if any(term in question for term in ("结合文档", "运营手册", "和目标比", "目标", "实际", "建议关注")):
+    if any(term in question for term in ("按", "除以", "分母", "还是")) and any(
+        term in question for term in ("客单价", "销售额", "销量", "订单数")
+    ):
+        return "business_rule"
+    if any(term in question for term in ("下一步", "重点看", "建议关注", "运营", "运营手册")):
+        return "business_rule"
+    if any(term in question for term in ("结合文档", "和目标比", "目标", "实际")):
         return "cross_source" if any(term in question for term in ("实际", "结合", "和目标比")) else "business_rule"
     if any(term in question for term in ("定义", "口径", "规则", "公式", "怎么计算")):
         return "business_rule"
