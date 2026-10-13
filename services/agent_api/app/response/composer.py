@@ -695,8 +695,16 @@ class FormalResponseComposer:
         lead = f"{context.task.time_range.label if context.task.time_range else '已确认期间'}：{function} {calc.result:.2f} {calc.unit}。"
         if request.function == "attainment_rate":
             lead += "未达标。" if calc.result < 100 else "已达标。"
+        contextual = []
+        if getattr(bundle, "review", None):
+            contextual.append("复盘解释来源：" + "；".join(f"{item.locator.doc_id} {item.locator.chunk_id}" for item in bundle.review))
+        if getattr(bundle, "operation", None):
+            contextual.append("运营解释来源：" + "；".join(f"{item.locator.doc_id} {item.locator.chunk_id}：{item.text}" for item in bundle.operation))
+        missing_roles = list(getattr(bundle, "missing_roles", []))
+        if missing_roles:
+            contextual.append("缺少解释角色：" + "、".join(dict.fromkeys(missing_roles)) + "；已保留可验证计算结果。")
         return "\n".join([lead, *rows, scope_text, f"命名函数 {request.function}；公式 {calc.formula}；公式来源 {request.formula_ref}（{bundle.formula.locator.version}）。",
-            f"{result_prefix}{function}：{calc.result:.2f}{'' if calc.unit == '%' else ' '}{calc.unit}；Decimal 计算，ROUND_HALF_UP 保留两位小数。", f"计算来源：{calc.calculation_id}。{conclusion}"])
+            f"{result_prefix}{function}：{calc.result:.2f}{'' if calc.unit == '%' else ' '}{calc.unit}；Decimal 计算，ROUND_HALF_UP 保留两位小数。", *contextual, f"计算来源：{calc.calculation_id}。{conclusion}"])
 
     def compose(self, context: ComposeContext) -> AskResponse:
         status, answer, error = context.status, None, context.error

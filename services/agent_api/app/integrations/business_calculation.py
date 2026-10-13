@@ -5,6 +5,8 @@ import re
 
 from ..evidence.binding import task_period, task_scope, comparison_period, result_hash
 from ..evidence.models import CalculationEvidenceBundle, DocumentLocator, DocumentScalarEvidence, FormulaEvidence, SqlScalarEvidence
+from ..evidence.cross_source_bundle import build_cross_source_bundle
+from ..evidence.formulas import FormulaRegistry
 
 
 FUNCTIONS={'target_attainment':'attainment_rate','target_difference':'difference','growth_rate':'growth_rate',
@@ -48,6 +50,11 @@ def monthly_plan(chunks,scope):
 
 
 def create_business_resolver(index):
+    try:
+        formula_registry = FormulaRegistry.from_profile("chinook")
+    except (FileNotFoundError, ValueError):
+        formula_registry = None
+
     def resolve(task,sql,rag,calculation_id,context):
         function=FUNCTIONS.get(task.intent)
         if not task.needs_calculation or function is None or not rag or not rag.chunks:
@@ -56,6 +63,27 @@ def create_business_resolver(index):
         metric=index.profile.metric(metric_id)
         period,scope=task_period(task),task_scope(task)
         chunks=rag.chunks
+        # Central role assembler is the preferred path.  It retains review and
+        # operation context while allowing binding.py to authorize only scalar
+        # calculator operands.  Monthly plans keep the legacy table parser
+        # below because they contain three independently named month inputs.
+        if function != 'sum':
+            try:
+                bundle = build_cross_source_bundle(task, sql, rag,
+                    calculation_id=calculation_id, request_id=context.request_id,
+                    session_id=context.session_id, profile_id=context.profile_id,
+                    formula_registry=formula_registry)
+                required = {'actual', 'target'} if function in {'difference', 'attainment_rate'} else {'current', 'previous'} if function == 'growth_rate' else {'sales', 'orders'}
+                if required <= set(bundle.operands):
+                    return bundle
+            except (ValueError, KeyError, IndexError, TypeError):
+                pass
+        if formula_registry is not None:
+            try:
+                formula_registry.get({'difference': 'target_difference', 'attainment_rate': 'attainment_rate',
+                    'growth_rate': 'growth_rate', 'average_order_value': 'average_order_value', 'sum': 'monthly_sum'}[function])
+            except ValueError:
+                return None
         formula_words={'difference':('差额','本期销售额 - 上期销售额'), 'attainment_rate':('达成率',),
             'growth_rate':('增长率','period_over_period_growth','环比'), 'average_order_value':('客单价',),'sum':('月度分解',)}[function]
         formula_chunk=next((c for c in chunks if any(word in c.text for word in formula_words)),None)

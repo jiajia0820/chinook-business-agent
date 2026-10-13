@@ -49,6 +49,11 @@ class ScalarSemantics(InternalModel):
 
 class SqlScalarEvidence(ScalarSemantics):
     kind: Literal["sql"] = "sql"
+
+    @property
+    def source_ref(self) -> str:
+        from ..tools.references import sql_cell_ref
+        return "sql:" + sql_cell_ref(self.query_id, self.row_index, self.column)[len("sql-cell:"):]
     query_id: NonEmptyString
     row_index: int = Field(ge=0)
     column: NonEmptyString
@@ -73,7 +78,18 @@ class DocumentLocator(InternalModel):
 
 class DocumentScalarEvidence(ScalarSemantics):
     kind: Literal["document"] = "document"
+
+    @property
+    def source_ref(self) -> str:
+        return f"{self.locator.doc_id}:{self.locator.chunk_id}"
     locator: DocumentLocator
+
+
+class DocumentContextEvidence(InternalModel):
+    """Non-arithmetic contextual evidence retained for explanation."""
+    role: NonEmptyString
+    locator: DocumentLocator
+    text: NonEmptyString
 
 
 class FormulaEvidence(InternalModel):
@@ -96,6 +112,9 @@ class CalculationEvidenceBundle(InternalModel):
     function: Literal["difference", "attainment_rate", "growth_rate", "average_order_value", "sum"]
     operands: dict[str, Annotated[SqlScalarEvidence | DocumentScalarEvidence, Field(discriminator="kind")]] = Field(min_length=2, max_length=12)
     formula: FormulaEvidence
+    review: list[DocumentContextEvidence] = Field(default_factory=list)
+    operation: list[DocumentContextEvidence] = Field(default_factory=list)
+    missing_roles: list[NonEmptyString] = Field(default_factory=list)
 
 
 class EvidenceResolver(Protocol):

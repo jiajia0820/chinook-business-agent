@@ -15,6 +15,7 @@ from ..tools.local_calculator import FORMULAS, OPERANDS, validate_numeric, valid
 from ..tools.models import CalculationRequest, SqlTaskOutcome
 from ..tools.references import sql_cell_ref
 from .models import CalculationEvidenceBundle, DocumentLocator, DocumentScalarEvidence, EvidencePeriod, EvidenceScope, SqlScalarEvidence
+from .formulas import FormulaRegistry
 from .ledger import EvidenceItem, EvidenceLedger
 from .verification import verify_same_scope
 
@@ -190,6 +191,21 @@ def authorize_calculation(bundle: CalculationEvidenceBundle, *, task: BusinessTa
     expected_unit = metric.unit if function in {'difference','sum','average_order_value'} else "%"
     if not formula.confirmed or formula.function != function or formula.metric_id != metric_id or formula.period != period or formula.scope != scope or formula.input_unit != metric.unit or formula.result_unit != expected_unit:
         raise ValueError("formula semantics mismatch")
+    # FormulaRegistry is the trusted function catalog.  Document text can
+    # attest provenance, but it cannot introduce a new expression or input
+    # name at runtime.
+    try:
+        registry = FormulaRegistry.from_profile("chinook")
+        registry_function = {"difference": "target_difference", "attainment_rate": "attainment_rate",
+            "growth_rate": "growth_rate", "average_order_value": "average_order_value", "sum": "monthly_sum"}[function]
+        spec = registry.get(registry_function)
+    except (FileNotFoundError, ValueError, KeyError):
+        raise ValueError("formula registry unavailable") from None
+    expected_registry_inputs = {"actual", "target"} if function in {"difference", "attainment_rate"} else {"current", "previous"} if function == "growth_rate" else {"sales_amount", "order_count"} if function == "average_order_value" else {"monthly_plan"}
+    if function != "sum" and set(spec.inputs) != expected_registry_inputs:
+        raise ValueError("formula registry inputs mismatch")
+    if formula.locator.doc_id not in set(spec.source_refs):
+        raise ValueError("formula source is not registry-authorized")
     formula_text = _document_text(formula.locator, chunks, bundle.source_mode)
     if formula_text != FORMULAS[function]:
         labels = {
