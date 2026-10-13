@@ -130,25 +130,24 @@ def _document_text(locator: DocumentLocator, chunks: dict, mode: str) -> str:
         if re.search(r"(?m)^version=" + re.escape(locator.version) + r"$", chunk.text) is None:
             raise ValueError("fixture document version mismatch")
     else:
-        # The future business resolver also needs an approved version catalog.
-        # No such resolver is supplied by the present real D12 factory.
         if chunk.doc_type == "fixture" or chunk.source_uri.startswith("fixture://"):
             raise ValueError("business provenance cannot use a fixture")
-        text = chunks[locator.chunk_id].text[locator.start:locator.end]
-        if text in FORMULAS.values():
-            return text
-        if locator.doc_id in {"D06", "D07", "D08"}:
-            return text
-        if "销售额达成率" in chunks[locator.chunk_id].text:
-            return FORMULAS["attainment_rate"]
-        if "销售额差额" in chunks[locator.chunk_id].text:
-            return FORMULAS["difference"]
-        if "增长率" in chunks[locator.chunk_id].text or "period_over_period_growth" in chunks[locator.chunk_id].text:
-            return FORMULAS["growth_rate"]
-        if '客单价' in chunks[locator.chunk_id].text:
-            return FORMULAS['average_order_value']
-        raise ValueError("verified business document formula is not approved")
     return chunk.text[locator.start:locator.end]
+
+
+def named_formula_matches(text: str, function: str) -> bool:
+    """A source must name this function; a numeric table is not a formula."""
+    if text.strip() == FORMULAS[function]:
+        return True
+    labels = {
+        'difference': ('销售额差额', '目标差额', '本期销售额 - 上期销售额', '实际销售额 - 目标销售额'),
+        'attainment_rate': ('销售额达成率', '目标达成率', '实际销售额 / 目标销售额'),
+        'growth_rate': ('增长率', 'period_over_period_growth'),
+        'average_order_value': ('客单价', '销售额 / 订单数', '销售额除以订单数'),
+        # The trusted catalog explicitly declares D06's monthly-plan sum.
+        'sum': ('月度分解', 'sum(monthly_plan)'),
+    }
+    return any(label in text for label in labels[function])
 
 
 @dataclass(frozen=True)
@@ -188,8 +187,9 @@ def authorize_calculation(bundle: CalculationEvidenceBundle, *, task: BusinessTa
     if len(chunks) != len(rag.chunks) or any(chunk.retrieval_id != rag.retrieval_id for chunk in rag.chunks):
         raise ValueError("ambiguous/stale retrieval objects")
     formula = bundle.formula
-    expected_unit = metric.unit if function in {'difference','sum','average_order_value'} else "%"
-    if not formula.confirmed or formula.function != function or formula.metric_id != metric_id or formula.period != period or formula.scope != scope or formula.input_unit != metric.unit or formula.result_unit != expected_unit:
+    expected_unit = 'USD/单' if function == 'average_order_value' else metric.unit if function in {'difference','sum'} else "%"
+    input_unit = 'USD' if function == 'average_order_value' else metric.unit
+    if not formula.confirmed or formula.function != function or formula.metric_id != metric_id or formula.period != period or formula.scope != scope or formula.input_unit != input_unit or formula.result_unit != expected_unit:
         raise ValueError("formula semantics mismatch")
     # FormulaRegistry is the trusted function catalog.  Document text can
     # attest provenance, but it cannot introduce a new expression or input
@@ -202,19 +202,13 @@ def authorize_calculation(bundle: CalculationEvidenceBundle, *, task: BusinessTa
     except (FileNotFoundError, ValueError, KeyError):
         raise ValueError("formula registry unavailable") from None
     expected_registry_inputs = {"actual", "target"} if function in {"difference", "attainment_rate"} else {"current", "previous"} if function == "growth_rate" else {"sales_amount", "order_count"} if function == "average_order_value" else {"monthly_plan"}
-    if function != "sum" and set(spec.inputs) != expected_registry_inputs:
+    if set(spec.inputs) != expected_registry_inputs:
         raise ValueError("formula registry inputs mismatch")
     if formula.locator.doc_id not in set(spec.source_refs):
         raise ValueError("formula source is not registry-authorized")
     formula_text = _document_text(formula.locator, chunks, bundle.source_mode)
     if formula_text != FORMULAS[function]:
-        labels = {
-            "difference": ('差额','本期销售额 - 上期销售额'),
-            "attainment_rate": ('达成率',),
-            "growth_rate": ('增长率','period_over_period_growth'),
-            'average_order_value':('客单价',), 'sum':('月度分解',),
-        }
-        if bundle.source_mode != "verified_business" or (formula.locator.doc_id not in set(spec.source_refs) and not any(label in chunks[formula.locator.chunk_id].text for label in labels[function])):
+        if bundle.source_mode != "verified_business" or not named_formula_matches(formula_text, function):
             raise ValueError("formula does not match approved named function")
     operands = {}
     for role, evidence in bundle.operands.items():
@@ -233,6 +227,12 @@ def authorize_calculation(bundle: CalculationEvidenceBundle, *, task: BusinessTa
                 raise ValueError("fixture SQL masquerades as a database")
             if bundle.source_mode != "fixture" and result.source.type != "database":
                 raise ValueError("invalid business SQL provenance")
+            if bundle.source_mode == 'verified_business':
+                metric_columns = {'sales_amount': {'sales_amount', 'actual_sales', 'actual_amount'},
+                    'units_sold': {'units_sold', 'actual_units', 'units', 'quantity'},
+                    'order_count': {'order_count', 'orders'}}
+                if evidence.column not in metric_columns.get(evidence.metric_id, {evidence.metric_id}):
+                    raise ValueError('SQL metric column mismatch')
             value = result.rows[evidence.row_index].get(evidence.column)
             if type(value) not in (int, float, str) or isinstance(value, str) and not re.fullmatch(r"\d+(?:\.\d{1,6})?", value):
                 raise ValueError("invalid SQL numeric representation")
@@ -254,20 +254,25 @@ def authorize_calculation(bundle: CalculationEvidenceBundle, *, task: BusinessTa
             if not re.fullmatch(r"\d+(?:\.\d{1,6})?", raw) or Decimal(raw) != evidence.value:
                 raise ValueError("document scalar span mismatch")
             if bundle.source_mode=='verified_business':
-                from ..integrations.business_calculation import quarterly_targets, monthly_plan
-                title=chunks[evidence.locator.chunk_id].title
-                stamp=re.search(r'(\d{4})Q([1-4])',title)
-                if not stamp or (int(stamp[1]),int(stamp[2])) != (task.slots.get('year'),task.slots.get('quarter')):
+                from ..integrations.business_calculation import quarterly_targets, monthly_plan, target_period_matches
+                if not target_period_matches(chunks[evidence.locator.chunk_id], task):
                     raise ValueError('target document period mismatch')
+                eligible = [chunk for chunk in rag.chunks if target_period_matches(chunk, task)]
                 if function=='sum':
-                    plans=monthly_plan(rag.chunks,scope)
+                    if metric.unit != 'USD' or task.slots.get('quarter') is None:
+                        raise ValueError('monthly sum requires a quarterly USD plan')
+                    plans=monthly_plan(eligible,scope,metric_id)
                     expected_plan={f'month_{year}_{month:02}':(chunk,value,start,end)
                         for month,value,chunk,start,end in plans for year in [task.slots['year']]}
-                    if set(bundle.operands)!=set(expected_plan):
+                    quarter_start = (task.slots['quarter'] - 1) * 3 + 1
+                    if set(bundle.operands)!=set(expected_plan) or {month for month, *_ in plans} != set(range(quarter_start, quarter_start + 3)):
                         raise ValueError('monthly plan coverage mismatch')
                     bound=expected_plan[role]
+                elif task.slots.get('month') is not None:
+                    bound=next(((chunk,value,start,end) for month,value,chunk,start,end in monthly_plan(eligible,scope,metric_id)
+                        if month==task.slots['month']), None)
                 else:
-                    bound=quarterly_targets(rag.chunks,scope,metric_id)
+                    bound=quarterly_targets(eligible,scope,metric_id)
                 if bound is None or (bound[0].chunk_id,bound[1],bound[2],bound[3]) != (evidence.locator.chunk_id,evidence.value,evidence.locator.start,evidence.locator.end):
                     raise ValueError('document entity/metric/column mismatch')
             ref = evidence.locator.chunk_id
