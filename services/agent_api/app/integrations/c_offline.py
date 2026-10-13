@@ -173,10 +173,27 @@ class OfflineCSqlAdapter:
         if not profile.sql_backend or profile.sql_backend.model_mode not in {"offline", "live"}:
             raise ToolFailure(ApiError(code="UNSUPPORTED_CAPABILITY", message="当前 profile 没有已确认的 SQL 后端。", retryable=False))
         request = build_c_request(task, request_id=context.request_id, profile=profile)
-        raw = await self.executor.run(lambda: self._service.answer_sql(request.payload(), self._access), deadline=context.deadline)
+        from ..agent.fast_path import fast_sql_enabled, fast_sql_eligible, fast_sql_question
+
+        def answer():
+            registered = getattr(self._service, "answer_registered", None)
+            if callable(registered) and fast_sql_enabled() and fast_sql_eligible(task, profile):
+                # Keep unknown words from the original question visible to
+                # C's closed scope check; model input remains the validated
+                # normalized request used by the existing live chain.
+                fast_request = request.payload()
+                fast_request["question"] = fast_sql_question(task.question, profile)
+                raw = registered(fast_request, self._access)
+                if raw is not None:
+                    return raw, True
+            return self._service.answer_sql(request.payload(), self._access), False
+
+        raw, registered_used = await self.executor.run(answer, deadline=context.deadline)
         outcome = normalize_c_response(raw, task=task, request_id=context.request_id, profile=profile)
         if profile.sql_backend.model_mode == "live":
             outcome.limitations.append("C 配置为 live 模式；实际使用模型候选或受控修复的情况见本轮限制与工具追踪，接受的 SQL 须通过只读、表字段与参数安全校验。")
+        elif registered_used:
+            outcome.limitations.append("C 配置为 offline 模式；本轮执行已注册受控 SQL，未调用离线演示模型。")
         else:
             outcome.limitations.append("3C-1：C 离线固定三问 + 真实 Chinook 样例库；不是联网模型或完整自由问法能力。")
         if any(result.source.tables == ["main.Genre"] for result in outcome.sql_results):
