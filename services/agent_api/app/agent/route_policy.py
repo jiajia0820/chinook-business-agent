@@ -26,6 +26,14 @@ RULE_MARKERS = (
 CROSS_MARKERS = ("目标", "达标", "未达", "复盘", "计划", "活动方案", "运营建议", "运营手册", "下一步")
 OPERATION_MARKERS = ("活动方案", "运营建议", "运营手册", "下一步", "放在什么位置", "重点看", "建议")
 
+# These phrases ask how to interpret data, even when they contain “统计”,
+# “购买” or “增长”. They do not request this turn's database values.
+STRONG_RULE_MARKERS = (
+    "定义", "口径", "怎么计算", "如何计算", "怎么处理", "如何处理", "应该怎么",
+    "一个分类", "并入", "归类", "范围怎么写", "日期范围怎么写",
+    "应该和", "应和", "应该与", "比较方法", "分析方法",
+)
+
 
 def classify_question(question: str, metrics: list[str] | None = None) -> tuple[str, str, list[str]]:
     """Return ``(task_type, route, requested_outputs)`` for one question."""
@@ -40,6 +48,19 @@ def classify_question(question: str, metrics: list[str] | None = None) -> tuple[
     has_rule = any(marker in q for marker in RULE_MARKERS)
     has_target_or_operation = any(marker in q for marker in CROSS_MARKERS)
     has_operation = any(marker in q for marker in OPERATION_MARKERS)
+
+    asks_actual_value = any(marker in q for marker in (
+        "实际", "数据库", "查数", "销售额是多少", "销量是多少", "订单数是多少",
+        "客户数是多少", "增长了多少", "核验", "核对数据库",
+    ))
+    if ("目标" in q and any(marker in q for marker in ("完成了吗", "完成了没", "完成情况")) and not metrics and not asks_actual_value):
+        return "document_rule", "rag", ["rule"]
+    if any(marker in q for marker in ("主题活动", "活动里", "活动中")) and any(marker in q for marker in ("安排", "位置")) and not asks_actual_value:
+        return "document_rule", "rag", ["rule"]
+    if any(marker in q for marker in STRONG_RULE_MARKERS) and not asks_actual_value:
+        return "document_rule", "rag", ["rule"]
+    if "复盘" in q and not asks_actual_value:
+        return "document_rule", "rag", ["rule"]
 
     # Cross-source wins when the question explicitly combines an actual value
     # with a target, review, or operating action.

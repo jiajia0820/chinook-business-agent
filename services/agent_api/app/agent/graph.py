@@ -7,6 +7,7 @@ import os
 import re
 import uuid
 import time
+import asyncio
 from typing import Literal
 
 from langgraph.checkpoint.memory import InMemorySaver
@@ -179,6 +180,8 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
     if response_composer is not None and response_composer.execution_mode != execution_mode:
         raise ValueError("composer source strategy must match the server execution mode")
     compose_node = "compose_response" if response_composer is not None else "compose_test_response"
+    fast_knowledge = bool(response_composer and getattr(response_composer, 'policy', None)
+                          and response_composer.policy.allow_business_calculation)
     source_banner = {
         "fixture": "3B 受控工具替身验证；结果不代表真实数据库、文档检索、模型或计算器输出。",
         "offline_sql_integration": "3C-1：固定离线模型 + 真实 Chinook 样例 SQL；未接 RAG、计算器或联网模型。",
@@ -302,6 +305,13 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
         task = ParsedTurn.model_validate(state["parsed"]).task
         if state["route"] == "general":
             return compose_node
+        if (fast_knowledge and os.getenv('AGENT_CROSS_PARALLEL', '1') == '1' and state['route'] == 'cross_source'
+                and task.intent not in WORKFLOWS
+                and not task.slots.get('business_workflow')
+                and 'ranking' not in task.required_outputs
+                and 'monthly_actuals' not in task.required_outputs
+                and not (task.subtask_plan and task.subtask_plan[0]['kind'] == 'rag')):
+            return 'parallel_sources'
         if task.intent in WORKFLOWS or (task.subtask_plan and task.subtask_plan[0]["kind"] == "rag"):
             return "rag"
         return "sql" if state["route"] in ("sql", "cross_source") else "rag"
@@ -377,6 +387,11 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
     async def call_rag(state: AgentState):
         task = ParsedTurn.model_validate(state["parsed"]).task
         request = AskRequest.model_validate(state["request"])
+        if (fast_knowledge and profiles.get(state['profile_id']).orchestration_policy == 'c_v1'
+                and os.getenv('AGENT_FAST_RAG', '1').casefold() not in {'0', 'false', 'off', 'no'}
+                and task.intent not in WORKFLOWS
+                and not {'customer_tiers', 'transaction_exists'} & set(task.required_outputs)):
+            return await bounded_rag(state, task, request)
         if profiles.get(state["profile_id"]).orchestration_policy == "c_v1":
             from .task_plan import retrieval_specs, retrieval_task_from_sql, retry_query
             from ..knowledge.facts import FACTS, fact_matches, coverage
@@ -477,6 +492,117 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
         outcome = await runtime.run("rag.retrieve", payload, context(state))
         return tool_update(state, "rag", outcome, "retrieval_outcome", list(outcome.source_refs))
 
+    async def bounded_rag(state, task, request):
+        """Restore one-shot retrieval; repair only missing core content once."""
+        from ..knowledge.source_plan import rag_source_plan
+        from ..response.fast_renderer import core_content_missing
+        from ..knowledge.facts import coverage
+        sql, _ = _models(state)
+        from .task_plan import retrieval_task_from_sql
+        task = retrieval_task_from_sql(task, sql, profiles.get(state['profile_id']))
+        question = task.retrieval_question or task.original_question
+        source_plan = rag_source_plan(question)
+        primary = list(source_plan.primary_docs)
+        filters = {'slots': task.slots, 'business_metric_ids': task.business_metric_ids,
+                   'query_terms': source_plan.query_terms}
+        if primary:
+            filters['required_sources'] = primary
+            filters['preferred_doc'] = primary[0]
+        only_sources = bool(source_plan.required_docs) and any(w in question for w in ('仅依据', '只依据', '仅使用', '只使用'))
+        if only_sources and len(source_plan.required_docs) == 1:
+            filters['doc_id'] = source_plan.required_docs[0]
+        function = {'target_attainment':'attainment_rate', 'target_difference':'difference',
+                    'growth_rate':'growth_rate', 'average_order_value':'average_order_value', 'document_sum':'sum'}.get(task.intent)
+        if task.needs_calculation and function:
+            primary = ['D06'] if function in {'attainment_rate', 'difference', 'sum'} else ['D01', 'D02']
+            terms = {'attainment_rate':'目标明细 Genre 达成率', 'difference':'目标明细 Genre 销售额差额',
+                     'growth_rate':'增长率 period_over_period_growth 本期 上期',
+                     'average_order_value':'客单价 销售额 订单数', 'sum':'月度分解 7月金额 8月金额 9月金额'}[function]
+            filters.update(required_sources=primary, preferred_doc=primary[0],
+                           query_terms=list(dict.fromkeys([terms, *source_plan.query_terms])))
+            if not only_sources and function != 'sum':
+                support = [doc for doc in source_plan.required_docs if doc in {'D02', 'D07', 'D08', 'D09', 'D10', 'D11'}]
+                if function in {'attainment_rate', 'difference'}:
+                    review = {2:'D07', 3:'D08'}.get(task.slots.get('quarter'))
+                    if review:
+                        support.append(review)
+                if function == 'growth_rate' and any(word in question for word in ('第二季度', '二季度', 'Q2', '第三季度', '三季度', 'Q3')):
+                    support.extend(('D07', 'D08'))
+                filters['required_sources'] = list(dict.fromkeys([*primary, *support]))
+        payload = RetrievalRequest(retrieval_id='retrieval-'+str(uuid.uuid4()), profile_id=state['profile_id'],
+                                   query=question, filters=filters, top_k=request.options.top_k)
+        outcome = await runtime.run('rag.retrieve', payload, context(state))
+        current = {**state, **tool_update(state, 'rag', outcome, 'retrieval_outcome', list(outcome.source_refs))}
+        recorded = [_snapshot(outcome)]
+        chunks = list(outcome.data.chunks) if outcome.succeeded else []
+        if only_sources:
+            chunks = [c for c in chunks if c.doc_id in source_plan.required_docs]
+        missing_docs = [d for d in primary if not any(c.doc_id == d for c in chunks)]
+        missing_secondary = [d for d in source_plan.secondary_docs if not any(c.doc_id == d for c in chunks)] if not only_sources else []
+        missing_content = core_content_missing(task.original_question, chunks) if task.route == 'rag' and not task.needs_calculation else []
+        missing_formula = False
+        if function and task.needs_calculation:
+            from ..evidence.cross_source_bundle import _formula_chunk
+            from ..evidence.formulas import FormulaRegistry
+            required_functions = ['attainment_rate', 'difference'] if function in {'attainment_rate', 'difference'} else [function]
+            registry = FormulaRegistry.from_profile('chinook')
+            missing_formula = any(_formula_chunk(chunks, item, registry) is None for item in required_functions)
+        if outcome.succeeded and (missing_docs or missing_content or missing_formula or missing_secondary):
+            repair_filters = dict(filters)
+            if missing_docs:
+                repair_filters['required_sources'] = missing_docs
+                repair_filters['preferred_doc'] = missing_docs[0]
+            elif missing_formula and function in {'difference', 'attainment_rate'}:
+                repair_filters.update(doc_id='D06', fact_role='target_formula', required_sources=['D06'])
+            elif missing_secondary and not missing_content and not missing_formula:
+                repair_filters.update(required_sources=missing_secondary, preferred_doc=missing_secondary[0])
+            repair_query = ' '.join(filters['query_terms']) + ' ' + question
+            repair = await runtime.run('rag.retrieve', payload.model_copy(update={
+                'retrieval_id':'retrieval-'+str(uuid.uuid4()), 'query':repair_query, 'filters':repair_filters}), context(current))
+            recorded.append(_snapshot(repair))
+            current['events'] = [*current['events'], *(e.model_dump(mode='json') for e in repair.events)]
+            if repair.succeeded:
+                chunks.extend(c for c in repair.data.chunks if not only_sources or c.doc_id in source_plan.required_docs)
+                current['evidence_refs'] = list(dict.fromkeys([*current['evidence_refs'], *repair.source_refs]))
+            else:
+                current['limitations'] = [*current['limitations'], '补充文档检索未完成；已保留首次检索的有效来源。']
+        unique = {}
+        for chunk in chunks:
+            unique.setdefault(chunk.chunk_id, chunk)
+        if outcome.succeeded:
+            merged = outcome.data.model_copy(update={'chunks': [c.model_copy(update={'retrieval_id':outcome.data.retrieval_id}) for c in unique.values()]})
+            current['retrieval_outcome'] = {'status':'success', 'data':merged.model_dump(mode='json'), 'error':None}
+        parsed = ParsedTurn.model_validate(state['parsed'])
+        parsed.task.evidence_coverage = coverage(task, list(unique.values()))
+        parsed.task.entities = task.entities
+        if only_sources:
+            for item in recorded:
+                if item.get('data'):
+                    item['data']['chunks'] = [c for c in item['data']['chunks'] if c['doc_id'] in source_plan.required_docs]
+        return {**current, 'parsed':parsed.model_dump(mode='json'), 'retrieval_outcomes':recorded}
+
+    async def parallel_sources(state):
+        """Independent sources share a deadline; merge events only at the join."""
+        sql_update, rag_update = await asyncio.gather(call_sql(dict(state)), call_rag(dict(state)))
+        merged = {**state, **sql_update, **rag_update}
+        merged['sql_outcome'] = sql_update.get('sql_outcome')
+        event_count = len(state.get('events', []))
+        merged['events'] = [*state.get('events', []), *sql_update.get('events', [])[event_count:],
+                            *rag_update.get('events', [])[event_count:]]
+        merged['evidence_refs'] = list(dict.fromkeys([*sql_update.get('evidence_refs', []), *rag_update.get('evidence_refs', [])]))
+        merged['limitations'] = list(dict.fromkeys([*sql_update.get('limitations', []), *rag_update.get('limitations', [])]))
+        merged['node_path'] = [*state.get('node_path', []), 'parallel_sql_rag']
+        for update in (sql_update, rag_update):
+            if update.get('status') not in {'ready', None}:
+                merged['status'], merged['error'], merged['route'] = update['status'], update.get('error'), update.get('route', state['route'])
+                break
+        return merged
+
+    def after_parallel(state):
+        if state['status'] != 'ready':
+            return 'evidence_check'
+        return 'calculate' if 'calculator.calculate' in state['tool_plan'] else 'evidence_check'
+
     def tool_update(state, node, outcome, channel, refs):
         status, route, error = state["status"], state["route"], None
         if not outcome.succeeded:
@@ -569,15 +695,20 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
         current, records, calculations = dict(state), [], []
         binding_failures = []
         missing_context_roles = []
-        functions = ["growth_rate"] if task.intent == "growth_rate" else ["attainment_rate"]
-        if "difference" in task.required_outputs or task.intent == "target_difference":
+        named = {'growth_rate': 'growth_rate', 'average_order_value': 'average_order_value',
+                 'document_sum': 'sum', 'period_difference': 'difference'}
+        functions = [named.get(task.intent, 'attainment_rate')]
+        if task.intent == 'growth_rate' and 'difference' in task.required_outputs:
+            functions.append('difference')
+        if task.intent not in named and ("difference" in task.required_outputs or task.intent == "target_difference"):
             functions.append("difference")
         months = [(task.slots["quarter"] - 1) * 3 + i for i in (1, 2, 3)] if "monthly_actuals" in task.required_outputs else [None]
         for metric in task.business_metric_ids:
             for month, function in [(m, f) for m in months for f in functions]:
                 child = task.model_copy(deep=True)
                 child.business_metric_ids = [metric]
-                child.intent = {"growth_rate": "growth_rate", "attainment_rate": "target_attainment", "difference": "target_difference"}[function]
+                child.intent = ('period_difference' if task.intent == 'growth_rate' and function == 'difference'
+                                else task.intent if task.intent in named else {"attainment_rate": "target_attainment", "difference": "target_difference"}[function])
                 if month:
                     from datetime import date
                     from ..contracts import TimeRange
@@ -645,13 +776,20 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
                 gaps.append("文档检索没有返回可定位的片段")
             if state.get("retrieval_outcomes"):
                 from .task_plan import document_needs
+                from ..knowledge.source_plan import rag_source_plan
                 task = ParsedTurn.model_validate(state["parsed"]).task
-                required_docs = {d for d in document_needs(task) if d}
+                soft = fast_knowledge and os.getenv('AGENT_FAST_RAG', '1').casefold() not in {'0', 'false', 'off', 'no'}
+                source_plan = rag_source_plan(task.retrieval_question or task.original_question)
+                required_docs = set(source_plan.primary_docs) if soft else {d for d in document_needs(task) if d}
+                if soft and task.needs_calculation:
+                    # Operand/formula coverage is proved by the calculator
+                    # authorization, rather than optional review doc ids.
+                    required_docs = set()
                 present = {c["doc_id"] for outcome in state["retrieval_outcomes"] if outcome["data"] for c in outcome["data"]["chunks"]}
                 if not required_docs <= present:
                     status = "insufficient_evidence"
                     gaps.append("缺少必要文档：" + "、".join(sorted(required_docs - present)))
-                if any(not item["complete"] for item in task.evidence_coverage):
+                if not soft and any(not item["complete"] for item in task.evidence_coverage):
                     status = "insufficient_evidence"
                     gaps.append("本轮证据只覆盖了部分问题条件")
             if "calculator.calculate" in state["tool_plan"] and not state["calculations"]:
@@ -660,7 +798,7 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
             task = ParsedTurn.model_validate(state["parsed"]).task
             from .cross_templates import completed
             chunks = [DocumentChunk.model_validate(c) for r in state.get("retrieval_outcomes", []) if r["data"] for c in r["data"]["chunks"]]
-            blocked = set(task.required_outputs) & {"document_sum"}
+            blocked = (set(task.required_outputs) & {"document_sum"}) if not state['calculations'] else set()
             if {"customer_tiers", "monthly_actuals", "transaction_exists"} & set(task.required_outputs) and not completed(task, sql, chunks):
                 blocked.update(set(task.required_outputs) & {"customer_tiers", "monthly_actuals", "transaction_exists"})
             if blocked:
@@ -757,6 +895,7 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
         ("initialize_turn", initialize), ("parse_question", parse), ("semantic_route", semantic_route),
         ("validate_slots_and_capabilities", validate), ("sql", call_sql),
         ("rag", call_rag), ("calculate", calculate),
+        ('parallel_sources', parallel_sources),
         ('prepare_business',prepare_business),
         ("evidence_check", evidence_check), (compose_node, compose),
     ]:
@@ -765,7 +904,8 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
     builder.add_edge("initialize_turn", "parse_question")
     builder.add_edge("parse_question", "semantic_route")
     builder.add_edge("semantic_route", "validate_slots_and_capabilities")
-    builder.add_conditional_edges("validate_slots_and_capabilities", start_route, ["sql", "rag", compose_node])
+    builder.add_conditional_edges("validate_slots_and_capabilities", start_route, ["sql", "rag", 'parallel_sources', compose_node])
+    builder.add_conditional_edges('parallel_sources', after_parallel, ['calculate', 'evidence_check'])
     builder.add_conditional_edges("sql", after_sql, ["rag", "calculate", "evidence_check"])
     builder.add_conditional_edges("rag", after_rag, ["sql", "calculate", "evidence_check", "prepare_business"])
     builder.add_conditional_edges("prepare_business", after_business_plan, ["sql", "evidence_check"])

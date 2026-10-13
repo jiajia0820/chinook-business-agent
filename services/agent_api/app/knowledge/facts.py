@@ -24,7 +24,7 @@ FACTS = {
 def answer_obligations(question):
     q = question.replace(" ", "")
     roles = []
-    if any(w in q for w in ("客户如何分层", "客户怎么分层", "客户分层", "A、B、C", "属于A层", "各层级阈值")):
+    if any(w in q for w in ("客户如何分层", "客户怎么分层", "客户分层", "属于A层")) or ("客户" in q and any(w in q for w in ("A、B、C", "各层级阈值"))):
         roles.append("customer_thresholds")
     if "维护" in q and any(w in q for w in ("A层", "客户", "分层")):
         roles.append("customer_maintenance")
@@ -36,7 +36,7 @@ def answer_obligations(question):
         roles += ["activity_period", "poster_activity_period"]
     if "Metal" in question and any(w in q for w in ("位置", "安排在哪", "放在哪")):
         roles.append("activity_position")
-    if "选品" in q and any(w in q for w in ("成交", "主页面", "候选")):
+    if "选品" in q and any(w in q for w in ("成交", "主页面", "候选")) and not re.search(r'A[、/,]B[、/,]C[、/,]D', q, re.I):
         roles.append("candidate_tracks")
     if "主页面" in q:
         roles.append("primary_page_rule")
@@ -44,8 +44,7 @@ def answer_obligations(question):
         roles.append("customer_upgrade")
     if "每月" in q and "计划" in q and any(w in q for w in ("实际", "查数", "数据库")):
         roles += ["monthly_plan", "target_formula"]
-        if "D08" in q or "复盘" in q:
-            roles.append("reported_monthly_actual")
+        roles.append("reported_monthly_actual")
     return list(dict.fromkeys(roles))
 
 

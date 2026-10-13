@@ -19,6 +19,7 @@ from ..tools.models import CalculationRequest
 from .models import ComposeContext, ExecutionMode, normalize_answer_contract
 from .document_answer import draft_answer, comparison, poster, model_messages, validate_model_answer
 from .general_answer import general_model_messages, validate_general_answer
+from .fast_renderer import fast_rag_enabled, local_answer, core_content_missing
 
 
 logger = logging.getLogger("agent_api.response")
@@ -215,10 +216,17 @@ class FormalResponseComposer:
             self._verify_sources(context)
         except SourceMismatch:
             return context
-        question, documents = context.task.normalized_question, context.rag.chunks
-        answer = comparison(question, documents) or poster(question, documents)
+        question, documents = context.task.normalized_question, self._documents(context)
+        answer = local_answer(question, documents) if fast_rag_enabled() else comparison(question, documents) or poster(question, documents)
         limits = list(context.limitations)
-        if answer is None and self.answer_model is not None and self.executor is not None:
+        if fast_rag_enabled():
+            from ..knowledge.source_plan import rag_source_plan
+            plan = rag_source_plan(question)
+            missing_secondary = set(plan.secondary_docs + plan.context_docs) - {chunk.doc_id for chunk in documents}
+            if missing_secondary:
+                limits.append("补充解释来源尚缺：" + "、".join(sorted(missing_secondary)) + "；已保留主要资料支持的结论。")
+        missing_core = core_content_missing(question, documents) if fast_rag_enabled() else []
+        if answer is None and not missing_core and self.answer_model is not None and self.executor is not None:
             deadline = time.monotonic() + MODEL_ANSWER_SECONDS
             def generate():
                 payload = self.answer_model.generate_json(model_messages(question, documents), {"type": "object"}, deadline)
@@ -232,7 +240,7 @@ class FormalResponseComposer:
                 note = f"文档合成模型输出被拒（{rejection_reason(exc)}），已降级为证据摘录作答。"
                 limits.append(note)
                 logger.warning("%s", note)
-        answer = answer or draft_answer(question, documents)
+        answer = answer or (local_answer(question, documents) if fast_rag_enabled() else draft_answer(question, documents))
         if answer is None:
             return replace(context, status="insufficient_evidence", parser_reason=None,
                            limitations=(*limits, "现有文档片段未覆盖问题所需事实。"))
@@ -298,6 +306,8 @@ class FormalResponseComposer:
             raise SourceMismatch()  # Real business calculation is not installed.
 
     def _sql_answer(self, context):
+        if context.sql and any('SQL 快路径' in note for note in context.sql.limitations):
+            return self._generic_sql_answer(context)
         task, sql = context.task, context.sql
         key = question_key(task.normalized_question)
         fixed_shape = False
@@ -365,7 +375,7 @@ class FormalResponseComposer:
                     lead += "\n用户前提尚未核验：" + "；".join(context.task.assumptions)
                 return lead + "\n" + "\n\n".join(f"{c.text}\n来源：{c.doc_id} {c.source_uri}" for c in selected)
         if self.policy.allow_business_calculation:
-            answer = context.document_answer or draft_answer(context.task.normalized_question, documents)
+            answer = context.document_answer or (local_answer(context.task.normalized_question, documents) if fast_rag_enabled() else draft_answer(context.task.normalized_question, documents))
             if answer is None:
                 raise EvidenceGap()
             return answer
@@ -398,7 +408,7 @@ class FormalResponseComposer:
         if not context.rag or not context.rag.chunks or not context.task or context.task.intent in WORKFLOWS:
             return None
         documents = self._documents(context)
-        answer = context.document_answer or draft_answer(context.task.original_question, documents)
+        answer = context.document_answer or (local_answer(context.task.original_question, documents) if fast_rag_enabled() else draft_answer(context.task.original_question, documents))
         if not answer:
             return None
         return "已确认部分：\n" + answer + "\n\n完整结论暂不能确认：本轮文档覆盖不完整，请补充或核对缺少的资料。"
@@ -442,11 +452,13 @@ class FormalResponseComposer:
                 child = BusinessTask.model_validate(record["task"])
                 binding = CalculationRequest.model_validate(record["binding"])
                 # Reuse every old numeric/source/authorization check per item.
-                selected_rag = next((r for r in context.retrievals if r.retrieval_id == record.get("retrieval_id")), context.rag)
+                selected_rag = context.rag
                 blocks.append(self._calculation_answer(replace(context, task=child, rag=selected_rag, calculations=(calc,), binding=binding, binding_audit=record["audit"], calculation_records=())))
                 if binding.function == "attainment_rate":
                     actual, target = binding.operands["actual"].value, binding.operands["target"].value
                     verdicts.append(f"{child.business_metric_ids[0]}：{'达标' if actual >= target else '未达标'}（以未提前四舍五入的实际值判定）。")
+            if context.task.intent == 'growth_rate' and any(chunk.doc_id == 'D02' for chunk in self._documents(context)):
+                verdicts.append('D02解读：增长率用于比较本期与基期，目标达成率用于比较实际与目标，两种判断需要分开说明，不能用增长替代达标结论。')
             return "\n\n".join([*blocks, *verdicts, self._generic_document_answer(context)])
         if not context.sql or not self._documents(context):
             raise EvidenceGap()
@@ -637,6 +649,22 @@ class FormalResponseComposer:
         return f"D12 原文：“{quote}”\n来源：{chunk.doc_id} {version}；{chunk.section}；{chunk.chunk_id}；{chunk.source_uri}。\n仅解释该条文档规则，不代表已查询销售或购买客户数，也不形成目标达成结论。"
 
     def _calculation_answer(self, context):
+        if context.calculation_records:
+            if len(context.calculation_records) != len(context.calculations):
+                raise EvidenceGap()
+            from ..agent.state import BusinessTask
+            parts = []
+            for record, calc in zip(context.calculation_records, context.calculations):
+                binding = CalculationRequest.model_validate(record['binding'])
+                if binding.calculation_id != calc.calculation_id:
+                    raise EvidenceGap()
+                parts.append(self._calculation_answer(replace(context,
+                    task=BusinessTask.model_validate(record['task']),
+                    calculations=(calc,), binding=binding, binding_audit=record['audit'],
+                    calculation_records=(), calculation_audits=())))
+            if context.task.intent == 'growth_rate' and any(chunk.doc_id == 'D02' for chunk in self._documents(context)):
+                parts.append('D02解读：增长率用于比较本期与基期，目标达成率用于比较实际与目标，两种判断需要分开说明，不能用增长替代达标结论。')
+            return '\n\n'.join([*parts, *self._monthly_source_conflicts(context)])
         if context.calculation_audits:
             if len(context.calculation_audits)!=len(context.calculations):
                 raise EvidenceGap()
@@ -706,6 +734,34 @@ class FormalResponseComposer:
         return "\n".join([lead, *rows, scope_text, f"命名函数 {request.function}；公式 {calc.formula}；公式来源 {request.formula_ref}（{bundle.formula.locator.version}）。",
             f"{result_prefix}{function}：{calc.result:.2f}{'' if calc.unit == '%' else ' '}{calc.unit}；Decimal 计算，ROUND_HALF_UP 保留两位小数。", *contextual, f"计算来源：{calc.calculation_id}。{conclusion}"])
 
+    def _monthly_source_conflicts(self, context):
+        """Compare reported facts without replacing authorized SQL operands."""
+        if not context.task or 'monthly_actuals' not in context.task.required_outputs or not context.sql:
+            return []
+        from ..evidence.binding import task_scope
+        from ..integrations.business_calculation import target_period_matches
+        scope = task_scope(context.task)
+        if scope.genre_ids or scope.country_ids or scope.media_ids != context.profile.default_media_ids:
+            return []
+        monthly = {row['month']: Decimal(str(row['sales_amount']))
+                   for result in context.sql.sql_results for row in result.rows
+                   if isinstance(row.get('month'), str) and type(row.get('sales_amount')) in (int, float)}
+        notes = []
+        for chunk in self._documents(context):
+            if chunk.doc_id != 'D08' or not target_period_matches(chunk, context.task):
+                continue
+            claims = [(f'{m[1]}-{int(m[2]):02}', Decimal(m[3]))
+                      for m in re.finditer(r'(?m)^(\d{4})年(\d{1,2})月\s*\n\s*(\d+\.\d+)', chunk.text)]
+            claims += [(f"{context.task.slots['year']}-{int(m[1]):02}", Decimal(m[2]))
+                       for m in re.finditer(r'([1-9]|1[0-2])月(?:音频)?销售额\s*(\d+\.\d{2})美元', chunk.text)]
+            for key, claim in claims:
+                if key in monthly and claim != monthly[key]:
+                    notes.append(f'来源冲突：{key}，数据库实际 {monthly[key]} USD，D08报告实际 {claim} USD。'
+                                 f'两者为同期间全部音频销售额；保留文档原值供核对，未平均或覆盖数据库计算输入。来源：{chunk.source_uri}。')
+        if notes:
+            notes.append('数据库本轮季度合计 ' + str(sum(monthly.values())) + ' USD；月度来源冲突须连同报告季度合计核对。')
+        return list(dict.fromkeys(notes))
+
     def compose(self, context: ComposeContext) -> AskResponse:
         status, answer, error = context.status, None, context.error
         banner = self.source_banner
@@ -713,7 +769,9 @@ class FormalResponseComposer:
             if context.route == "general":
                 banner = '来源：通用大模型知识回答；本轮未调用本地业务数据库或业务文档。'
             elif context.sql and context.sql.sql_results:
-                if any('受控业务查询' in text for text in context.sql.limitations):
+                if any('SQL 快路径' in text for text in context.sql.limitations):
+                    banner = '来源：真实 Chinook 样例库；已注册参数化 SQL 经 C 只读安全校验执行，本轮未调用模型。'
+                elif any('受控业务查询' in text for text in context.sql.limitations):
                     banner='来源：真实 Chinook 样例库 + 文档证据驱动的服务端受控业务查询；本业务步骤未调用模型。'
                 elif any('受控查询' in text for text in context.sql.limitations):
                     banner = '来源：真实 Chinook 样例库 + 受控查询计划；模型失败或候选语义不完整时已修复，详见限制与追踪。'

@@ -210,9 +210,9 @@ def semantic_task(question, profile):
     metric_explicit = bool(metrics) or ("销售" in question and "增长" in question)
     q = question
     doc_terms = ("口径", "定义", "怎么计算", "如何计算", "规则", "手册", "方案", "海报", "复盘", "建议", "解读", "选品", "分层", "维护", "对应", "归类", "分类表", "Genre", "MediaType", "报名", "阈值", "一个分类", "分开", "并入", "范围差异", "范围怎么写", "核心结果", "包括哪些", "包含哪些", "按哪个分类", "媒体格式", "活动什么时候", "提交材料", "截止")
-    document = _contains(q, doc_terms) or bool(re.search(r"(?<![A-Za-z0-9])D(?:0[1-9]|1[0-2])(?![A-Za-z0-9])", q, re.I))
+    document = _contains(q, (*doc_terms, "运营", "主题活动")) or bool(re.search(r"(?<![A-Za-z0-9])D(?:0[1-9]|1[0-2])(?![A-Za-z0-9])", q, re.I))
     target = _contains(q, ("目标", "达标", "达成", "完成了多少"))
-    compare = _contains(q, ("差多少", "差额", "距离", "达标", "达到目标", "和目标比", "是否都", "完成了多少", "完成了吗"))
+    compare = _contains(q, ("差多少", "差额", "距离", "达标", "未达目标", "达到目标", "和目标比", "是否都", "完成了多少", "完成了吗"))
     growth = _contains(q, ("增长", "环比", "同比"))
     plan_only = "计划" in q and not _contains(q, ("实际", "数据库", "查数"))
     ranking = _contains(q, ("最高", "排名", "Top", "前五", "前三"))
@@ -230,7 +230,8 @@ def semantic_task(question, profile):
     if growth and not document:
         query = True
     report_only = ("复盘" in q or bool(re.search(r"D0[78]", q))) and not _contains(q, ("数据库", "查数", "核验", "核对数据库")) and not ("每月" in q and "实际" in q)
-    premise_only = _contains(q, ("放在什么位置", "安排在哪里", "什么位置")) and _contains(q, ("活动", "方案")) and not _contains(q, ("核验", "实际", "差额", "差多少"))
+    premise_only = (_contains(q, ("放在什么位置", "安排在哪里", "什么位置")) and _contains(q, ("活动", "方案"))
+                    and not target and not _contains(q, ("核验", "实际", "差额", "差多少", "未达目标")))
     if report_only or premise_only:
         document, query = True, False
     if plan_only:
@@ -261,6 +262,8 @@ def semantic_task(question, profile):
         metrics = list(dict.fromkeys(["media_type_sales", *metrics]))
     if calc and not metrics:
         metrics = ["sales_amount"]
+    if target and "距离目标" in q and "建议观察" in q and metrics == ["sales_amount"]:
+        metrics.append("units_sold")
     if query and "是否有成交" in q:
         metrics = ["track_sales"]
         metric_explicit = True
@@ -291,7 +294,11 @@ def semantic_task(question, profile):
         outputs.append("ranking")
     if calc:
         outputs = ["actual", "target", "attainment_rate", "verdict"] if target else ["current", "previous", "growth_rate"]
-        if "差" in q or "距离" in q or "和目标比" in q:
+        if "差" in q or "距离" in q or "和目标比" in q or "未达目标" in q:
+            outputs.append("difference")
+        if intent == "growth_rate" and "增长了多少" in q:
+            outputs.append("difference")
+        if target and _contains(q, ("完成了多少", "完成多少")):
             outputs.append("difference")
     if document and query:
         outputs.append("document_facts")
@@ -303,6 +310,9 @@ def semantic_task(question, profile):
         outputs.append("customer_tiers")
     if plan_only and "合计" in q:
         outputs.append("document_sum")
+        intent, route, calc, metrics = 'document_sum', 'rag', True, ['sales_amount']
+    if metrics == ['average_order_value'] and not document:
+        intent, route, calc = 'average_order_value', 'cross_source', True
     if ranking and "客户" in q:
         outputs.append("customer_ranking")
     if "按支持负责人" in q:
@@ -317,6 +327,19 @@ def semantic_task(question, profile):
         required_outputs=outputs, retrieval_question=q,
         slot_provenance={key: {"source": "explicit", "confirmed": True} for key in slots if key != "media_ids"})
     task.slot_provenance["metric"] = {"source": "explicit" if metric_explicit else "unconfirmed_default", "confirmed": metric_explicit}
+    # The profile declares sales as the default for its bounded business
+    # comparison workflows. Apply it only when the requested material and
+    # complete period/entity bind that workflow; bare “增长了多少” still asks.
+    anchored_default = (not metric_explicit and bool(task.slots.get('quarter')) and
+        ((intent == 'growth_rate' and task.slots.get('comparison_period') and _contains(q, ('D02', '销售分析')))
+         or (intent in {'target_difference', 'target_attainment'} and entities and _contains(q, ('D09', 'D10', '活动方案', '运营手册', '品类手册')))))
+    if anchored_default:
+        defaults = profile.question_rules.intent_default_metric_ids.get(intent, [])
+        if defaults:
+            task.business_metric_ids = list(dict.fromkeys([*defaults, *task.business_metric_ids]))
+            task.slot_provenance['metric'] = {'source': 'profile_workflow_default', 'confirmed': True}
+            task.slots['scope'] = task.slots['data_scope'] = task.slots.get('scope', '全部音频')
+            task.assumptions.append('按当前业务工作流默认销售额及音频范围回答。')
     from ..knowledge.facts import answer_obligations
     task.answer_obligations = answer_obligations(q)
     if "monthly_actuals" in outputs:
@@ -340,8 +363,13 @@ def semantic_task(question, profile):
     # output roles when the policy has a concrete classification.
     from .route_policy import route_question
     task.question_ir = route_question(q, profile_id=profile.profile_id)
-    if task.question_ir.route == "cross_source" or (
-            task.question_ir.route == "sql" and task.question_ir.task_type == "database_fact"):
+    if task.question_ir.route == "rag" and task.question_ir.task_type == "document_rule" and (not task.needs_calculation or any(marker in q for marker in ("应该和", "怎么计算", "定义", "怎么处理", "一个分类")) or not metric_explicit and "目标" in q and "完成了吗" in q):
+        task.route, task.intent, task.needs_calculation = "rag", "document_rule", False
+        task.information_needs = ["rag"]
+        task.required_outputs = ["document_facts"]
+        task.source_roles = ["document_rule"]
+    elif task.question_ir.route == "cross_source" or (
+            task.question_ir.route == "sql" and task.question_ir.task_type == "database_fact" and not task.needs_calculation):
         task.route = task.question_ir.route
         task.required_outputs = list(dict.fromkeys([*task.required_outputs, *task.question_ir.requested_outputs]))
     from .clarification_reply import augment_task
@@ -464,7 +492,7 @@ def parse_c_v1(question, profile, memory):
     if gate is not None:
         task.semantic_status = gate.status
         task.semantic_blockers = gate.blockers
-    if gate is not None and gate.status == "answerable" and task.question_ir.task_type == "business_rule":
+    if gate is not None and gate.status == "answerable" and task.question_ir.route == "rag" and task.route == "rag" and not task.needs_calculation:
         task.intent, task.route, task.needs_calculation = "document_rule", "rag", False
         task.information_needs = ["rag"]
         task.required_outputs = ["document_facts"]
@@ -488,10 +516,13 @@ def parse_c_v1(question, profile, memory):
         task.intent, task.route, task.needs_calculation = "poster_candidates", "cross_source", False
         task.business_metric_ids = ["sales_amount"]
         task.slots.update(business_workflow="poster_candidates", track_selection=selection)
-    anchored = {"customer_segmentation", "poster_candidates", "cross_source_query", "target_attainment", "target_difference", "growth_rate"}
+    anchored = {"customer_segmentation", "poster_candidates", "cross_source_query", "target_attainment", "target_difference", "growth_rate", 'average_order_value', 'document_sum'}
     if task.intent in anchored and task.slots.get("quarter") and not task.slots.get("year"):
         task.slots["year"] = 2025
         task.slots["year_assumed"] = 2025
+    comparison = task.slots.get('comparison_period')
+    if isinstance(comparison, dict) and comparison.get('quarter') and not comparison.get('year') and task.slots.get('year'):
+        comparison['year'] = task.slots['year']
     if task.slots.get("year") and task.slots.get("quarter") and not task.time_range:
         from .parsing import _time_range
         task.time_range = _time_range(task.slots)

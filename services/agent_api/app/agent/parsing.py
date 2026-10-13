@@ -513,7 +513,9 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
                 from .query_rewrite import merge_question_ir
                 ir = merge_question_ir(previous_ir, ir)
             parsed.task.question_ir = ir
-            if ir.route == "cross_source" or (ir.route == "sql" and ir.task_type == "database_fact"):
-                parsed.task.route = ir.route
-                parsed.task.required_outputs = list(dict.fromkeys([*parsed.task.required_outputs, *ir.requested_outputs]))
+            # The semantic task has already passed profile/slot/capability
+            # gates. Attaching IR must not turn a finalized rule task into SQL.
+            ir.route = parsed.task.route
+            if parsed.task.route == "rag":
+                ir.task_type = "document_rule"
     return parsed

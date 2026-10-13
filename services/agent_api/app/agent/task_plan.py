@@ -86,6 +86,11 @@ def retrieval_requests(task, top_k):
 
 
 def retrieval_specs(task, top_k):
+    from ..response.fast_renderer import fast_rag_enabled
+    if task.route == "rag" and not task.needs_calculation and fast_rag_enabled():
+        # One whole-question recall. Graph supplies primary source preference
+        # and, if core content is missing, at most one focused repair.
+        return [(None, task.retrieval_question or task.normalized_question, top_k, None)]
     from ..knowledge.facts import FACTS
     docs = document_needs(task)
     if not docs:
