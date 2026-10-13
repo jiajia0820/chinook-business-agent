@@ -214,7 +214,7 @@ def authorize_calculation(bundle: CalculationEvidenceBundle, *, task: BusinessTa
             "growth_rate": ('增长率','period_over_period_growth'),
             'average_order_value':('客单价',), 'sum':('月度分解',),
         }
-        if bundle.source_mode != "verified_business" or not any(label in chunks[formula.locator.chunk_id].text for label in labels[function]):
+        if bundle.source_mode != "verified_business" or (formula.locator.doc_id not in set(spec.source_refs) and not any(label in chunks[formula.locator.chunk_id].text for label in labels[function])):
             raise ValueError("formula does not match approved named function")
     operands = {}
     for role, evidence in bundle.operands.items():
