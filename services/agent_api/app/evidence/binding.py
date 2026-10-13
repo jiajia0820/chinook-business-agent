@@ -74,6 +74,26 @@ def text_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def tampered_chunks(chunks, snapshots) -> list:
+    """Return the chunks that drifted from the server's trusted document snapshot.
+
+    ``snapshots`` is captured by a trusted server factory at startup, so it is the
+    only authoritative copy of a chunk's text.  A ``DocumentLocator.content_sha256``
+    derived from the returned chunk is self-referential and cannot detect tampering;
+    this comparison can.  An empty snapshot set means the deployment ships no
+    authoritative copy, so nothing is reported instead of rejecting every fixture turn.
+    """
+    if not snapshots:
+        return []
+    trusted = {item.chunk_id: item for item in snapshots}
+    drifted = []
+    for chunk in chunks:
+        known = trusted.get(chunk.chunk_id)
+        if known is None or (chunk.doc_id, chunk.text, chunk.source_uri) != (known.doc_id, known.text, known.source_uri):
+            drifted.append(chunk)
+    return drifted
+
+
 def result_hash(result: SqlQueryResponse) -> str:
     value = json.dumps(result.model_dump(mode="json"), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return text_hash(value)

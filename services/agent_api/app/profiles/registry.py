@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from collections.abc import Iterable
 
 from .models import BusinessProfile
+
+_DEFAULTS_LOCK = threading.RLock()
+_DEFAULTS_REGISTRY: "ProfileRegistry | None" = None
 
 
 def _unique_pairs(pairs: list[tuple[str, object]]) -> dict:
@@ -60,7 +64,14 @@ class ProfileRegistry:
 
     @classmethod
     def defaults(cls) -> ProfileRegistry:
-        return cls.from_directory(Path(__file__).parent / "configs")
+        # Read-only server catalog: parse and validate once per process instead of
+        # on every question turn.  ``get``/``select`` already deep-copy, so sharing
+        # the snapshot cannot let a caller mutate trusted configuration.
+        global _DEFAULTS_REGISTRY
+        with _DEFAULTS_LOCK:
+            if _DEFAULTS_REGISTRY is None:
+                _DEFAULTS_REGISTRY = cls.from_directory(Path(__file__).parent / "configs")
+            return _DEFAULTS_REGISTRY
 
     @classmethod
     def stage1(cls) -> ProfileRegistry:

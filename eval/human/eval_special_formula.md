@@ -5,7 +5,7 @@
 
 ## special-formula-001
 
-问题：第三季度全音频销售额距离目标差多少，达成率是多少？
+问题：2025年第三季度全音频销售额距离目标差多少，达成率是多少？
 
 难度：medium　能力：target_gap_formula
 
@@ -21,7 +21,7 @@
 
 ## special-formula-002
 
-问题：第三季度Rock销售额距离目标差多少，达成率是多少？
+问题：2025年第三季度Rock销售额距离目标差多少，达成率是多少？
 
 难度：medium　能力：target_gap_formula
 
@@ -37,7 +37,7 @@
 
 ## special-formula-003
 
-问题：第三季度音频销售额比第二季度增长多少？
+问题：2025年第三季度音频销售额比第二季度增长多少？
 
 难度：medium　能力：growth_formula
 
@@ -53,7 +53,7 @@
 
 ## special-formula-004
 
-问题：第三季度Rock销量完成了多少？
+问题：2025年第三季度Rock销量完成了多少？
 
 难度：medium　能力：target_gap_formula
 
@@ -69,7 +69,7 @@
 
 ## special-formula-005
 
-问题：二季度音频客单价是多少？
+问题：2025年二季度音频客单价是多少？
 
 难度：easy　能力：aov_formula
 

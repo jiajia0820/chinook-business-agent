@@ -7,6 +7,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langsmith import tracing_context
 
 from ..agent.graph import CalculationBinder, build_agent_graph
+from ..agent.entity_linking import warm_catalogs
 from ..evidence.models import EvidenceResolver
 from ..agent.session import SessionLocks, session_key
 from ..contracts import AskRequest, AskResponse
@@ -21,6 +22,7 @@ class GraphAskService:
             raise ValueError("graph and runtime must use the same profile registry")
         self.profiles = profiles
         self.checkpointer = InMemorySaver()
+        warm_catalogs(profiles.ids())
         self.graph = build_agent_graph(profiles, runtime, binder=binder, evidence_resolver=evidence_resolver, response_composer=response_composer, checkpointer=self.checkpointer, execution_mode=execution_mode)
         self._locks = SessionLocks()
 

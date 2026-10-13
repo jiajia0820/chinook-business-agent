@@ -25,6 +25,33 @@ STOP_PHRASES = ("请问", "请", "帮我", "解释一下", "说明一下", "是�
 RULE_TERMS = ("口径", "定义", "规则", "怎么计算", "公式")
 RULE_EXPANSION = ("口径", "指标", "计算", "定义", "规则")
 
+# Filter keys this snapshot accepts.  The source-scoping and query-expansion
+# hints are planned against the full 12-document corpus; a hash-locked D12-only
+# deployment cannot honour them, so they are type-checked and then inert rather
+# than rejected.  `doc_id` stays authoritative because it names one document
+# explicitly, and `slots`/`business_metric_ids` keep their existing checks.
+SUPPORTED_FILTERS = frozenset({
+    "doc_id", "section", "business_metric_ids", "slots", "fact_role",
+    "required_sources", "required_roles", "preferred_doc", "answer_type",
+    "query_terms", "evidence_requirements", "dense_retrieval",
+})
+_STR_LIST_FILTERS = ("required_sources", "required_roles", "query_terms", "evidence_requirements")
+_STR_FILTERS = ("fact_role", "preferred_doc", "answer_type")
+
+
+def _validate_inert_filters(filters: dict) -> None:
+    """Reject malformed hints, but never reject a hint this snapshot cannot use."""
+    for key in _STR_LIST_FILTERS:
+        value = filters.get(key, [])
+        if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+            raise ValueError("invalid " + key)
+    for key in _STR_FILTERS:
+        value = filters.get(key)
+        if value is not None and not isinstance(value, str):
+            raise ValueError("invalid " + key)
+    if not isinstance(filters.get("dense_retrieval", False), bool):
+        raise ValueError("invalid dense_retrieval")
+
 
 class KnowledgeDocument(InternalModel):
     doc_id: str
@@ -136,8 +163,9 @@ class D12Index:
             return _error(request, "INVALID_REQUEST", "检索问题超过本阶段长度上限。")
         try:
             filters = request.filters
-            if not set(filters) <= {"doc_id", "section", "business_metric_ids", "slots"}:
+            if not set(filters) <= SUPPORTED_FILTERS:
                 raise ValueError("unknown filter")
+            _validate_inert_filters(filters)
             doc_id, section = filters.get("doc_id"), filters.get("section")
             if doc_id is not None and (not isinstance(doc_id, str) or not doc_id.strip()):
                 raise ValueError("invalid document filter")
@@ -157,7 +185,7 @@ class D12Index:
                 raise ValueError("metric hint mismatch")
             groups, residual = self._query_groups(request.query, metric_ids)
         except (ValueError, TypeError):
-            return _error(request, "INVALID_REQUEST", "检索筛选或指标提示未受支持；未忽略条件，也未验证年份、品类或目标范围。")
+            return _error(request, "INVALID_REQUEST", "检索筛选或指标提示的类型不受支持；本快照仅含 D12，跨文档来源提示不参与匹配，也未验证年份、品类或目标范围。")
         ranked = []
         for chunk in self.chunks:
             if doc_id is not None and doc_id != self.document.doc_id:

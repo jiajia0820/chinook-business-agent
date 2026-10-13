@@ -120,7 +120,7 @@ class WorkflowIntegrationTests(unittest.IsolatedAsyncioTestCase):
         return await self.service.ask(AskRequest(question=q,profile_id='chinook-music',options=options),request_id='workflow-test')
 
     async def test_actual_cohort_amounts_and_applied_rule(self):
-        r=await self.ask('第三季度购买Rock的客户，哪些属于A层重点维护？')
+        r=await self.ask('2025年第三季度购买Rock的客户，哪些属于A层重点维护？')
         self.assertEqual(r.status,'answered')
         rows=r.sql_results[0].rows
         self.assertEqual({x['CustomerId'] for x in rows if Decimal(str(x['all_audio_sales_amount']))>=12},{10,31,48})
@@ -128,7 +128,7 @@ class WorkflowIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('全部音频',r.answer)
 
     async def test_actual_candidate_intersection(self):
-        r=await self.ask('海报Rock主页面TrackId 1791–1799第三季度是否成交？')
+        r=await self.ask('海报Rock主页面TrackId 1791–1799在2025年第三季度是否成交？')
         self.assertEqual(r.status,'answered')
         self.assertEqual([x['TrackId'] for x in r.sql_results[0].rows],[1791,1793,1795,1797,1799])
         self.assertEqual({x.doc_id for x in r.documents},{'D05','D11'})
@@ -146,14 +146,14 @@ class WorkflowIntegrationTests(unittest.IsolatedAsyncioTestCase):
             def retrieve(self,request):
                 r=base.retrieve(request)
                 return r.model_copy(update={'chunks':[c for c in r.chunks if c.doc_id!=self.excluded]})
-        for excluded,q in [('D04','第三季度购买Rock的客户，哪些属于A层重点维护？'),('D05','海报Rock主页面TrackId 1791-1799第三季度是否成交？'),('D11','海报Rock主页面TrackId 1791-1799第三季度是否成交？')]:
+        for excluded,q in [('D04','2025年第三季度购买Rock的客户，哪些属于A层重点维护？'),('D05','海报Rock主页面TrackId 1791-1799在2025年第三季度是否成交？'),('D11','海报Rock主页面TrackId 1791-1799在2025年第三季度是否成交？')]:
             self.integration.rag_tool.index=Filtered(excluded)
             r=await self.ask(q)
             self.assertEqual(r.status,'insufficient_evidence',excluded)
             self.assertFalse(r.sql_results,excluded)
 
     async def test_truncation_and_wrong_rule_period_not_complete_answer(self):
-        r=await self.ask('第三季度购买Rock的客户，哪些属于A层重点维护？',max_rows=1)
+        r=await self.ask('2025年第三季度购买Rock的客户，哪些属于A层重点维护？',max_rows=1)
         self.assertEqual(r.status,'insufficient_evidence');self.assertIn('截断',r.answer)
         r=await self.ask('2025年第二季度购买Rock的客户，哪些属于A层重点维护？')
         self.assertEqual(r.status,'insufficient_evidence');self.assertIn('期间',r.answer)
@@ -161,7 +161,7 @@ class WorkflowIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_sql_failure_not_zero_sales(self):
         from backend.sql_module.errors import ModuleError
         with patch.object(self.integration.sql_tool._service.executor,'execute_sql',side_effect=ModuleError('SQL_EXECUTION_FAILED','test failure')):
-            r=await self.ask('海报Rock主页面TrackId 1791-1799第三季度是否成交？')
+            r=await self.ask('海报Rock主页面TrackId 1791-1799在2025年第三季度是否成交？')
         self.assertEqual(r.status,'error');self.assertIsNotNone(r.error)
         self.assertNotIn('零成交',r.answer)
 

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterable
+from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
@@ -29,11 +31,15 @@ def _entity_id(value: object) -> int | str:
     return int(match.group(1)) if match else text
 
 
-def _catalog_entries(profile_id: str) -> list[dict[str, object]]:
+@lru_cache(maxsize=8)
+def _catalog_entries(profile_id: str) -> tuple[dict[str, object], ...]:
     """Merge the standalone catalog with the existing profile.aliases.
 
     Existing aliases remain the compatibility source for runtime profiles;
     ``entities.json`` adds canonical English names and future profile data.
+
+    Both inputs are read-only server catalogs, so the merge is memoized: the
+    alias table must not be reparsed from disk on every question turn.
     """
     profile = None
     try:
@@ -63,7 +69,18 @@ def _catalog_entries(profile_id: str) -> list[dict[str, object]]:
                 merged["name"] = item.get("name", merged["name"])
                 merged["aliases"].extend(item.get("aliases", []))
 
-    return list(entries.values())
+    return tuple(entries.values())
+
+
+def warm_catalogs(profile_ids: Iterable[str]) -> None:
+    """Prime the memoized alias catalog so the first turn does not read from disk."""
+    for profile_id in profile_ids:
+        try:
+            _catalog_entries(profile_id)
+        except KeyError:
+            # A runtime-only profile has no shipped alias catalog.  Leave it lazy so
+            # warm-up cannot turn an existing request-time condition into a startup one.
+            continue
 
 
 def _is_exclusion(question: str, start: int) -> bool:

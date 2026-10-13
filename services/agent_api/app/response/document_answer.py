@@ -1,5 +1,6 @@
 """Question-focused document answers; raw chunks stay in the evidence panel."""
 
+from dataclasses import dataclass
 from decimal import Decimal
 import json
 import re
@@ -7,6 +8,7 @@ import unicodedata
 
 from ..contracts import DocumentChunk
 from ..knowledge.index import lexical_terms
+from ..knowledge.source_plan import rag_source_plan
 
 
 def compact(text: str) -> str:
@@ -64,7 +66,97 @@ def comparison(question, documents):
     return cited(lead + "\n\n" + "\n".join(rows), used)
 
 
+@dataclass(frozen=True)
+class GenreEntry:
+    """One row of the D03 Genre catalog: id, standard name, aliases, default relation."""
+
+    genre_id: str
+    name: str
+    aliases: tuple[str, ...]
+    relation: str
+
+    def line(self) -> str:
+        label = f"{self.name}（{'、'.join(self.aliases)}）" if self.aliases else self.name
+        relation = f"，默认关系：{self.relation}" if self.relation else ""
+        return f"{label}对应 Genre:{self.genre_id}{relation}。"
+
+
+def genre_catalog(documents):
+    """The D03 Genre catalog as rows, plus the chunk that carries the table."""
+    for chunk in documents:
+        if chunk.doc_id != "D03":
+            continue
+        lines = [re.sub(r"\s+", " ", line).strip() for line in chunk.text.splitlines()]
+        head = next((index for index, line in enumerate(lines)
+                     if compact(line).casefold().startswith("genreid") and "标准名称" in line), None)
+        if head is None:
+            continue
+        rows = []
+        for line in lines[head + 1:]:
+            cells = [cell.strip() for cell in line.split("|")]
+            if len(cells) != 4 or not cells[0].isdigit():
+                break
+            aliases = tuple(part.strip() for part in re.split(r"[、,，]", cells[2]) if part.strip())
+            rows.append(GenreEntry(cells[0], cells[1], aliases, cells[3]))
+        if rows:
+            return rows, chunk
+    return [], None
+
+
+def genre_hits(question, entries):
+    """Catalog entries the question names, ordered by where each name first appears."""
+    folded = compact(question).casefold()
+    scored = []
+    for entry in entries:
+        places = [(folded.find(compact(surface).casefold()), len(compact(surface)))
+                  for surface in (entry.name, *entry.aliases)]
+        places = [(at, length) for at, length in places if at >= 0]
+        if places:
+            at, length = min(places, key=lambda place: (place[0], -place[1]))
+            scored.append((at, -length, int(entry.genre_id), entry))
+    scored.sort()
+    return [item[3] for item in scored]
+
+
+def _related_entries(entry, entries):
+    """Entries named by this row's default relation, e.g. Rock -> Rock And Roll."""
+    folded = compact(entry.relation).casefold()
+    return [other for other in entries
+            if other.genre_id != entry.genre_id and compact(other.name).casefold() in folded]
+
+
+def _genre_mapping(question, documents, entries, hits, table):
+    """Answer an alias question with the mapped rows, not the whole catalog table."""
+    rows, seen = [], set()
+    for entry in hits:
+        for item in (entry, *_related_entries(entry, entries)):
+            if item.genre_id not in seen:
+                seen.add(item.genre_id)
+                rows.append(item)
+    lines = [entry.line() for entry in rows]
+    used = [table]
+    # A fusion question also has to answer what its other primary sources say.
+    # The source plan already knows them; a literal "D05" in the question is
+    # only a fallback for questions the plan cannot scope.
+    wanted = (set(rag_source_plan(question).primary_docs) | set(re.findall(r"D\d{2}", question))) - {"D03"}
+    others = [chunk for chunk in documents if chunk.doc_id in wanted]
+    if others:
+        surfaces = [surface for entry in rows for surface in (entry.name, *entry.aliases)]
+        sentences, sources = _extract_sentences(question, others, surfaces)
+        lines.extend(sentences)
+        used.extend(sources)
+    return cited("\n".join(lines), used)
+
+
 def classification(question, documents):
+    entries, table = genre_catalog(documents)
+    if hits := genre_hits(question, entries):
+        return _genre_mapping(question, documents, entries, hits, table)
+    return _disambiguation_prose(question, documents)
+
+
+def _disambiguation_prose(question, documents):
+    """Fallback for evidence that carries the disambiguation prose but no catalog table."""
     if not any(word in question for word in ("归类", "并入", "分类", "Genre")):
         return None
     if not any(word in question for word in ("Metal", "重金属", "Heavy Metal", "摇滚", "摇滚乐", "Rock")):
@@ -134,9 +226,15 @@ def poster(question, documents):
     return cited("\n".join(rows), used)
 
 
-def extractive_answer(question, documents):
-    """Select short relevant statements, not page headers or complete chunks."""
+def _extract_sentences(question, documents, surfaces=()):
+    """Short relevant statements plus their chunks, not page headers or whole chunks.
+
+    surfaces, when given, keeps only statements that name the entity under
+    discussion and ranks those highest. An alias answer must not drift into a
+    primary source's boilerplate just because a few question words overlap.
+    """
     terms = set(lexical_terms(question))
+    named = {compact(surface).casefold() for surface in surfaces}
     candidates = []
     for order, chunk in enumerate(documents):
         text = re.sub(r"(?<=[\u3400-\u9fffA-Za-z0-9])\n(?=[\u3400-\u9fffA-Za-z0-9])", "", chunk.text)
@@ -146,10 +244,14 @@ def extractive_answer(question, documents):
                 continue
             if any(mark in sentence for mark in ("报告编号：", "文号：", "牵头岗位：", "签发日期：")):
                 continue
-            score = sum(1 for term in terms if term in compact(sentence).casefold())
+            folded = compact(sentence).casefold()
+            score = sum(1 for term in terms if term in folded)
             if score < 2:
                 continue
-            candidates.append((score, -order, sentence, chunk))
+            mentions = sum(1 for surface in named if surface in folded)
+            if named and not mentions:
+                continue
+            candidates.append((score + 3 * mentions, -order, sentence, chunk))
     candidates.sort(key=lambda row: (-row[0], -row[1], len(row[2])))
     rows, used = [], []
     for _, _, sentence, chunk in candidates:
@@ -161,6 +263,11 @@ def extractive_answer(question, documents):
         used.append(chunk)
         if len(rows) == 3:
             break
+    return rows, used
+
+
+def extractive_answer(question, documents):
+    rows, used = _extract_sentences(question, documents)
     return cited("\n\n".join(rows), used) if rows else None
 
 

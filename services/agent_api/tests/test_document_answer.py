@@ -4,6 +4,18 @@ import unittest
 from services.agent_api.app.contracts import DocumentChunk
 from services.agent_api.app.response.document_answer import draft_answer, validate_model_answer
 
+# The real D03 catalog shape: one header line, then "id | name | aliases | relation".
+CATALOG = """GenreId | 标准名称 | 常见中文说法 | 默认关系
+1 | Rock | 摇滚 | 与Rock And Roll分开
+3 | Metal | 金属 | 与Heavy Metal分开
+5 | Rock And Roll | 摇滚乐、摇滚与摇滚乐 | 不并入Rock
+7 | Latin | 拉丁 | 独立分类
+11 | Bossa Nova | 巴萨诺瓦 | 独立分类
+13 | Heavy Metal | 重金属 | 不并入Metal
+15 | Electronica/Dance | 电子、舞曲 | 保留斜线
+23 | Alternative | 另类 | 不自动并入Alternative & Punk
+24 | Classical | 古典 | 独立分类"""
+
 
 def chunk(doc_id, text, suffix="1"):
     return DocumentChunk(doc_id=doc_id, chunk_id=f"{doc_id}-{suffix}", title=doc_id,
@@ -91,3 +103,36 @@ class DocumentAnswerTests(unittest.TestCase):
         answer = draft_answer("“摇滚乐”在分类表里通常对应什么？", docs)
         self.assertIn("Genre:1", answer)
         self.assertIn("Genre:5", answer)
+
+
+class GenreCatalogTests(unittest.TestCase):
+    """Aliases outside the two hardcoded prose sentences still need their Genre id."""
+
+    def test_every_named_alias_maps_to_its_own_catalog_id(self):
+        cases = [
+            ("Alternative这个分类在日报里通常对应哪个Genre？", "Genre:23"),
+            ("古典音乐商品通常按哪个Genre统计？", "Genre:24"),
+            ("电子/舞曲类商品在分类表里对应哪个Genre？", "Genre:15"),
+            ("日报里写“拉丁类”，和Latin的统计口径是同一个吗？", "Genre:7"),
+        ]
+        docs = [chunk("D03", CATALOG)]
+        for question, want in cases:
+            with self.subTest(question=question):
+                answer = draft_answer(question, docs)
+                self.assertIn(want, answer)
+                self.assertNotIn("Bossa Nova", answer)
+
+    def test_catalog_answer_keeps_the_sibling_boundary(self):
+        answer = draft_answer("季度目标里的Rock要不要一起算进去？", [chunk("D03", CATALOG)])
+        self.assertIn("Genre:1", answer)
+        self.assertIn("Genre:5", answer)
+
+    def test_fusion_append_keeps_only_statements_naming_the_entity(self):
+        docs = [chunk("D03", CATALOG),
+                chunk("D05", "选品清单保持数据库标准分类，中文简称和专题主题写在展示层，不在目录中改写名称。\n"
+                             "Rock未达目标时，商品清单围绕Genre:1成交商品和专辑延伸做选品。")]
+        answer = draft_answer("D03的分类边界如何影响D05的Rock选品？", docs)
+        self.assertIn("Genre:1", answer)
+        self.assertIn("Rock未达目标时", answer)
+        self.assertNotIn("展示层", answer)
+        self.assertIn("[D05]", answer)

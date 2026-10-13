@@ -230,8 +230,10 @@ def semantic_task(question, profile):
     if growth and not document:
         query = True
     report_only = ("复盘" in q or bool(re.search(r"D0[78]", q))) and not _contains(q, ("数据库", "查数", "核验", "核对数据库")) and not ("每月" in q and "实际" in q)
+    # “Metal未达目标” 是用户给定的前提，不是要求本轮重新核验的结论。
+    # 只有显式的核验/差额措辞才把这轮送回数据库。
     premise_only = (_contains(q, ("放在什么位置", "安排在哪里", "什么位置")) and _contains(q, ("活动", "方案"))
-                    and not target and not _contains(q, ("核验", "实际", "差额", "差多少", "未达目标")))
+                    and not _contains(q, ("核验", "核对数据库", "实际", "差额", "差多少", "距离目标")))
     if report_only or premise_only:
         document, query = True, False
     if plan_only:
@@ -363,13 +365,17 @@ def semantic_task(question, profile):
     # output roles when the policy has a concrete classification.
     from .route_policy import route_question
     task.question_ir = route_question(q, profile_id=profile.profile_id)
+    # 报表/前提锚定要回答的是资料里已经写好的口径，不是重新取一次数据库实际值；
+    # 分类器即使判成 cross_source，也不能把这类问题升级掉。
+    document_anchored = report_only or premise_only
     if task.question_ir.route == "rag" and task.question_ir.task_type == "document_rule" and (not task.needs_calculation or any(marker in q for marker in ("应该和", "怎么计算", "定义", "怎么处理", "一个分类")) or not metric_explicit and "目标" in q and "完成了吗" in q):
         task.route, task.intent, task.needs_calculation = "rag", "document_rule", False
         task.information_needs = ["rag"]
         task.required_outputs = ["document_facts"]
         task.source_roles = ["document_rule"]
-    elif task.question_ir.route == "cross_source" or (
-            task.question_ir.route == "sql" and task.question_ir.task_type == "database_fact" and not task.needs_calculation):
+    elif not document_anchored and (
+            task.question_ir.route == "cross_source"
+            or (task.question_ir.route == "sql" and task.question_ir.task_type == "database_fact" and not task.needs_calculation)):
         task.route = task.question_ir.route
         task.required_outputs = list(dict.fromkeys([*task.required_outputs, *task.question_ir.requested_outputs]))
     from .clarification_reply import augment_task
@@ -514,12 +520,10 @@ def parse_c_v1(question, profile, memory):
         except ValueError:
             return policy_clarify(task, ["filter_scope"])
         task.intent, task.route, task.needs_calculation = "poster_candidates", "cross_source", False
-        task.business_metric_ids = ["sales_amount"]
+        # “是否有成交” 已显式匹配到 track_sales，不能被默认销售额覆盖。
+        task.business_metric_ids = task.business_metric_ids or ["sales_amount"]
         task.slots.update(business_workflow="poster_candidates", track_selection=selection)
-    anchored = {"customer_segmentation", "poster_candidates", "cross_source_query", "target_attainment", "target_difference", "growth_rate", 'average_order_value', 'document_sum'}
-    if task.intent in anchored and task.slots.get("quarter") and not task.slots.get("year"):
-        task.slots["year"] = 2025
-        task.slots["year_assumed"] = 2025
+    # 缺年份一律走澄清：季度不足以定位年度，任何意图都不再默认锚定某一年。
     comparison = task.slots.get('comparison_period')
     if isinstance(comparison, dict) and comparison.get('quarter') and not comparison.get('year') and task.slots.get('year'):
         comparison['year'] = task.slots['year']

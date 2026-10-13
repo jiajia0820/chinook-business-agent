@@ -14,7 +14,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from ..contracts import ApiError, AskRequest, AskResponse, Calculation, DocumentChunk, Intent, RetrievalRequest, RetrievalResponse
-from ..evidence.binding import authorize_calculation
+from ..evidence.binding import authorize_calculation, tampered_chunks
 from ..evidence.models import EvidenceResolver
 from ..evidence.business_workflows import WORKFLOWS, WorkflowGap, resolve_sources, conclude
 from ..profiles import ProfileRegistry
@@ -182,6 +182,9 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
     compose_node = "compose_response" if response_composer is not None else "compose_test_response"
     fast_knowledge = bool(response_composer and getattr(response_composer, 'policy', None)
                           and response_composer.policy.allow_business_calculation)
+    # Startup snapshot of every authorized chunk; the composer's copy is only
+    # consulted when an answer is assembled, which is after the calculator ran.
+    trusted_snapshots = tuple(getattr(getattr(response_composer, "policy", None), "documents", ()) or ())
     source_banner = {
         "fixture": "3B 受控工具替身验证；结果不代表真实数据库、文档检索、模型或计算器输出。",
         "offline_sql_integration": "3C-1：固定离线模型 + 真实 Chinook 样例 SQL；未接 RAG、计算器或联网模型。",
@@ -539,6 +542,8 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
             chunks = [c for c in chunks if c.doc_id in source_plan.required_docs]
         missing_docs = [d for d in primary if not any(c.doc_id == d for c in chunks)]
         missing_secondary = [d for d in source_plan.secondary_docs if not any(c.doc_id == d for c in chunks)] if not only_sources else []
+        from ..knowledge.facts import FACTS, coverage as fact_coverage
+        missing_fact_roles = [item['role'] for item in fact_coverage(task, chunks) if not item['complete']]
         missing_content = core_content_missing(task.original_question, chunks) if task.route == 'rag' and not task.needs_calculation else []
         missing_formula = False
         if function and task.needs_calculation:
@@ -547,16 +552,33 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
             required_functions = ['attainment_rate', 'difference'] if function in {'attainment_rate', 'difference'} else [function]
             registry = FormulaRegistry.from_profile('chinook')
             missing_formula = any(_formula_chunk(chunks, item, registry) is None for item in required_functions)
-        if outcome.succeeded and (missing_docs or missing_content or missing_formula or missing_secondary):
+        plans = []
+        if outcome.succeeded and (missing_docs or missing_content or missing_formula or missing_secondary or missing_fact_roles):
             repair_filters = dict(filters)
+            covered_roles = set()
             if missing_docs:
                 repair_filters['required_sources'] = missing_docs
                 repair_filters['preferred_doc'] = missing_docs[0]
             elif missing_formula and function in {'difference', 'attainment_rate'}:
                 repair_filters.update(doc_id='D06', fact_role='target_formula', required_sources=['D06'])
+                covered_roles.add('target_formula')
+            elif missing_fact_roles:
+                role = missing_fact_roles[0]
+                doc = FACTS[role][0]
+                repair_filters.update(doc_id=doc, fact_role=role, required_sources=[doc], preferred_doc=doc)
+                covered_roles.add(role)
             elif missing_secondary and not missing_content and not missing_formula:
                 repair_filters.update(required_sources=missing_secondary, preferred_doc=missing_secondary[0])
-            repair_query = ' '.join(filters['query_terms']) + ' ' + question
+            plans.append((' '.join(filters['query_terms']) + ' ' + question, repair_filters))
+            # A single repair slot can be consumed by the formula fetch, so give an
+            # uncovered fact obligation one more targeted pass (whole turn capped at 2).
+            for role in missing_fact_roles:
+                if len(plans) >= 2 or role in covered_roles:
+                    continue
+                doc = FACTS[role][0]
+                plans.append((FACTS[role][1], dict(filters, doc_id=doc, fact_role=role,
+                                                   required_sources=[doc], preferred_doc=doc)))
+        for repair_query, repair_filters in plans:
             repair = await runtime.run('rag.retrieve', payload.model_copy(update={
                 'retrieval_id':'retrieval-'+str(uuid.uuid4()), 'query':repair_query, 'filters':repair_filters}), context(current))
             recorded.append(_snapshot(repair))
@@ -652,9 +674,26 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
             return 'evidence_check'
         return 'sql'
 
+    def _tampered_this_turn(state, rag):
+        """True when any chunk offered this turn drifted from the trusted snapshot.
+
+        Covers both the merged retrieval response and the raw per-call outcomes,
+        because ``calculate_many`` re-selects evidence from the latter.
+        """
+        if not trusted_snapshots:
+            return False
+        chunks = list(rag.chunks) if rag is not None else []
+        for recorded in state.get("retrieval_outcomes", []):
+            if recorded["data"]:
+                chunks.extend(DocumentChunk.model_validate(item) for item in recorded["data"]["chunks"])
+        return bool(tampered_chunks(chunks, trusted_snapshots))
+
     async def calculate(state: AgentState):
         task = ParsedTurn.model_validate(state["parsed"]).task
         sql, rag = _models(state)
+        if _tampered_this_turn(state, rag):
+            return mark(state, "calculate", status="insufficient_evidence",
+                limitations=[*state["limitations"], "本轮文档片段与服务器可信快照不一致，未调用计算工具，也未生成达标或增长结论。"])
         if profiles.get(state["profile_id"]).orchestration_policy == "c_v1" and evidence_resolver is not None:
             return await calculate_many(state, task, sql, rag)
         calculation_id = "calc-" + str(uuid.uuid4())
