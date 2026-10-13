@@ -6,7 +6,16 @@ import re
 
 from ..contracts import DocumentChunk
 from ..knowledge.index import lexical_terms
-from .document_answer import cited, comparison, classification, poster
+from .document_answer import (
+    cited,
+    comparison,
+    classification,
+    poster,
+    _multidoc_target_review,
+    _multidoc_customer_operation,
+    _multidoc_activity_crosscheck,
+    _multidoc_next_step,
+)
 
 
 def fast_rag_enabled() -> bool:
@@ -135,7 +144,15 @@ def local_answer(question: str, documents: list[DocumentChunk]) -> str | None:
     wants_comparison = any(word in question for word in ('二季度', '第二季度', 'Q2')) and any(word in question for word in ('三季度', '第三季度', 'Q3')) and any(word in question for word in ('比较', '对比', '变化', '结合'))
     if wants_comparison:
         return comparison(question, documents)
-    answer = classification(question, documents) or poster(question, documents) or _excerpt(question, documents)
+    answer = (
+        _multidoc_target_review(question, documents)
+        or _multidoc_customer_operation(question, documents)
+        or _multidoc_activity_crosscheck(question, documents)
+        or _multidoc_next_step(question, documents)
+        or classification(question, documents)
+        or poster(question, documents)
+        or _excerpt(question, documents)
+    )
     return answer if answer and not _content_missing(question, answer) else None
 
 

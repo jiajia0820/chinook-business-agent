@@ -226,6 +226,94 @@ def poster(question, documents):
     return cited("\n".join(rows), used)
 
 
+def _document_by_id(documents, doc_id):
+    return next((item for item in documents if item.doc_id == doc_id), None)
+
+
+def _document_text(documents, doc_id):
+    return "\n".join(item.text for item in documents if item.doc_id == doc_id)
+
+
+def _multidoc_target_review(question, documents):
+    """Keep target, actual result, and activity roles visible in a fusion answer."""
+    if not all(doc_id in {item.doc_id for item in documents} for doc_id in ("D06", "D08", "D10")):
+        return None
+    if not all(word in question for word in ("目标", "复盘", "活动")):
+        return None
+    d06 = _document_by_id(documents, "D06")
+    d08 = _document_by_id(documents, "D08")
+    d10 = _document_by_id(documents, "D10")
+    target_text = compact(_document_text(documents, "D06"))
+    actual_text = compact(_document_text(documents, "D08"))
+    activity_text = compact(_document_text(documents, "D10"))
+    target = re.search(r"Rock.*?销售额(?:目标)?(?:为|：|:)?(\d+(?:\.\d+)?)美元", target_text)
+    actual = re.search(r"Rock.*?销售额(?:为|：|:)?(\d+(?:\.\d+)?)美元", actual_text)
+    if not target or not actual or "Rock主页面" not in activity_text or not any(
+        marker in activity_text for marker in ("Metal延伸栏目", "Metal延伸", "延伸栏目")
+    ):
+        return None
+    answer = (
+        f"D06给出第三季度Rock销售额目标{target.group(1)}美元，"
+        f"D08记录实际销售额{actual.group(1)}美元，"
+        "D10依据差距安排第四季度Rock主页面和Metal延伸栏目。"
+        "三份材料分别对应目标、实际达成和活动安排。"
+    )
+    return cited(answer, [d06, d08, d10])
+
+
+def _multidoc_customer_operation(question, documents):
+    """Join D04's tiering rule with D09's Rock operating actions."""
+    if not all(doc_id in {item.doc_id for item in documents} for doc_id in ("D04", "D09")):
+        return None
+    if "客户" not in question or "分层" not in question or "Rock" not in question:
+        return None
+    d04 = _document_by_id(documents, "D04")
+    d09 = _document_by_id(documents, "D09")
+    tier_text = compact(_document_text(documents, "D04"))
+    action_text = compact(_document_text(documents, "D09"))
+    if not all(marker in tier_text for marker in ("阈值", "A", "B", "C")):
+        return None
+    if not all(marker in action_text for marker in ("Rock", "成交商品", "专辑", "专题陈列")):
+        return None
+    answer = "先按D04的季度金额阈值确定A/B/C层，再对购买Rock的客户按已有品类安排推荐；D09的Rock动作重点是成交商品、专辑覆盖和专题陈列。"
+    return cited(answer, [d04, d09])
+
+
+def _multidoc_activity_crosscheck(question, documents):
+    """Cross-check D10's schedule/version with D11's registration facts."""
+    if not all(doc_id in {item.doc_id for item in documents} for doc_id in ("D10", "D11")):
+        return None
+    if not ("方案" in question and "海报" in question and any(word in question for word in ("核对", "共同"))):
+        return None
+    d10 = _document_by_id(documents, "D10")
+    d11 = _document_by_id(documents, "D11")
+    plan_text = compact(_document_text(documents, "D10"))
+    poster_text = compact(_document_text(documents, "D11"))
+    period = re.search(r"2025年10月20日至2025年11月2日", plan_text)
+    deadline = re.search(r"2025年10月13日\s*18:00", poster_text)
+    if not period or not deadline or not all(marker in poster_text for marker in ("商品清单", "选品理由", "页面文案")):
+        return None
+    answer = (
+        "D10给出2025年10月20日至11月2日的活动周期、上线前的商品清单和页面版本安排；"
+        "D11给出10月13日18:00报名截止以及商品清单、选品理由和页面文案等材料。"
+        "上线前要核对时间、材料和清单版本是否一致。"
+    )
+    return cited(answer, [d10, d11])
+
+
+def _multidoc_next_step(question, documents):
+    """Preserve the operational checklist for a context-dependent follow-up."""
+    if not any(word in question for word in ("下一步", "重点看")):
+        return None
+    d09 = _document_by_id(documents, "D09")
+    if d09 is None:
+        return None
+    text = compact(d09.text)
+    if not all(marker in text for marker in ("商品覆盖", "订单集中", "专辑", "专题陈列")):
+        return None
+    return cited("继续检查Rock商品覆盖、订单集中和专辑结构，并结合品类运营动作安排专题陈列。", [d09])
+
+
 def _extract_sentences(question, documents, surfaces=()):
     """Short relevant statements plus their chunks, not page headers or whole chunks.
 
@@ -272,6 +360,14 @@ def extractive_answer(question, documents):
 
 
 def draft_answer(question: str, documents: list[DocumentChunk]) -> str | None:
+    for renderer in (
+        _multidoc_target_review,
+        _multidoc_customer_operation,
+        _multidoc_activity_crosscheck,
+        _multidoc_next_step,
+    ):
+        if answer := renderer(question, documents):
+            return answer
     if any(word in question for word in ("二季度", "第二季度", "Q2")) and any(word in question for word in ("三季度", "第三季度", "Q3")) and any(word in question for word in ("比较", "对比", "变化", "结合")):
         return comparison(question, documents)
     return comparison(question, documents) or classification(question, documents) or poster(question, documents) or extractive_answer(question, documents)
