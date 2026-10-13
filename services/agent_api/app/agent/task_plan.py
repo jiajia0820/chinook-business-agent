@@ -25,6 +25,12 @@ def document_needs(task):
     docs = list(dict.fromkeys(x.upper() for x in explicit))
     if docs and any(w in q for w in ("仅依据", "只依据", "仅使用", "只使用")):
         return docs
+    # SourcePlan owns the authoritative role-to-document mapping.  Explicit
+    # document references remain caller-owned so a question such as
+    # “D06、D08 和 D10 如何衔接” does not silently grow an extra source.
+    if not docs and task.route in {"rag", "cross_source"}:
+        from ..knowledge.source_plan import rag_source_plan
+        docs.extend(rag_source_plan(q).required_docs)
     from ..knowledge.facts import FACTS
     docs += [FACTS[role][0] for role in task.answer_obligations if role in FACTS]
     if task.intent == "customer_segmentation":
@@ -84,6 +90,8 @@ def retrieval_specs(task, top_k):
     docs = document_needs(task)
     if not docs:
         return []
+    from ..knowledge.source_plan import rag_source_plan
+    source_plan = rag_source_plan(task.retrieval_question or task.original_question)
     # Whole-question top_k budget. Prefer primary target/formula with two
     # passages while reserving one per other required source.
     roles = [(FACTS[role][0], role) for role in task.answer_obligations if role in FACTS and FACTS[role][0] in docs]
@@ -113,6 +121,8 @@ def retrieval_specs(task, top_k):
                 topic = "增长率 period_over_period_growth 本期 基期 " + entities
         if role:
             topic = FACTS[role][1] + " " + entities
+        elif source_plan.query_terms:
+            topic = " ".join(source_plan.query_terms) + " " + topic
         queries.append((doc, topic[:3900], count, role))
     return queries
 

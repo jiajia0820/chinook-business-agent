@@ -36,6 +36,26 @@ def _rag_plan(question: str, intent: str) -> dict:
     sources = [value.upper() for value in explicit_docs]
     requirements: list[str] = []
     query_terms: list[str] = []
+    from ..knowledge.source_plan import rag_source_plan
+    source_plan = rag_source_plan(question, explicit_docs=explicit_docs)
+    # When a question names documents explicitly, keep that bounded contract;
+    # otherwise let the role planner supply authoritative sources.
+    if not explicit_docs:
+        sources.extend(source_plan.required_docs)
+    requirements.extend({
+        "metric_definition": "formula",
+        "media_scope": "media_scope",
+        "classification_boundary": "classification_boundary",
+        "selection_rule": "selection_rule",
+        "activity_plan": "activity_plan",
+        "mixed_order_media_rule": "mixed_order_media_rule",
+        "target_value": "target",
+        "quarter_review": "review",
+        "operation_rule": "operation_rule",
+        "customer_segmentation": "customer_segmentation",
+    }.get(role) for role in source_plan.required_roles)
+    requirements = [item for item in requirements if item]
+    query_terms.extend(source_plan.query_terms)
     if intent in {"target_difference", "target_attainment", "document_calculation"}:
         sources.extend(["D01", "D06", "D08"])
         requirements.extend(["actual", "target", "formula"])
@@ -362,9 +382,13 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
             from ..knowledge.facts import FACTS, fact_matches, coverage
             sql, _ = _models(state)
             task = retrieval_task_from_sql(task, sql, profiles.get(state["profile_id"]))
+            from ..knowledge.source_plan import rag_source_plan
+            source_plan = rag_source_plan(task.retrieval_question or task.original_question)
             current, recorded, repairs, empty_repaired = dict(state), [], 0, False
             for doc, query, count, role in retrieval_specs(task, request.options.top_k):
                 filters = {"slots": task.slots, "business_metric_ids": task.business_metric_ids}
+                if source_plan.required_roles:
+                    filters["required_roles"] = source_plan.required_roles
                 if doc:
                     filters["doc_id"] = doc
                 if role:
@@ -433,12 +457,18 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
             retrieval_query += " " + {"target_difference": "目标 销售额差额 销售额达成率", "target_attainment": "目标 销售额达成率 销售额差额",
                 "growth_rate": "销售额 增长率", "average_order_value": "客单价", "document_sum": "月度分解"}.get(task.intent, "")
         plan = _rag_plan(question, task.intent)
+        from ..knowledge.source_plan import rag_source_plan
+        source_plan = rag_source_plan(question)
         if plan["required_sources"]:
             filters["required_sources"] = list(dict.fromkeys([*filters.get("required_sources", []), *plan["required_sources"]]))
         if plan["evidence_requirements"]:
             filters["evidence_requirements"] = plan["evidence_requirements"]
         if plan["query_terms"]:
             filters["query_terms"] = list(dict.fromkeys([*filters.get("query_terms", []), *plan["query_terms"]]))
+        if source_plan.required_roles:
+            filters["required_roles"] = source_plan.required_roles
+        if source_plan.preferred_doc and not filters.get("preferred_doc") and len(source_plan.required_docs) == 1:
+            filters["preferred_doc"] = source_plan.preferred_doc
         if task.intent == "poster_candidates":
             filters["required_sources"] = ["D05", "D11"]
         if os.getenv("RAG_ENABLE_DENSE", "0") == "1":

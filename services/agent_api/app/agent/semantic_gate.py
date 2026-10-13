@@ -56,9 +56,16 @@ def _has_scope(ir: QuestionIR, question: str) -> bool:
 def _is_document_rule(ir: QuestionIR, question: str) -> bool:
     if ir.task_type in {"business_rule", "cross_source"}:
         return True
-    return any(term in question for term in (
+    if any(term in question for term in (
         "定义", "口径", "规则", "公式", "怎么计算", "如何计算", "手册",
         "方案", "建议", "重点看", "下一步", "目标表", "复盘",
+    )):
+        return True
+    # Method questions may mention a transaction metric while asking for the
+    # documented comparison rule rather than a database fact.
+    return any(term in question for term in (
+        "应该和什么时间段比较", "应该与什么时间段比较", "比较什么时间段",
+        "时间段比较", "比较原则", "应该怎么处理", "如何处理",
     ))
 
 
