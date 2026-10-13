@@ -23,7 +23,7 @@
 | --- | --- | --- |
 | 计划文档 | 68e684d | `git diff --check` 通过，工作区干净 |
 | Task 0 | 进行中 | — |
-| Task 1 | — | — |
+| Task 1 | e46a313 | 14 passed, 12 subtests; knowledge snapshot verified |
 | Task 2 | — | — |
 | Task 3 | — | — |
 | Task 4 | — | — |
