@@ -560,11 +560,15 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
         update["calculation_binding"] = binding.model_dump(mode="json")
         update["calculation_evidence"] = audit
         update["calculations"] = [outcome.data.model_dump(mode="json")] if outcome.succeeded else []
+        if outcome.succeeded and audit and audit.get("missing_roles"):
+            missing = "、".join(dict.fromkeys(audit["missing_roles"]))
+            update["limitations"] = [*state["limitations"], f"跨源解释证据缺少角色：{missing}；已保留实际/目标计算结果。"]
         return update
 
     async def calculate_many(state, task, sql, rag):
         current, records, calculations = dict(state), [], []
         binding_failures = []
+        missing_context_roles = []
         functions = ["growth_rate"] if task.intent == "growth_rate" else ["attainment_rate"]
         if "difference" in task.required_outputs or task.intent == "target_difference":
             functions.append("difference")
@@ -610,8 +614,11 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
                     continue
                 calculations.append(outcome.data.model_dump(mode="json"))
                 records.append({"task": child.model_dump(mode="json"), "binding": authorized.request.model_dump(mode="json"), "audit": authorized.audit, "retrieval_id": selected_rag.retrieval_id})
+                missing_context_roles.extend(authorized.audit.get("missing_roles", []))
         if binding_failures:
             current["limitations"] = [*current["limitations"], "部分计算绑定失败，已保留其余成功结果：" + "、".join(dict.fromkeys(binding_failures)) + "。"]
+        if missing_context_roles:
+            current["limitations"] = [*current["limitations"], "跨源解释证据缺少角色：" + "、".join(dict.fromkeys(missing_context_roles)) + "；已保留实际/目标计算结果。"]
         return {**current, "calculations": calculations, "calculation_records": records,
             "calculation_binding": records[0]["binding"] if records else None, "calculation_evidence": records[0]["audit"] if records else None}
 
