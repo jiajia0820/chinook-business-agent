@@ -3,9 +3,13 @@
 This response is the documented C draft, not the full B /api/v1/ask response.
 """
 from datetime import date, datetime, timedelta
+import copy
+import hashlib
 import json
 import math
+import os
 import re
+import threading
 import time
 import uuid
 from .catalog import load_catalog
@@ -18,6 +22,63 @@ from .query_intent import parse_query_intent, validate_intent
 from .semantic_scope import covers_context, same_registered_query
 from .catalog_queries import CATALOG_COLUMNS, catalog_query, zero_media_query
 from .business_queries import OPERATIONS, build_query, output_columns
+
+
+class _CachedSchemaService(SchemaService):
+    """Service-local schema snapshot cache with per-call access revalidation.
+
+    A cached snapshot is metadata only.  ``get_schema`` always resolves the
+    profile against the caller's AccessContext first, and the cache key keeps
+    the effective table set and profile/database fingerprint separate.  Remote
+    databases are deliberately uncached because a portable server-side
+    freshness signal is not available here.
+    """
+
+    def __init__(self, registry):
+        super().__init__(registry)
+        self._snapshots = {}
+        self._cache_lock = threading.RLock()
+
+    @staticmethod
+    def _profile_fingerprint(profile):
+        raw = json.dumps(profile.data, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _sqlite_fingerprint(profile):
+        try:
+            path = profile.connection_url().database
+            records = []
+            for candidate in (path, path + "-wal", path + "-shm", path + "-journal"):
+                try:
+                    stat = os.stat(candidate)
+                    records.append((candidate, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size, stat.st_ino))
+                except FileNotFoundError:
+                    records.append((candidate, None, None))
+            return tuple(records)
+        except (OSError, ModuleError):
+            return None
+
+    def get_schema(self, profile_id, access):
+        profile, allowed = self.registry.resolve(profile_id, access)
+        if profile.database.get("dialect") != "sqlite":
+            return super().get_schema(profile_id, access)
+        database_fingerprint = self._sqlite_fingerprint(profile)
+        if database_fingerprint is None:
+            return super().get_schema(profile_id, access)
+        key = (profile_id, frozenset(allowed))
+        fingerprint = (str(profile.directory), self._profile_fingerprint(profile), database_fingerprint)
+        with self._cache_lock:
+            cached = self._snapshots.get(key)
+            if cached is not None and cached[0] == fingerprint:
+                return copy.deepcopy(cached[1])
+            snapshot = super().get_schema(profile_id, access)
+            # A concurrent writer must not make a snapshot appear current.
+            if self._sqlite_fingerprint(profile) == database_fingerprint:
+                self._snapshots[key] = (fingerprint, copy.deepcopy(snapshot))
+            else:
+                self._snapshots.pop(key, None)
+            return snapshot
 
 
 def request_error(message):
@@ -501,8 +562,39 @@ def _registered_query(question, context, max_rows):
 class NLQueryService:
     def __init__(self, registry, model=None):
         self.registry,self.model=registry,model
-        self.schemas=SchemaService(registry)
+        self.schemas=_CachedSchemaService(registry)
         self.executor=SQLExecutor(registry)
+        # SQLExecutor performs its own schema preflight. Share the same
+        # service-local cache while retaining its per-call access resolution.
+        self.executor.schemas=self.schemas
+        self._catalog_cache={}
+        self._catalog_lock=threading.RLock()
+
+    @staticmethod
+    def _catalog_fingerprint(profile):
+        records=[]
+        for name in profile.data.get('catalog_files', {}).values():
+            path=(profile.directory / name).resolve()
+            try:
+                stat=path.stat()
+                records.append((str(path), stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size, stat.st_ino))
+            except FileNotFoundError:
+                records.append((str(path), None, None))
+        return tuple(records)
+
+    def _load_catalog_cached(self, profile, snapshot):
+        files=self._catalog_fingerprint(profile)
+        fingerprint=(str(profile.directory), _CachedSchemaService._profile_fingerprint(profile), snapshot['schema_version'], files)
+        with self._catalog_lock:
+            cached=self._catalog_cache.get(profile.id)
+            if cached is not None and cached[0]==fingerprint:
+                return copy.deepcopy(cached[1])
+            catalog=load_catalog(profile, snapshot)
+            if self._catalog_fingerprint(profile)==files:
+                self._catalog_cache[profile.id]=(fingerprint, copy.deepcopy(catalog))
+            else:
+                self._catalog_cache.pop(profile.id, None)
+            return catalog
 
     def answer_registered(self, request, access):
         """Return a validated registered draft, or None to keep the live chain.
@@ -525,7 +617,7 @@ class NLQueryService:
                 context = {**context, 'resolved_slots': {**context.get('resolved_slots', {}),
                     'query_intent': parse_query_intent(data['question'], context.get('metric_ids', []))}}
             snapshot = self.schemas.get_schema(profile.id, access)
-            catalog = load_catalog(profile, snapshot)
+            catalog = self._load_catalog_cached(profile, snapshot)
             metrics_by_id = {metric['metric_id']: metric for metric in catalog['metrics']}
             metric_ids = context.get('metric_ids', [])
             if set(metric_ids) - set(metrics_by_id):
@@ -587,7 +679,7 @@ class NLQueryService:
                 context = {**context, 'resolved_slots': {**context.get('resolved_slots', {}),
                     'query_intent': parse_query_intent(data['question'], context.get('metric_ids', []))}}
             snapshot=self.schemas.get_schema(profile.id,access)
-            catalog=load_catalog(profile,snapshot)
+            catalog=self._load_catalog_cached(profile,snapshot)
             metrics_by_id={m['metric_id']:m for m in catalog['metrics']}
             metric_ids=context.get('metric_ids',[])
             if set(metric_ids)-set(metrics_by_id):

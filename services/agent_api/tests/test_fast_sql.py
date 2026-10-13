@@ -1,10 +1,18 @@
 import json
 import importlib.util
+import copy
 import os
+from pathlib import Path
+import shutil
+import sqlite3
+import tempfile
 import unittest
 from unittest.mock import patch
 
-from backend.sql_module.profiles import AccessContext, Registry
+from backend.sql_module.catalog import load_catalog
+from backend.sql_module.profiles import AccessContext, Registry, validate_profile
+from backend.sql_module.schema import reflect
+from backend.sql_module.validation import validate_sql
 from backend.sql_module.service import NLQueryService, _controlled_query
 from services.agent_api.app.integrations.sql_d12 import create_canonical_knowledge_integration
 from services.agent_api.app.agent.state import BusinessTask
@@ -138,7 +146,7 @@ class RegisteredSqlTests(unittest.TestCase):
 
     def test_request_schema_catalog_and_access_validation_are_not_bypassed(self):
         value = request("2025Q3音频销售额是多少？", ["sales_amount"], self.slots)
-        with patch.object(self.service.schemas, "get_schema", wraps=self.service.schemas.get_schema) as schema:
+        with patch("backend.sql_module.schema.reflect", wraps=reflect) as schema:
             self.assertEqual(self.run_registered(value)["status"], "answered")
             self.assertEqual(schema.call_count, 1)
         invalid = {**value, "options": {"max_rows": 0}}
@@ -157,6 +165,115 @@ class RegisteredSqlTests(unittest.TestCase):
             result = self.run_registered(value)
         self.assertEqual(result["status"], "error")
         self.assertEqual(result["sql_results"][0]["status"], "rejected")
+        self.assertEqual(result["error"]["code"], "SQL_READ_ONLY_VIOLATION")
+
+
+class RegisteredMetadataCacheTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        original = Registry.load().profiles["chinook"]
+        self.database = self.root / "Chinook.db"
+        shutil.copyfile(original.connection_url().database, self.database)
+        self.metrics = self.root / "metrics.json"
+        shutil.copyfile(original.directory / "metrics.json", self.metrics)
+        self.profile_data = copy.deepcopy(original.data)
+        self.profile_data["database"]["sqlite_path"] = "Chinook.db"
+        self.registry = Registry([validate_profile(self.profile_data, self.root)])
+        self.access = AccessContext.local(self.registry)
+        self.model = CountingModel()
+        self.service = NLQueryService(self.registry, self.model)
+        self.total = request("客户总数是多少？", ["customer_count"])
+
+    def test_different_queries_share_metadata_but_every_sql_is_validated(self):
+        queries = [self.total,
+                   request("2025Q3音频销售额是多少？", ["sales_amount"], {"start_date": "2025-07-01", "end_date": "2025-10-01", "media_ids": [1, 2, 4, 5]}),
+                   request("TrackId 2的标价是什么？", ["track_attributes"], {"query_intent": {"operation": "track_attributes", "track_ids": [2]}})]
+        with patch("backend.sql_module.schema.reflect", wraps=reflect) as schema, \
+             patch("backend.sql_module.service.load_catalog", wraps=load_catalog) as catalog, \
+             patch("backend.sql_module.execution.validate_sql", wraps=validate_sql) as readonly:
+            results = [self.service.answer_registered(value, self.access) for value in queries]
+        self.assertEqual([value["status"] for value in results], ["answered"] * 3)
+        self.assertEqual(schema.call_count, 1)
+        self.assertEqual(catalog.call_count, 1)
+        self.assertEqual(readonly.call_count, 3)
+        self.assertEqual(self.model.calls, 0)
+
+    def test_catalog_file_change_invalidates_only_catalog(self):
+        with patch("backend.sql_module.schema.reflect", wraps=reflect) as schema, \
+             patch("backend.sql_module.service.load_catalog", wraps=load_catalog) as catalog:
+            first = self.service.answer_registered(self.total, self.access)
+            updated = json.loads(self.metrics.read_text(encoding="utf-8"))
+            updated["version"] = "cache-revision"
+            selected = next(item for item in updated["metrics"] if item["metric_id"] == "customer_count")
+            selected["definition"] = "更新后的注册客户记录数定义"
+            self.metrics.write_text(json.dumps(updated, ensure_ascii=False), encoding="utf-8")
+            second = self.service.answer_registered(self.total, self.access)
+        self.assertEqual(second["status"], "answered")
+        self.assertNotEqual(first["metric_definitions"], second["metric_definitions"])
+        self.assertEqual(second["metric_definitions"][0]["definition"], selected["definition"])
+        self.assertEqual(second["query_artifacts"][0]["metric_refs"], ["customer_count@cache-revision"])
+        self.assertEqual(schema.call_count, 1)
+        self.assertEqual(catalog.call_count, 2)
+
+    def test_invalid_modified_catalog_cannot_reuse_previously_valid_definitions(self):
+        self.assertEqual(self.service.answer_registered(self.total, self.access)["status"], "answered")
+        updated = json.loads(self.metrics.read_text(encoding="utf-8"))
+        updated["metrics"][0]["required_columns"] = ["main.Customer.NoSuchColumn"]
+        self.metrics.write_text(json.dumps(updated), encoding="utf-8")
+        result = self.service.answer_registered(self.total, self.access)
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["sql_results"], [])
+
+    def test_cached_access_does_not_grant_tables_to_a_later_caller(self):
+        self.assertEqual(self.service.answer_registered(self.total, self.access)["status"], "answered")
+        for access in (AccessContext({}), AccessContext({"chinook": frozenset({"main.Customer"})})):
+            with self.subTest(access=access):
+                result = self.service.answer_registered(self.total, access)
+                self.assertEqual(result["status"], "error")
+                self.assertEqual(result["sql_results"], [])
+        self.assertEqual(self.service.answer_registered(self.total, self.access)["status"], "answered")
+
+    def test_database_schema_change_invalidates_metadata_and_results_are_never_cached(self):
+        first = self.service.answer_registered(self.total, self.access)
+        with sqlite3.connect(self.database) as connection:
+            connection.execute("ALTER TABLE Customer ADD COLUMN CacheNote TEXT")
+            connection.execute("DELETE FROM Customer WHERE CustomerId = (SELECT MAX(CustomerId) FROM Customer)")
+        connection.close()
+        second = self.service.answer_registered(self.total, self.access)
+        self.assertEqual(second["status"], "answered")
+        self.assertEqual(second["sql_results"][0]["rows"], [{"customer_count": 58}])
+        self.assertNotEqual(first["query_artifacts"][0]["schema_version"], second["query_artifacts"][0]["schema_version"])
+
+    def test_profile_changes_and_other_profile_ids_do_not_reuse_wrong_snapshot(self):
+        first = self.service.schemas.get_schema("chinook", self.access)
+        modified = copy.deepcopy(self.profile_data)
+        modified["database"]["display_name"] = "新数据源说明"
+        self.registry.profiles["chinook"] = validate_profile(modified, self.root)
+        second = self.service.schemas.get_schema("chinook", self.access)
+        self.assertEqual(second["database"]["display_name"], "新数据源说明")
+        self.assertNotEqual(first["schema_version"], second["schema_version"])
+        modified["profile_id"] = "separate-profile"
+        self.registry.profiles["separate-profile"] = validate_profile(modified, self.root)
+        snapshot = self.service.schemas.get_schema("separate-profile", AccessContext.local(self.registry))
+        self.assertEqual(snapshot["profile_id"], "separate-profile")
+
+    def test_cached_objects_are_isolated_from_response_and_schema_mutation(self):
+        original = self.service.schemas.get_schema("chinook", self.access)
+        original["tables"].clear()
+        snapshot = self.service.schemas.get_schema("chinook", self.access)
+        self.assertTrue(snapshot["tables"])
+        first = self.service.answer_registered(self.total, self.access)
+        first["metric_definitions"][0]["source_refs"].append("untrusted-ref")
+        second = self.service.answer_registered(self.total, self.access)
+        self.assertNotIn("untrusted-ref", second["metric_definitions"][0]["source_refs"])
+
+    def test_warm_cache_does_not_bypass_readonly_sql_validation(self):
+        self.assertEqual(self.service.answer_registered(self.total, self.access)["status"], "answered")
+        with patch("backend.sql_module.service._controlled_query", return_value={"sql": "DELETE FROM main.Customer", "params": {}}):
+            result = self.service.answer_registered(self.total, self.access)
+        self.assertEqual(result["status"], "error")
         self.assertEqual(result["error"]["code"], "SQL_READ_ONLY_VIOLATION")
 
 
