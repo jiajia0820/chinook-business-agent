@@ -51,7 +51,8 @@ def source(doc: str, location: str, page: int | None = None, region: str | None 
 def item(id_, level, capability, question, *, data_scope="music", tables=None, docs=None,
          evidence=None, gold_sql=None, gold_result=None, gold_calculation=None,
          gold_answer="", requirements=None, clarify=False, clarify_target=None,
-         difficulty="easy", split="dev", modality="text", known_conflicts=None):
+         difficulty="easy", split="dev", modality="text", known_conflicts=None,
+         invariants=None):
     route = "clarification" if clarify else ("unsupported" if capability.startswith("unsupported") else ("cross_source" if tables and docs else ("sql" if tables or gold_sql else "rag")))
     status = "clarification_required" if clarify else ("unsupported" if capability.startswith("unsupported") else "answered")
     mode = "hybrid" if route == "cross_source" else ("sql_only" if route == "sql" else ("rag_only" if route == "rag" else "hybrid"))
@@ -82,6 +83,7 @@ def item(id_, level, capability, question, *, data_scope="music", tables=None, d
         "gold_params": [Q3_START, Q3_END] if gold_sql and gold_sql.count("?") == 2 else [],
         "known_conflicts": known_conflicts or [],
         "gold_answer_requirements": requirements or [],
+        "invariants": invariants or [],
         "clarification_required": clarify, "clarification_target": clarify_target,
         "difficulty": difficulty, "split": split, "modality": modality,
         "interface_expectation": interface_expectation,
@@ -313,6 +315,21 @@ multiturn = [
     ]},
 ]
 
+robustness = [
+    item("robust-001", "special", "robust_alias_boundary", "2025年第三季度摇滚类音频销售额是多少？", tables=["Invoice", "InvoiceLine", "Track", "Genre"], gold_answer="默认按Rock（Genre:1）统计，Rock And Roll（Genre:5）不静默并入。", requirements=["保持Rock与Rock And Roll边界"], invariants=["route_stable", "genre_boundary_preserved"]),
+    item("robust-002", "special", "robust_case_normalization", "2025年第三季度 ROCK 音频销售额是多少？", tables=["Invoice", "InvoiceLine", "Track"], gold_answer="Rock对应Genre:1，第三季度音频销售额为47.52美元。", requirements=["统一到Genre:1"], invariants=["case_insensitive", "canonical_entity"]),
+    item("robust-003", "special", "robust_noise_tolerance", "请忽略这段无关说明，直接查询2025 Q3音频销售额。", tables=["Invoice", "InvoiceLine", "Track"], gold_answer="2025年第三季度音频销售额为112.86美元。", requirements=["返回正确销售额"], invariants=["route_sql", "noise_ignored"]),
+    item("robust-004", "special", "robust_missing_year", "第三季度音频销售额是多少？", docs=["D01"], gold_answer="请补充查询年份。", requirements=["要求年份"], clarify=True, clarify_target=["year"], invariants=["clarify_missing_year"]),
+    item("robust-005", "special", "robust_conflicting_period", "2025年第三季度和2025年第二季度的音频销售额是多少？", docs=["D01"], gold_answer="请明确唯一查询期间，当前问题同时包含两个季度。", requirements=["指出时间冲突"], clarify=True, clarify_target=["time_range"], invariants=["clarify_period_conflict"]),
+    item("robust-006", "special", "unsupported_profit", "第三季度利润是多少？", docs=["D12"], evidence=[source("D12", "十 当前不支持的查询")], gold_answer="当前资料没有成本或结算金额，不能计算利润。", requirements=["说明成本或结算金额缺失"], invariants=["no_metric_substitution"]),
+    item("robust-007", "special", "unsupported_campaign_events", "活动页面带来了多少点击和转化？", docs=["D10", "D12"], gold_answer="当前没有活动曝光、点击或转化事件日志，只能统计交易变化。", requirements=["说明事件日志缺失"], invariants=["no_transaction_substitution"]),
+    item("robust-008", "special", "robust_document_boundary", "全店销售额和音乐销售额有什么范围差异？", docs=["D03"], gold_answer="音乐销售额默认只统计音频；全店销售额可以包含全部MediaType，需要明确是否纳入视频。", requirements=["不要求时间范围", "区分全店和音乐"], invariants=["route_rag", "no_period_clarification"]),
+    item("robust-009", "special", "robust_followup_noise", "上一轮问过第二季度；现在改看2025年第三季度音频销售额是多少？", tables=["Invoice", "InvoiceLine", "Track"], gold_answer="2025年第三季度音频销售额为112.86美元。", requirements=["只使用当前第三季度条件"], invariants=["current_period_wins", "metric_preserved"]),
+    item("robust-010", "special", "robust_invalid_quarter", "2025年第六季度音频销售额是多少？", docs=["D01"], gold_answer="请改为第一至第四季度，当前季度值无效。", requirements=["指出非法季度"], clarify=True, clarify_target=["time_range"], invariants=["invalid_period_not_downgraded"]),
+    item("robust-011", "special", "robust_media_aggregation", "音乐和视频销售额要分开看还是合计？", docs=["D01", "D03"], gold_answer="请明确媒体范围：分别统计，还是合并音视频后统计。", requirements=["要求明确媒体聚合方式"], clarify=True, clarify_target=["media_scope"], invariants=["no_silent_aggregation"]),
+    item("robust-012", "special", "robust_vague_metric", "卖得怎么样？", docs=["D01", "D12"], gold_answer="请明确要看的指标和观察范围，例如销售额、销量或订单数，以及时间范围。", requirements=["要求指标和范围"], clarify=True, clarify_target=["metric", "scope"], invariants=["clarify_vague_request"]),
+]
+
 for session in multiturn:
     if session["id"] == "session-001":
         session["turns"][1]["expected_tables"] = ["Invoice", "InvoiceLine", "Track"]
@@ -349,6 +366,7 @@ groups = {
     "eval_cross_source.jsonl": cross,
     "eval_multidoc.jsonl": multidoc,
     "eval_multiturn.jsonl": multiturn,
+    "eval_robustness.jsonl": robustness,
 }
 
 LOCATION_REWRITES = {
@@ -397,6 +415,21 @@ for records in groups.values():
         if "interface_expectation" in record:
             record["interface_expectation"]["source_assertions"] = record["evidence_locations"]
 
+# Do not silently shrink a checked-in evaluation suite when this generator's
+# source list lags behind an expanded manifest. Existing records remain the
+# source of truth; newly generated IDs are appended.
+for filename, generated in list(groups.items()):
+    path = EVAL / filename
+    if not path.exists():
+        continue
+    existing = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            existing.append(json.loads(line))
+    if len(existing) > len(generated):
+        known = {record["id"] for record in existing}
+        groups[filename] = [*existing, *[record for record in generated if record["id"] not in known]]
+
 for filename, records in groups.items():
     with (EVAL / filename).open("w", encoding="utf-8") as f:
         for record in records:
@@ -420,6 +453,7 @@ manifest = {
         "multimodal": "eval/agent/eval_special_multimodal.jsonl",
         "cross_source": "eval/agent/eval_cross_source.jsonl",
         "robustness_negative": "eval/agent/eval_special_negative.jsonl",
+        "robustness": "eval/agent/eval_robustness.jsonl",
     },
 }
 (EVAL / "eval_manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -507,6 +541,7 @@ human_names = {
     "eval_cross_source.jsonl": "跨源问答",
     "eval_multidoc.jsonl": "多文档问答",
     "eval_multiturn.jsonl": "多轮会话",
+    "eval_robustness.jsonl": "专项 鲁棒性",
 }
 
 def human_sources(record):
@@ -539,6 +574,7 @@ purposes = {
     "eval_cross_source.jsonl": "数据库与业务文档联合分析；分别核对实际值和规则",
     "eval_multidoc.jsonl": "多份文档综合问答；核对各项结论的依据",
     "eval_multiturn.jsonl": "连续对话；在同一会话逐轮检查条件继承和修改",
+    "eval_robustness.jsonl": "错别字、噪声、冲突条件、非法时间和边界稳定性",
 }
 catalog = ["| 题库 | 数量 | 作用和核查重点 |", "| --- | ---: | --- |"]
 for filename, records in groups.items():
@@ -564,6 +600,8 @@ for filename, records in groups.items():
             f"预期数据库表：{', '.join(record.get('expected_tables', [])) or '无'}", "",
             "评分要点：" + "；".join(record.get('gold_answer_requirements', [])), "",
         ])
+        if record.get("invariants"):
+            lines.extend(["鲁棒性不变量：" + "；".join(record["invariants"]), ""])
         if record.get("gold_calculation"):
             lines.extend([f"计算记录：{json.dumps(record['gold_calculation'], ensure_ascii=False)}", ""])
     (HUMAN / safe).write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")

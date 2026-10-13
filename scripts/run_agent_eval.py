@@ -64,6 +64,13 @@ def load_cases(names):
     return cases
 
 
+def summarize_file_result(name, batch, sessions):
+    """Format one per-file summary using sessions as the unit for multiturn."""
+    records = sessions if name == "eval_multiturn.jsonl" else batch
+    passed = sum(1 for item in records if item.get("passed"))
+    return f"  {name}: {passed}/{len(records)} 通过"
+
+
 def _is_number(text):
     try:
         float(text)
@@ -399,8 +406,7 @@ async def main():
                                      "passed": False, "problems": [f"会话异常 {type(exc).__name__}: {exc}"],
                                      "elapsed_ms": 0})
             if not args.quiet:
-                passed = sum(1 for item in batch if item["passed"])
-                print(f"  {name}: {passed}/{len(batch)} 通过")
+                print(summarize_file_result(name, batch, sessions if name == "eval_multiturn.jsonl" else []))
     finally:
         await integration.aclose(grace_seconds=5)
 

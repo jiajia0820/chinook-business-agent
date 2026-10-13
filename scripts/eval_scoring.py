@@ -63,6 +63,13 @@ CONCEPTS = {
     'special-negative-003': [('库存',), ('没有', '缺少', '不支持')],
     'special-negative-004': [('点击', '转化'), ('事件', '日志', '没有')],
     'special-negative-005': [('SupportRep', '支持负责人'), ('维护',), ('销售',), ('不', '不能')],
+    'robust-001': [('Rock',), ('Rock And Roll',), ('Genre:1', 'Genre 1'), ('Genre:5', 'Genre 5'), ('不', '分开')],
+    'robust-002': [('Rock',), ('Genre:1', 'Genre 1'), ('47.52',)],
+    'robust-003': [('112.86',), ('销售额',)],
+    'robust-006': [('成本', '结算金额'), ('利润',), ('不能', '不支持')],
+    'robust-007': [('曝光', '点击', '转化'), ('事件', '日志'), ('交易',)],
+    'robust-008': [('全店',), ('音频',), ('视频',)],
+    'robust-009': [('112.86',), ('第三季度', 'Q3')],
 }
 COUNT_KEYS = {'units_sold', 'units', 'order_count', 'customer_count', 'purchasing_customers', 'track_count', 'mixed_order_count', 'orders', 'actual_units', 'target_units'}
 
