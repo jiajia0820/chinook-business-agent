@@ -363,6 +363,21 @@ class FormalResponseComposer:
         if not documents:
             raise EvidenceGap()
         if context.task and context.task.answer_obligations:
+            # Fusion questions need the composed cross-document conclusion
+            # before the single-role coverage gate.  Otherwise a customer
+            # tier obligation can return only D04 and drop the D09 action
+            # that the question explicitly asks to combine.
+            question = context.task.normalized_question or context.task.original_question
+            is_fusion_question = (
+                ("目标" in question and "复盘" in question and "活动" in question)
+                or ("客户" in question and "分层" in question and "Rock" in question)
+                or ("方案" in question and "海报" in question and "核对" in question)
+                or ("下一步" in question and "重点" in question)
+            )
+            if is_fusion_question and self.policy.allow_business_calculation:
+                answer = context.document_answer or local_answer(question, documents)
+                if answer:
+                    return answer
             from ..knowledge.facts import coverage
             facts = coverage(context.task, documents)
             if any(not item["complete"] for item in facts):
