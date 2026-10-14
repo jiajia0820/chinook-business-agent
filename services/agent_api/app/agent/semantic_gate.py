@@ -65,7 +65,7 @@ def _is_document_rule(ir: QuestionIR, question: str) -> bool:
     # documented comparison rule rather than a database fact.
     return any(term in question for term in (
         "应该和什么时间段比较", "应该与什么时间段比较", "比较什么时间段",
-        "时间段比较", "比较原则", "应该怎么处理", "如何处理",
+        "时间段比较", "比较原则", "应该怎么处理", "如何处理", "范围差异", "分母", "客单价", "成交均价",
     ))
 
 

@@ -22,7 +22,10 @@ class ClarificationPolicyTests(unittest.TestCase):
 
     def test_specific_metric_no_redundant_metric_question(self):
         response = self.parse("销售额达到目标了吗？")
-        self.assertNotIn("target_metric", [s.name for s in response.clarification.missing_slots])
+        self.assertEqual(
+            [s.name for s in response.clarification.missing_slots],
+            ["period", "scope", "target_metric"],
+        )
 
     def test_dynamic_slots(self):
         dimension = self.parse("某商品属于什么类型？")
