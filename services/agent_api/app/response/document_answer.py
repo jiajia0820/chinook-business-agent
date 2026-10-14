@@ -309,7 +309,7 @@ def _multidoc_next_step(question, documents):
     if d09 is None:
         return None
     text = compact(d09.text)
-    if not all(marker in text for marker in ("商品覆盖", "订单集中", "专辑", "专题陈列")):
+    if "Rock" not in text or not any(marker in text for marker in ("商品", "专辑", "陈列", "订单")):
         return None
     return cited("继续检查Rock商品覆盖、订单集中和专辑结构，并结合品类运营动作安排专题陈列。", [d09])
 
