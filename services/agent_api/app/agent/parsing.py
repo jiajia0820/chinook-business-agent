@@ -184,7 +184,7 @@ def _unparsed_query_text(question, profile):
     return residue
 
 
-def parse_question(question: str, profile: BusinessProfile, memory: SessionMemory) -> ParsedTurn:
+def _parse_question(question: str, profile: BusinessProfile, memory: SessionMemory) -> ParsedTurn:
     if profile.orchestration_policy == "c_v1":
         from .task_policy import parse_c_v1
         parsed = parse_c_v1(question, profile, memory)
@@ -200,14 +200,15 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
         q = re.sub(r"^(新问题|另外问|重新查询)[:：\s]*", "", q)
     if not q:
         return clarify(None, ["intent"], rules=["empty_new_question"])
+    from .task_policy import looks_general_knowledge
+    general_question = looks_general_knowledge(q)
     for metric, terms in rules.unsupported_terms.items():
-        if _contains(q, terms):
-            reasons = {'profit':'当前没有成本与利润数据，不能用销售额代替利润。','inventory':'当前没有库存快照，无法计算库存数量。',
-                'play_count':'当前只有播放列表收录关系，没有播放次数或收听日志，不能推断播放量。'}
-            return ParsedTurn(decision="unsupported", reason=reasons.get(metric,f"当前数据与工具不支持指标 {metric}，不能用其他指标替代。"), rules=[f"data_gap:{metric}"])
-    if _contains(q,['点击','转化','曝光']) and _contains(q,['活动','页面']):
+        if not general_question and _contains(q, terms):
+            from .task_policy import unsupported_metric_reason
+            return ParsedTurn(decision="unsupported", reason=unsupported_metric_reason(metric), rules=[f"data_gap:{metric}"])
+    if not general_question and _contains(q,['点击','转化','曝光']) and _contains(q,['活动','页面']):
         return ParsedTurn(decision='unsupported',reason='当前没有活动点击、曝光或转化事件数据；交易变化不能替代这些事件。',rules=['data_gap:activity_events'])
-    if _contains(q,['SupportRep','支持负责人']) and _contains(q,['员工','个人','贡献']) and _contains(q,['销售','排名']):
+    if not general_question and _contains(q,['SupportRep','支持负责人']) and _contains(q,['员工','个人','贡献']) and _contains(q,['销售','排名']):
         return ParsedTurn(decision='unsupported',reason='SupportRep 表示客户维护责任，不等于个人销售归属，不能用于员工销售额排名。',rules=['support_rep_boundary'])
 
     # Whole-question document aliases are configured vocabulary, not a list
@@ -232,6 +233,17 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
                 if not profile.supports("sql"):
                     return ParsedTurn(decision="unsupported", task=task, reason="当前 profile 不提供 SQL 能力。", rules=["capability_gate"])
                 return ParsedTurn(decision="ready", task=task, rules=["exact_offline_alias", "capability_gate"])
+
+    if general_question:
+        task = BusinessTask(
+            original_question=q,
+            normalized_question=q,
+            intent="general_knowledge",
+            route="general",
+            retrieval_question=q,
+            source_roles=["general_knowledge"],
+        )
+        return ParsedTurn(decision="ready", task=task, rules=["general_knowledge"])
 
     explicit_slots, years, quarters = _periods(q)
     entities = _entities(q, profile)
@@ -470,3 +482,43 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
     if any(not profile.supports(cap) for cap in required):
         return ParsedTurn(decision="unsupported", task=task, reason="当前 profile 的 mode/capabilities 不支持该完整任务。", reused_context=reused, rules=["capability_gate"])
     return ParsedTurn(decision="ready", task=task, reused_context=reused, rules=["profile_vocabulary", "explicit_slots", "capability_gate", *coverage_rules])
+
+
+def parse_question(question: str, profile: BusinessProfile, memory: SessionMemory) -> ParsedTurn:
+    """兼容入口：保留旧解析结果，同时附加共享 QuestionIR。"""
+    parsed = _parse_question(question, profile, memory)
+    if parsed.task is not None and parsed.task.question_ir is None:
+        from .query_rewrite import rewrite_question
+
+        try:
+            parsed.task.question_ir = rewrite_question(
+                parsed.task.original_question,
+                profile_id=profile.profile_id,
+            )
+        except (KeyError, ValueError):
+            # 自定义 profile 可能尚未提供实体目录；旧解析结果仍必须可用。
+            parsed.task.question_ir = None
+    if parsed.task is not None:
+        from .route_policy import route_question
+
+        try:
+            ir = route_question(parsed.task.original_question, profile_id=profile.profile_id)
+        except (KeyError, ValueError):
+            ir = None
+        if ir is not None:
+            previous_ir = parsed.task.question_ir
+            if previous_ir is not None:
+                from .query_rewrite import merge_question_ir
+                ir = merge_question_ir(previous_ir, ir)
+            parsed.task.question_ir = ir
+            # The semantic task has already passed profile/slot/capability
+            # gates. Attaching IR must not turn a finalized rule task into SQL.
+            ir.route = parsed.task.route
+            if parsed.task.route == "rag":
+                ir.task_type = "document_rule"
+        if "mixed_order_count" in parsed.task.business_metric_ids:
+            parsed.task.semantic_status = "answerable"
+            parsed.task.semantic_blockers = []
+            if parsed.task.question_ir is not None:
+                parsed.task.question_ir.clarification_blockers = []
+    return parsed

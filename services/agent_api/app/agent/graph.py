@@ -7,13 +7,14 @@ import os
 import re
 import uuid
 import time
+import asyncio
 from typing import Literal
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from ..contracts import ApiError, AskRequest, AskResponse, Calculation, DocumentChunk, Intent, RetrievalRequest, RetrievalResponse
-from ..evidence.binding import authorize_calculation
+from ..evidence.binding import authorize_calculation, tampered_chunks
 from ..evidence.models import EvidenceResolver
 from ..evidence.business_workflows import WORKFLOWS, WorkflowGap, resolve_sources, conclude
 from ..profiles import ProfileRegistry
@@ -22,10 +23,12 @@ from ..response.models import ComposeContext, ResponseComposer
 from ..tools.models import BusinessContextItem, CalculationRequest, SqlTaskOutcome, SqlTaskRequest
 from ..tools.references import sql_cell_ref
 from .parsing import parse_question
+from .semantic_router import parse_route_proposal, semantic_route_messages, task_from_proposal
 from .state import AgentState, BusinessTask, ParsedTurn, SessionMemory, logical_copy
 
 
 CalculationBinder = Callable[[BusinessTask, SqlTaskOutcome | None, RetrievalResponse | None, str], CalculationRequest | None]
+SEMANTIC_ROUTE_SECONDS = 8
 
 
 def _rag_plan(question: str, intent: str) -> dict:
@@ -34,6 +37,26 @@ def _rag_plan(question: str, intent: str) -> dict:
     sources = [value.upper() for value in explicit_docs]
     requirements: list[str] = []
     query_terms: list[str] = []
+    from ..knowledge.source_plan import rag_source_plan
+    source_plan = rag_source_plan(question, explicit_docs=explicit_docs)
+    # When a question names documents explicitly, keep that bounded contract;
+    # otherwise let the role planner supply authoritative sources.
+    if not explicit_docs:
+        sources.extend(source_plan.required_docs)
+    requirements.extend({
+        "metric_definition": "formula",
+        "media_scope": "media_scope",
+        "classification_boundary": "classification_boundary",
+        "selection_rule": "selection_rule",
+        "activity_plan": "activity_plan",
+        "mixed_order_media_rule": "mixed_order_media_rule",
+        "target_value": "target",
+        "quarter_review": "review",
+        "operation_rule": "operation_rule",
+        "customer_segmentation": "customer_segmentation",
+    }.get(role) for role in source_plan.required_roles)
+    requirements = [item for item in requirements if item]
+    query_terms.extend(source_plan.query_terms)
     if intent in {"target_difference", "target_attainment", "document_calculation"}:
         sources.extend(["D01", "D06", "D08"])
         requirements.extend(["actual", "target", "formula"])
@@ -157,6 +180,11 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
     if response_composer is not None and response_composer.execution_mode != execution_mode:
         raise ValueError("composer source strategy must match the server execution mode")
     compose_node = "compose_response" if response_composer is not None else "compose_test_response"
+    fast_knowledge = bool(response_composer and getattr(response_composer, 'policy', None)
+                          and response_composer.policy.allow_business_calculation)
+    # Startup snapshot of every authorized chunk; the composer's copy is only
+    # consulted when an answer is assembled, which is after the calculator ran.
+    trusted_snapshots = tuple(getattr(getattr(response_composer, "policy", None), "documents", ()) or ())
     source_banner = {
         "fixture": "3B 受控工具替身验证；结果不代表真实数据库、文档检索、模型或计算器输出。",
         "offline_sql_integration": "3C-1：固定离线模型 + 真实 Chinook 样例 SQL；未接 RAG、计算器或联网模型。",
@@ -201,6 +229,48 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
         parsed = parse_question(request.question, profiles.get(state["profile_id"]), memory)
         return mark(state, "parse_question", parsed=parsed.model_dump(mode="json"), memory=memory.model_dump(mode="json"))
 
+    async def semantic_route(state: AgentState):
+        parsed = ParsedTurn.model_validate(state["parsed"])
+        if parsed.decision != "clarification" or (parsed.task and parsed.task.intent != "unknown"):
+            return state
+        model = getattr(response_composer, "answer_model", None)
+        executor = getattr(response_composer, "executor", None)
+        if model is None or executor is None:
+            return state
+        request = AskRequest.model_validate(state["request"])
+        deadline = time.monotonic() + SEMANTIC_ROUTE_SECONDS
+
+        def generate():
+            return parse_route_proposal(model.generate_json(
+                semantic_route_messages(request.question), {"type": "object"}, deadline
+            ))
+
+        try:
+            proposal = await executor.run(generate, deadline=deadline)
+        except Exception:
+            return state
+        if proposal is None:
+            return state
+        allowed = (
+            proposal.question_type == "general_knowledge" and not proposal.needs_tool
+        ) or (
+            proposal.question_type == "business_rule" and proposal.needs_tool
+        )
+        if not allowed:
+            return state
+        if proposal.question_type == "business_rule" and not profiles.get(state["profile_id"]).supports("rag"):
+            return state
+        task = task_from_proposal(request.question, proposal)
+        if task is None:
+            return state
+        parsed = ParsedTurn(
+            decision="ready",
+            task=task,
+            reused_context=parsed.reused_context,
+            rules=[*parsed.rules, "semantic_router"],
+        )
+        return mark(state, "semantic_route", parsed=parsed.model_dump(mode="json"))
+
     def validate(state: AgentState):
         parsed = ParsedTurn.model_validate(state["parsed"])
         if parsed.decision == "ready" and evidence_resolver is not None and parsed.task.needs_calculation and parsed.task.route == "sql":
@@ -210,6 +280,8 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
                 parsed.task.route = "cross_source"  # E.g. growth needs formula evidence too.
         statuses = {"clarification": "clarification_required", "unsupported": "unsupported", "cancelled": "clarification_required", "ready": "ready"}
         route = parsed.task.route if parsed.decision == "ready" else "unsupported" if parsed.decision == "unsupported" else "clarification"
+        if parsed.decision == "ready" and route == "general":
+            statuses["ready"] = "answered"
         plan = []
         if parsed.decision == "ready":
             if route in ("sql", "cross_source"):
@@ -234,6 +306,15 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
         if state["status"] != "ready":
             return compose_node
         task = ParsedTurn.model_validate(state["parsed"]).task
+        if state["route"] == "general":
+            return compose_node
+        if (fast_knowledge and os.getenv('AGENT_CROSS_PARALLEL', '1') == '1' and state['route'] == 'cross_source'
+                and task.intent not in WORKFLOWS
+                and not task.slots.get('business_workflow')
+                and 'ranking' not in task.required_outputs
+                and 'monthly_actuals' not in task.required_outputs
+                and not (task.subtask_plan and task.subtask_plan[0]['kind'] == 'rag')):
+            return 'parallel_sources'
         if task.intent in WORKFLOWS or (task.subtask_plan and task.subtask_plan[0]["kind"] == "rag"):
             return "rag"
         return "sql" if state["route"] in ("sql", "cross_source") else "rag"
@@ -286,6 +367,12 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
             from .parsing import _time_range
             prior = task.slots["comparison_period"]
             period = _time_range(prior)
+            if period is None:
+                return {
+                    **update,
+                    "status": "insufficient_evidence",
+                    "limitations": [*state["limitations"], "增长率比较周期未形成有效时间范围，未执行基期查询。"],
+                }
             slots = dict(payload.resolved_slots)
             slots.update(start_date=period.start, end_date=period.end)
             slots.pop("comparison_period", None)
@@ -303,14 +390,23 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
     async def call_rag(state: AgentState):
         task = ParsedTurn.model_validate(state["parsed"]).task
         request = AskRequest.model_validate(state["request"])
+        if (fast_knowledge and profiles.get(state['profile_id']).orchestration_policy == 'c_v1'
+                and os.getenv('AGENT_FAST_RAG', '1').casefold() not in {'0', 'false', 'off', 'no'}
+                and task.intent not in WORKFLOWS
+                and not {'customer_tiers', 'transaction_exists'} & set(task.required_outputs)):
+            return await bounded_rag(state, task, request)
         if profiles.get(state["profile_id"]).orchestration_policy == "c_v1":
             from .task_plan import retrieval_specs, retrieval_task_from_sql, retry_query
             from ..knowledge.facts import FACTS, fact_matches, coverage
             sql, _ = _models(state)
             task = retrieval_task_from_sql(task, sql, profiles.get(state["profile_id"]))
+            from ..knowledge.source_plan import rag_source_plan
+            source_plan = rag_source_plan(task.retrieval_question or task.original_question)
             current, recorded, repairs, empty_repaired = dict(state), [], 0, False
             for doc, query, count, role in retrieval_specs(task, request.options.top_k):
                 filters = {"slots": task.slots, "business_metric_ids": task.business_metric_ids}
+                if source_plan.required_roles:
+                    filters["required_roles"] = source_plan.required_roles
                 if doc:
                     filters["doc_id"] = doc
                 if role:
@@ -330,7 +426,16 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
                 if not outcome.succeeded:
                     break
             primary = next((r for r in recorded if r["data"] and r["data"]["chunks"]), recorded[0] if recorded else None)
-            all_chunks = [c for r in recorded if r["data"] for c in r["data"]["chunks"]]
+            all_chunks, seen_chunk_ids = [], set()
+            for recorded_item in recorded:
+                if not recorded_item["data"]:
+                    continue
+                for chunk in recorded_item["data"]["chunks"]:
+                    chunk_id = chunk.get("chunk_id")
+                    if chunk_id in seen_chunk_ids:
+                        continue
+                    seen_chunk_ids.add(chunk_id)
+                    all_chunks.append(chunk)
             if primary and primary.get("data") and all_chunks:
                 merged = dict(primary)
                 merged_data = dict(primary["data"])
@@ -370,12 +475,18 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
             retrieval_query += " " + {"target_difference": "目标 销售额差额 销售额达成率", "target_attainment": "目标 销售额达成率 销售额差额",
                 "growth_rate": "销售额 增长率", "average_order_value": "客单价", "document_sum": "月度分解"}.get(task.intent, "")
         plan = _rag_plan(question, task.intent)
+        from ..knowledge.source_plan import rag_source_plan
+        source_plan = rag_source_plan(question)
         if plan["required_sources"]:
             filters["required_sources"] = list(dict.fromkeys([*filters.get("required_sources", []), *plan["required_sources"]]))
         if plan["evidence_requirements"]:
             filters["evidence_requirements"] = plan["evidence_requirements"]
         if plan["query_terms"]:
             filters["query_terms"] = list(dict.fromkeys([*filters.get("query_terms", []), *plan["query_terms"]]))
+        if source_plan.required_roles:
+            filters["required_roles"] = source_plan.required_roles
+        if source_plan.preferred_doc and not filters.get("preferred_doc") and len(source_plan.required_docs) == 1:
+            filters["preferred_doc"] = source_plan.preferred_doc
         if task.intent == "poster_candidates":
             filters["required_sources"] = ["D05", "D11"]
         if os.getenv("RAG_ENABLE_DENSE", "0") == "1":
@@ -383,6 +494,151 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
         payload = RetrievalRequest(retrieval_id="retrieval-" + str(uuid.uuid4()), profile_id=state["profile_id"], query=retrieval_query, filters=filters, top_k=request.options.top_k)
         outcome = await runtime.run("rag.retrieve", payload, context(state))
         return tool_update(state, "rag", outcome, "retrieval_outcome", list(outcome.source_refs))
+
+    async def bounded_rag(state, task, request):
+        """Restore one-shot retrieval; repair only missing core content once."""
+        from ..knowledge.source_plan import rag_source_plan
+        from ..response.fast_renderer import core_content_missing
+        from ..knowledge.facts import coverage
+        sql, _ = _models(state)
+        from .task_plan import retrieval_task_from_sql
+        task = retrieval_task_from_sql(task, sql, profiles.get(state['profile_id']))
+        question = task.retrieval_question or task.original_question
+        source_plan = rag_source_plan(question)
+        primary = list(source_plan.primary_docs)
+        filters = {'slots': task.slots, 'business_metric_ids': task.business_metric_ids,
+                   'query_terms': source_plan.query_terms}
+        if primary:
+            filters['required_sources'] = primary
+            filters['preferred_doc'] = primary[0]
+        only_sources = bool(source_plan.required_docs) and any(w in question for w in ('仅依据', '只依据', '仅使用', '只使用'))
+        if only_sources and len(source_plan.required_docs) == 1:
+            filters['doc_id'] = source_plan.required_docs[0]
+        function = {'target_attainment':'attainment_rate', 'target_difference':'difference',
+                    'growth_rate':'growth_rate', 'average_order_value':'average_order_value', 'document_sum':'sum'}.get(task.intent)
+        if task.needs_calculation and function:
+            primary = ['D06'] if function in {'attainment_rate', 'difference', 'sum'} else ['D01', 'D02']
+            terms = {'attainment_rate':'目标明细 Genre 达成率', 'difference':'目标明细 Genre 销售额差额',
+                     'growth_rate':'增长率 period_over_period_growth 本期 上期',
+                     'average_order_value':'客单价 销售额 订单数', 'sum':'月度分解 7月金额 8月金额 9月金额'}[function]
+            filters.update(required_sources=primary, preferred_doc=primary[0],
+                           query_terms=list(dict.fromkeys([terms, *source_plan.query_terms])))
+            if not only_sources and function != 'sum':
+                support = [doc for doc in source_plan.required_docs if doc in {'D02', 'D07', 'D08', 'D09', 'D10', 'D11'}]
+                if function in {'attainment_rate', 'difference'}:
+                    review = {2:'D07', 3:'D08'}.get(task.slots.get('quarter'))
+                    if review:
+                        support.append(review)
+                if function == 'growth_rate' and any(word in question for word in ('第二季度', '二季度', 'Q2', '第三季度', '三季度', 'Q3')):
+                    support.extend(('D07', 'D08'))
+                filters['required_sources'] = list(dict.fromkeys([*primary, *support]))
+        payload = RetrievalRequest(retrieval_id='retrieval-'+str(uuid.uuid4()), profile_id=state['profile_id'],
+                                   query=question, filters=filters, top_k=request.options.top_k)
+        outcome = await runtime.run('rag.retrieve', payload, context(state))
+        current = {**state, **tool_update(state, 'rag', outcome, 'retrieval_outcome', list(outcome.source_refs))}
+        recorded = [_snapshot(outcome)]
+        chunks = list(outcome.data.chunks) if outcome.succeeded else []
+        if only_sources:
+            chunks = [c for c in chunks if c.doc_id in source_plan.required_docs]
+        missing_docs = [d for d in primary if not any(c.doc_id == d for c in chunks)]
+        missing_secondary = [d for d in source_plan.secondary_docs if not any(c.doc_id == d for c in chunks)] if not only_sources else []
+        from ..knowledge.facts import coverage as fact_coverage, role_repair_target
+        missing_fact_roles = [item['role'] for item in fact_coverage(task, chunks) if not item['complete']]
+        missing_content = core_content_missing(task.original_question, chunks) if task.route == 'rag' and not task.needs_calculation else []
+        missing_formula = False
+        if function and task.needs_calculation:
+            from ..evidence.cross_source_bundle import _formula_chunk
+            from ..evidence.formulas import FormulaRegistry
+            required_functions = ['attainment_rate', 'difference'] if function in {'attainment_rate', 'difference'} else [function]
+            registry = FormulaRegistry.from_profile('chinook')
+            missing_formula = any(_formula_chunk(chunks, item, registry) is None for item in required_functions)
+        plans = []
+        if outcome.succeeded and (missing_docs or missing_content or missing_formula or missing_secondary or missing_fact_roles):
+            repair_filters = dict(filters)
+            covered_roles = set()
+            repair_query = ' '.join(filters['query_terms']) + ' ' + question
+            if missing_docs:
+                repair_filters['required_sources'] = missing_docs
+                repair_filters['preferred_doc'] = missing_docs[0]
+            elif missing_formula and function in {'difference', 'attainment_rate'}:
+                repair_filters.update(doc_id='D06', fact_role='target_formula', required_sources=['D06'])
+                covered_roles.add('target_formula')
+            elif missing_fact_roles:
+                repair = role_repair_target(missing_fact_roles[0], chunks)
+                if repair:
+                    hint, patch = repair
+                    # Multi-document roles drop the single-doc pin so every
+                    # required source stays reachable.
+                    if 'doc_id' not in patch:
+                        repair_filters.pop('doc_id', None)
+                    repair_filters.update(patch)
+                    covered_roles.add(missing_fact_roles[0])
+                    if hint:
+                        # Lead with the owed evidence terms: the question alone
+                        # keeps re-ranking the same summary chunk.
+                        repair_query = hint + ' ' + repair_query
+            elif missing_secondary and not missing_content and not missing_formula:
+                repair_filters.update(required_sources=missing_secondary, preferred_doc=missing_secondary[0])
+            plans.append((repair_query, repair_filters))
+            # A single repair slot can be consumed by the formula fetch, so give an
+            # uncovered fact obligation one more targeted pass (whole turn capped at 2).
+            for role in missing_fact_roles:
+                if len(plans) >= 2 or role in covered_roles:
+                    continue
+                repair = role_repair_target(role, chunks)
+                if not repair:
+                    continue
+                hint, patch = repair
+                plan_filters = dict(filters, **patch)
+                if 'doc_id' not in patch:
+                    plan_filters.pop('doc_id', None)
+                plans.append((hint or question, plan_filters))
+        for repair_query, repair_filters in plans:
+            repair = await runtime.run('rag.retrieve', payload.model_copy(update={
+                'retrieval_id':'retrieval-'+str(uuid.uuid4()), 'query':repair_query, 'filters':repair_filters}), context(current))
+            recorded.append(_snapshot(repair))
+            current['events'] = [*current['events'], *(e.model_dump(mode='json') for e in repair.events)]
+            if repair.succeeded:
+                chunks.extend(c for c in repair.data.chunks if not only_sources or c.doc_id in source_plan.required_docs)
+                current['evidence_refs'] = list(dict.fromkeys([*current['evidence_refs'], *repair.source_refs]))
+            else:
+                current['limitations'] = [*current['limitations'], '补充文档检索未完成；已保留首次检索的有效来源。']
+        unique = {}
+        for chunk in chunks:
+            unique.setdefault(chunk.chunk_id, chunk)
+        if outcome.succeeded:
+            merged = outcome.data.model_copy(update={'chunks': [c.model_copy(update={'retrieval_id':outcome.data.retrieval_id}) for c in unique.values()]})
+            current['retrieval_outcome'] = {'status':'success', 'data':merged.model_dump(mode='json'), 'error':None}
+        parsed = ParsedTurn.model_validate(state['parsed'])
+        parsed.task.evidence_coverage = coverage(task, list(unique.values()))
+        parsed.task.entities = task.entities
+        if only_sources:
+            for item in recorded:
+                if item.get('data'):
+                    item['data']['chunks'] = [c for c in item['data']['chunks'] if c['doc_id'] in source_plan.required_docs]
+        return {**current, 'parsed':parsed.model_dump(mode='json'), 'retrieval_outcomes':recorded}
+
+    async def parallel_sources(state):
+        """Independent sources share a deadline; merge events only at the join."""
+        sql_update, rag_update = await asyncio.gather(call_sql(dict(state)), call_rag(dict(state)))
+        merged = {**state, **sql_update, **rag_update}
+        merged['sql_outcome'] = sql_update.get('sql_outcome')
+        event_count = len(state.get('events', []))
+        merged['events'] = [*state.get('events', []), *sql_update.get('events', [])[event_count:],
+                            *rag_update.get('events', [])[event_count:]]
+        merged['evidence_refs'] = list(dict.fromkeys([*sql_update.get('evidence_refs', []), *rag_update.get('evidence_refs', [])]))
+        merged['limitations'] = list(dict.fromkeys([*sql_update.get('limitations', []), *rag_update.get('limitations', [])]))
+        merged['node_path'] = [*state.get('node_path', []), 'parallel_sql_rag']
+        for update in (sql_update, rag_update):
+            if update.get('status') not in {'ready', None}:
+                merged['status'], merged['error'], merged['route'] = update['status'], update.get('error'), update.get('route', state['route'])
+                break
+        return merged
+
+    def after_parallel(state):
+        if state['status'] != 'ready':
+            return 'evidence_check'
+        return 'calculate' if 'calculator.calculate' in state['tool_plan'] else 'evidence_check'
 
     def tool_update(state, node, outcome, channel, refs):
         status, route, error = state["status"], state["route"], None
@@ -433,9 +689,26 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
             return 'evidence_check'
         return 'sql'
 
+    def _tampered_this_turn(state, rag):
+        """True when any chunk offered this turn drifted from the trusted snapshot.
+
+        Covers both the merged retrieval response and the raw per-call outcomes,
+        because ``calculate_many`` re-selects evidence from the latter.
+        """
+        if not trusted_snapshots:
+            return False
+        chunks = list(rag.chunks) if rag is not None else []
+        for recorded in state.get("retrieval_outcomes", []):
+            if recorded["data"]:
+                chunks.extend(DocumentChunk.model_validate(item) for item in recorded["data"]["chunks"])
+        return bool(tampered_chunks(chunks, trusted_snapshots))
+
     async def calculate(state: AgentState):
         task = ParsedTurn.model_validate(state["parsed"]).task
         sql, rag = _models(state)
+        if _tampered_this_turn(state, rag):
+            return mark(state, "calculate", status="insufficient_evidence",
+                limitations=[*state["limitations"], "本轮文档片段与服务器可信快照不一致，未调用计算工具，也未生成达标或增长结论。"])
         if profiles.get(state["profile_id"]).orchestration_policy == "c_v1" and evidence_resolver is not None:
             return await calculate_many(state, task, sql, rag)
         calculation_id = "calc-" + str(uuid.uuid4())
@@ -467,19 +740,29 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
         update["calculation_binding"] = binding.model_dump(mode="json")
         update["calculation_evidence"] = audit
         update["calculations"] = [outcome.data.model_dump(mode="json")] if outcome.succeeded else []
+        if outcome.succeeded and audit and audit.get("missing_roles"):
+            missing = "、".join(dict.fromkeys(audit["missing_roles"]))
+            update["limitations"] = [*state["limitations"], f"跨源解释证据缺少角色：{missing}；已保留实际/目标计算结果。"]
         return update
 
     async def calculate_many(state, task, sql, rag):
         current, records, calculations = dict(state), [], []
-        functions = ["growth_rate"] if task.intent == "growth_rate" else ["attainment_rate"]
-        if "difference" in task.required_outputs or task.intent == "target_difference":
+        binding_failures = []
+        missing_context_roles = []
+        named = {'growth_rate': 'growth_rate', 'average_order_value': 'average_order_value',
+                 'document_sum': 'sum', 'period_difference': 'difference'}
+        functions = [named.get(task.intent, 'attainment_rate')]
+        if task.intent == 'growth_rate' and 'difference' in task.required_outputs:
+            functions.append('difference')
+        if task.intent not in named and ("difference" in task.required_outputs or task.intent == "target_difference"):
             functions.append("difference")
         months = [(task.slots["quarter"] - 1) * 3 + i for i in (1, 2, 3)] if "monthly_actuals" in task.required_outputs else [None]
         for metric in task.business_metric_ids:
             for month, function in [(m, f) for m in months for f in functions]:
                 child = task.model_copy(deep=True)
                 child.business_metric_ids = [metric]
-                child.intent = {"growth_rate": "growth_rate", "attainment_rate": "target_attainment", "difference": "target_difference"}[function]
+                child.intent = ('period_difference' if task.intent == 'growth_rate' and function == 'difference'
+                                else task.intent if task.intent in named else {"attainment_rate": "target_attainment", "difference": "target_difference"}[function])
                 if month:
                     from datetime import date
                     from ..contracts import TimeRange
@@ -487,7 +770,13 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
                     child.slots["month"] = month
                     y = child.slots["year"]
                     child.time_range = TimeRange(start=date(y, month, 1).isoformat(), end=date(y + (month == 12), 1 if month == 12 else month + 1, 1).isoformat(), end_inclusive=False, label=f"{y}年{month}月")
-                selected_rag = next((RetrievalResponse.model_validate(r["data"]) for r in state.get("retrieval_outcomes", []) if r["data"] and any(c["doc_id"] == ("D01" if function == "growth_rate" else "D06") for c in r["data"]["chunks"])), rag)
+                # Use the merged, this-turn retrieval response so formula,
+                # target and review evidence can be checked together.  The
+                # old D01/D06 selector discarded D08 and made valid bindings
+                # depend on which single retrieval happened to be primary.
+                selected_rag = rag
+                if selected_rag is None or not selected_rag.chunks:
+                    selected_rag = next((RetrievalResponse.model_validate(r["data"]) for r in state.get("retrieval_outcomes", []) if r["data"] and r["data"].get("chunks")), None)
                 calculation_id = "calc-" + str(uuid.uuid4())
                 invocation_context = context(current)
                 try:
@@ -496,13 +785,25 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
                         raise ValueError("missing binding")
                     authorized = authorize_calculation(bundle, task=child, sql=sql, rag=selected_rag, profile=profiles.get(state["profile_id"]), context=invocation_context, calculation_id=calculation_id, expected_mode="verified_business")
                 except Exception:
-                    return mark(current, "calculate", status="insufficient_evidence", calculations=calculations, calculation_records=records, limitations=[*current["limitations"], f"{metric}/{function}缺少同周期/范围的有效目标与公式绑定，未执行该项。"])
+                    binding_failures.append(f"{metric}/{function}")
+                    continue
+                prior_status, prior_error = current.get("status"), current.get("error")
                 outcome = await runtime.run("calculator.calculate", authorized.request, invocation_context.model_copy(update={"calculation_permit": authorized.permit}))
                 current.update(tool_update(current, "calculate", outcome, "calculation_binding", []))
                 if not outcome.succeeded:
-                    return {**current, "calculations": calculations, "calculation_records": records}
+                    # A failed child calculation must not erase successful
+                    # siblings.  Keep the tool event for traceability while
+                    # restoring the parent readiness for the remaining loop.
+                    current["status"], current["error"] = prior_status, prior_error
+                    binding_failures.append(f"{metric}/{function}")
+                    continue
                 calculations.append(outcome.data.model_dump(mode="json"))
                 records.append({"task": child.model_dump(mode="json"), "binding": authorized.request.model_dump(mode="json"), "audit": authorized.audit, "retrieval_id": selected_rag.retrieval_id})
+                missing_context_roles.extend(authorized.audit.get("missing_roles", []))
+        if binding_failures:
+            current["limitations"] = [*current["limitations"], "部分计算绑定失败，已保留其余成功结果：" + "、".join(dict.fromkeys(binding_failures)) + "。"]
+        if missing_context_roles:
+            current["limitations"] = [*current["limitations"], "跨源解释证据缺少角色：" + "、".join(dict.fromkeys(missing_context_roles)) + "；已保留实际/目标计算结果。"]
         return {**current, "calculations": calculations, "calculation_records": records,
             "calculation_binding": records[0]["binding"] if records else None, "calculation_evidence": records[0]["audit"] if records else None}
 
@@ -520,25 +821,38 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
                     parsed.reason=str(exc)
                     return mark(state,'evidence_check',status='insufficient_evidence',parsed=parsed.model_dump(mode='json'))
                 return mark(state,'evidence_check',status='answered',business_audit=audit)
+            gaps = []
             if state["route"] in ("sql", "cross_source") and (not sql or not any(result.rows for result in sql.sql_results)):
                 status = "insufficient_evidence"
+                gaps.append("数据库查询没有返回可用于本轮结论的结果行")
             if state["route"] in ("rag", "cross_source") and (not rag or not rag.chunks):
                 status = "insufficient_evidence"
+                gaps.append("文档检索没有返回可定位的片段")
             if state.get("retrieval_outcomes"):
                 from .task_plan import document_needs
+                from ..knowledge.source_plan import rag_source_plan
                 task = ParsedTurn.model_validate(state["parsed"]).task
-                required_docs = {d for d in document_needs(task) if d}
+                soft = fast_knowledge and os.getenv('AGENT_FAST_RAG', '1').casefold() not in {'0', 'false', 'off', 'no'}
+                source_plan = rag_source_plan(task.retrieval_question or task.original_question)
+                required_docs = set(source_plan.primary_docs) if soft else {d for d in document_needs(task) if d}
+                if soft and task.needs_calculation:
+                    # Operand/formula coverage is proved by the calculator
+                    # authorization, rather than optional review doc ids.
+                    required_docs = set()
                 present = {c["doc_id"] for outcome in state["retrieval_outcomes"] if outcome["data"] for c in outcome["data"]["chunks"]}
                 if not required_docs <= present:
                     status = "insufficient_evidence"
-                if any(not item["complete"] for item in task.evidence_coverage):
+                    gaps.append("缺少必要文档：" + "、".join(sorted(required_docs - present)))
+                if not soft and any(not item["complete"] for item in task.evidence_coverage):
                     status = "insufficient_evidence"
+                    gaps.append("本轮证据只覆盖了部分问题条件")
             if "calculator.calculate" in state["tool_plan"] and not state["calculations"]:
                 status = "insufficient_evidence"
+                gaps.append("计算所需的有效绑定或结果不存在")
             task = ParsedTurn.model_validate(state["parsed"]).task
             from .cross_templates import completed
             chunks = [DocumentChunk.model_validate(c) for r in state.get("retrieval_outcomes", []) if r["data"] for c in r["data"]["chunks"]]
-            blocked = set(task.required_outputs) & {"document_sum"}
+            blocked = (set(task.required_outputs) & {"document_sum"}) if not state['calculations'] else set()
             if {"customer_tiers", "monthly_actuals", "transaction_exists"} & set(task.required_outputs) and not completed(task, sql, chunks):
                 blocked.update(set(task.required_outputs) & {"customer_tiers", "monthly_actuals", "transaction_exists"})
             if blocked:
@@ -547,6 +861,8 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
                 return mark(state, "evidence_check", status="insufficient_evidence", limitations=[*state["limitations"], "尚未解锁必要的客户分层/月度粒度/文档合计算子：" + ", ".join(sorted(blocked)) + "；不把片段命中当作完整结论。"])
             if status == "ready":
                 status = "answered"
+            if gaps:
+                return mark(state, "evidence_check", status=status, limitations=[*state["limitations"], "证据检查缺口：" + "；".join(dict.fromkeys(gaps)) + "。"])
         return mark(state, "evidence_check", status=status)
 
     async def compose(state: AgentState):
@@ -630,17 +946,20 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
 
     builder = StateGraph(AgentState)
     for name, node in [
-        ("initialize_turn", initialize), ("parse_question", parse),
+        ("initialize_turn", initialize), ("parse_question", parse), ("semantic_route", semantic_route),
         ("validate_slots_and_capabilities", validate), ("sql", call_sql),
         ("rag", call_rag), ("calculate", calculate),
+        ('parallel_sources', parallel_sources),
         ('prepare_business',prepare_business),
         ("evidence_check", evidence_check), (compose_node, compose),
     ]:
         builder.add_node(name, node)
     builder.add_edge(START, "initialize_turn")
     builder.add_edge("initialize_turn", "parse_question")
-    builder.add_edge("parse_question", "validate_slots_and_capabilities")
-    builder.add_conditional_edges("validate_slots_and_capabilities", start_route, ["sql", "rag", compose_node])
+    builder.add_edge("parse_question", "semantic_route")
+    builder.add_edge("semantic_route", "validate_slots_and_capabilities")
+    builder.add_conditional_edges("validate_slots_and_capabilities", start_route, ["sql", "rag", 'parallel_sources', compose_node])
+    builder.add_conditional_edges('parallel_sources', after_parallel, ['calculate', 'evidence_check'])
     builder.add_conditional_edges("sql", after_sql, ["rag", "calculate", "evidence_check"])
     builder.add_conditional_edges("rag", after_rag, ["sql", "calculate", "evidence_check", "prepare_business"])
     builder.add_conditional_edges("prepare_business", after_business_plan, ["sql", "evidence_check"])

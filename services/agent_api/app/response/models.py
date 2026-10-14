@@ -1,6 +1,7 @@
 """Internal per-turn input. Deliberately excludes old answers/diagnostics/permits."""
 
 from dataclasses import dataclass
+import re
 from typing import Literal, Protocol
 
 from ..agent.state import BusinessTask
@@ -11,6 +12,20 @@ from ..tools.models import CalculationRequest, SqlTaskOutcome
 
 
 ExecutionMode = Literal["fixture", "offline_sql_integration", "offline_sql_d12_integration", "calculation_fixture"]
+
+
+_GENRE_ID_FORMS = (
+    re.compile(r"(?i)\bGenre\s*Id\s*(?:为|是|=|:|：)\s*(\d+)"),
+    re.compile(r"(?i)\bGenre\s+(?:为|是|=|:|：)\s*(\d+)"),
+)
+
+
+def normalize_answer_contract(answer: str) -> str:
+    """Normalize stable entity spellings before exposing an answer."""
+    normalized = answer
+    for pattern in _GENRE_ID_FORMS:
+        normalized = pattern.sub(lambda match: f"Genre:{match.group(1)}", normalized)
+    return normalized
 
 
 @dataclass(frozen=True)
@@ -37,6 +52,7 @@ class ComposeContext:
     parser_reason: str | None = None
     reset_context: bool = False
     document_answer: str | None = None
+    general_answer: str | None = None
     retrievals: tuple[RetrievalResponse, ...] = ()
     calculation_records: tuple[dict, ...] = ()
 

@@ -51,7 +51,8 @@ def source(doc: str, location: str, page: int | None = None, region: str | None 
 def item(id_, level, capability, question, *, data_scope="music", tables=None, docs=None,
          evidence=None, gold_sql=None, gold_result=None, gold_calculation=None,
          gold_answer="", requirements=None, clarify=False, clarify_target=None,
-         difficulty="easy", split="dev", modality="text", known_conflicts=None):
+         difficulty="easy", split="dev", modality="text", known_conflicts=None,
+         invariants=None):
     route = "clarification" if clarify else ("unsupported" if capability.startswith("unsupported") else ("cross_source" if tables and docs else ("sql" if tables or gold_sql else "rag")))
     status = "clarification_required" if clarify else ("unsupported" if capability.startswith("unsupported") else "answered")
     mode = "hybrid" if route == "cross_source" else ("sql_only" if route == "sql" else ("rag_only" if route == "rag" else "hybrid"))
@@ -82,6 +83,7 @@ def item(id_, level, capability, question, *, data_scope="music", tables=None, d
         "gold_params": [Q3_START, Q3_END] if gold_sql and gold_sql.count("?") == 2 else [],
         "known_conflicts": known_conflicts or [],
         "gold_answer_requirements": requirements or [],
+        "invariants": invariants or [],
         "clarification_required": clarify, "clarification_target": clarify_target,
         "difficulty": difficulty, "split": split, "modality": modality,
         "interface_expectation": interface_expectation,
@@ -239,11 +241,11 @@ mixed_sql = """SELECT COUNT(DISTINCT i.InvoiceId) AS mixed_order_count FROM Invo
 multi_sql.append(item("special-multitable-008","special","mixed_order_join","数据库中同时含音频和视频明细的订单有多少张？",data_scope="all_media",tables=["Invoice","InvoiceLine","Track","MediaType"],gold_sql=mixed_sql,gold_result=run(mixed_sql)[0],gold_answer="有17张订单同时含音频和视频明细。计算音乐销售额时仍需按InvoiceLine筛选。",requirements=["结果为17", "说明混合订单处理"],difficulty="hard"))
 
 formula = [
-    item("special-formula-001","special","target_gap_formula","第三季度全音频销售额距离目标差多少，达成率是多少？",docs=["D06","D08"],evidence=[source("D06","附件1 目标明细",1),source("D08","一 经营摘要",1)],gold_calculation={"actual":112.86,"target":120.00,"gap":"112.86-120.00=-7.14","rate":"112.86/120.00=94.05%"},gold_answer="实际销售额112.86美元，目标120.00美元，差额-7.14美元，达成率94.05%，未达标。",requirements=["展示输入、公式和结果"],difficulty="medium"),
-    item("special-formula-002","special","target_gap_formula","第三季度Rock销售额距离目标差多少，达成率是多少？",docs=["D06","D08"],evidence=[source("D06","附件1 目标明细",1),source("D08","三 目标达成情况",2)],gold_calculation={"actual":47.52,"target":50.00,"gap":"-2.48","rate":"95.04%"},gold_answer="Rock实际47.52美元，目标50.00美元，差额-2.48美元，达成率95.04%，未达标。",requirements=["金额差额正确", "百分比正确"],difficulty="medium"),
-    item("special-formula-003","special","growth_formula","第三季度音频销售额比第二季度增长多少？",docs=["D07","D08"],evidence=[source("D07","一 经营摘要",1),source("D08","一 经营摘要",1)],gold_calculation={"current":112.86,"previous":108.90,"increase":"3.96","rate":"3.64%"},gold_answer="增长3.96美元，增长率约为3.64%（3.96÷108.90）。",requirements=["增长额和增长率都给出"],difficulty="medium"),
-    item("special-formula-004","special","target_gap_formula","第三季度Rock销量完成了多少？",docs=["D06","D08"],evidence=[source("D06","附件1 目标明细",1),source("D08","三 目标达成情况",2)],gold_calculation={"actual":48,"target":50,"gap":"-2件","rate":"96.00%"},gold_answer="Rock销量48件，目标50件，差额-2件，达成率96.00%，未达标。",requirements=["独立判断销量目标"],difficulty="medium"),
-    item("special-formula-005","special","aov_formula","二季度音频客单价是多少？",docs=["D01","D07"],evidence=[source("D01","客单价",1),source("D07","关键数字",1)],gold_calculation={"sales":108.90,"orders":19,"aov":"108.90/19=5.73"},gold_answer="二季度音频客单价为5.73美元/单（108.90÷19）。",requirements=["使用订单数作分母"],difficulty="easy"),
+    item("special-formula-001","special","target_gap_formula","2025年第三季度全音频销售额距离目标差多少，达成率是多少？",docs=["D06","D08"],evidence=[source("D06","附件1 目标明细",1),source("D08","一 经营摘要",1)],gold_calculation={"actual":112.86,"target":120.00,"gap":"112.86-120.00=-7.14","rate":"112.86/120.00=94.05%"},gold_answer="实际销售额112.86美元，目标120.00美元，差额-7.14美元，达成率94.05%，未达标。",requirements=["展示输入、公式和结果"],difficulty="medium"),
+    item("special-formula-002","special","target_gap_formula","2025年第三季度Rock销售额距离目标差多少，达成率是多少？",docs=["D06","D08"],evidence=[source("D06","附件1 目标明细",1),source("D08","三 目标达成情况",2)],gold_calculation={"actual":47.52,"target":50.00,"gap":"-2.48","rate":"95.04%"},gold_answer="Rock实际47.52美元，目标50.00美元，差额-2.48美元，达成率95.04%，未达标。",requirements=["金额差额正确", "百分比正确"],difficulty="medium"),
+    item("special-formula-003","special","growth_formula","2025年第三季度音频销售额比第二季度增长多少？",docs=["D07","D08"],evidence=[source("D07","一 经营摘要",1),source("D08","一 经营摘要",1)],gold_calculation={"current":112.86,"previous":108.90,"increase":"3.96","rate":"3.64%"},gold_answer="增长3.96美元，增长率约为3.64%（3.96÷108.90）。",requirements=["增长额和增长率都给出"],difficulty="medium"),
+    item("special-formula-004","special","target_gap_formula","2025年第三季度Rock销量完成了多少？",docs=["D06","D08"],evidence=[source("D06","附件1 目标明细",1),source("D08","三 目标达成情况",2)],gold_calculation={"actual":48,"target":50,"gap":"-2件","rate":"96.00%"},gold_answer="Rock销量48件，目标50件，差额-2件，达成率96.00%，未达标。",requirements=["独立判断销量目标"],difficulty="medium"),
+    item("special-formula-005","special","aov_formula","2025年二季度音频客单价是多少？",docs=["D01","D07"],evidence=[source("D01","客单价",1),source("D07","关键数字",1)],gold_calculation={"sales":108.90,"orders":19,"aov":"108.90/19=5.73"},gold_answer="二季度音频客单价为5.73美元/单（108.90÷19）。",requirements=["使用订单数作分母"],difficulty="easy"),
     item("special-formula-006","special","monthly_plan_comparison","第三季度全音频月度销售额计划合计是多少？",docs=["D06"],evidence=[source("D06","附件2 月度检查安排",2)],gold_calculation={"monthly_plan":[38.00,40.00,42.00],"sum":"38+40+42=120.00"},gold_answer="7月38.00美元、8月40.00美元、9月42.00美元，合计120.00美元。",requirements=["保留月度拆分"],difficulty="easy"),
 ]
 
@@ -264,14 +266,14 @@ negative = [
 ]
 
 cross = [
-    item("cross-001","fusion","actual_vs_target","第三季度Rock销售额达到目标了吗？差多少？",tables=["Invoice","InvoiceLine","Track","Genre"],docs=["D06","D08"],evidence=[source("D06","附件1 目标明细",1),source("D08","三 目标达成情况",2)],gold_sql=f"""SELECT ROUND(SUM(il.UnitPrice*il.Quantity),2) AS actual_sales FROM Invoice i JOIN InvoiceLine il ON il.InvoiceId=i.InvoiceId JOIN Track t ON t.TrackId=il.TrackId WHERE t.MediaTypeId IN {AUDIO} AND t.GenreId=1 AND i.InvoiceDate>='{Q3_START}' AND i.InvoiceDate<'{Q3_END}';""",gold_result={"actual_sales":47.52,"target_sales":50.00,"gap":-2.48,"rate":"95.04%"},gold_calculation={"actual":47.52,"target":50.00,"gap":"-2.48","rate":"95.04%"},gold_answer="Rock实际销售额47.52美元，目标50.00美元，差额-2.48美元，达成率95.04%，未达标。",requirements=["数据库实际值正确", "目标取D06", "说明D08结论"],difficulty="medium"),
-    item("cross-002","fusion","actual_vs_target","第三季度全音频销售额和销量是否都达标？",tables=["Invoice","InvoiceLine","Track"],docs=["D06","D08"],evidence=[source("D06","附件1 目标明细",1),source("D08","一 经营摘要",1)],gold_result={"sales_actual":112.86,"sales_target":120.00,"sales_rate":"94.05%","units_actual":114,"units_target":125,"units_rate":"91.20%"},gold_answer="两项都未达标：销售额112.86/120.00美元，达成率94.05%；销量114/125件，达成率91.20%。",requirements=["分别判断销售额和销量"],difficulty="medium"),
-    item("cross-003","fusion","genre_action","第三季度销售额最高的品类是什么，运营手册建议关注什么？",tables=["Invoice","InvoiceLine","Track","Genre"],docs=["D09","D08"],evidence=[source("D08","三 目标达成情况",2),source("D09","Rock 品类运营")],gold_result={"genre":"Rock","sales_amount":47.52},gold_answer="Rock最高，销售额47.52美元。运营手册建议继续整理成交商品和专辑，关注专题陈列、订单集中和专辑覆盖。",requirements=["实际排名正确", "动作来自D09"],difficulty="medium"),
-    item("cross-004","fusion","customer_tiering","第三季度购买Rock的客户，哪些属于A层重点维护？",tables=["Invoice","InvoiceLine","Track","Customer"],docs=["D04"],evidence=[source("D04","三 活跃客户层级定义"),source("D04","七 第三季度分层结果示例")],gold_sql=f"""SELECT i.CustomerId,ROUND(SUM(CASE WHEN t.GenreId=1 THEN il.UnitPrice*il.Quantity ELSE 0 END),2) AS rock_sales FROM Invoice i JOIN InvoiceLine il ON il.InvoiceId=i.InvoiceId JOIN Track t ON t.TrackId=il.TrackId WHERE t.MediaTypeId IN {AUDIO} AND i.InvoiceDate>='{Q3_START}' AND i.InvoiceDate<'{Q3_END}' GROUP BY i.CustomerId HAVING rock_sales>0 ORDER BY rock_sales DESC;""",gold_result=run(f"""SELECT i.CustomerId,ROUND(SUM(CASE WHEN t.GenreId=1 THEN il.UnitPrice*il.Quantity ELSE 0 END),2) AS rock_sales FROM Invoice i JOIN InvoiceLine il ON il.InvoiceId=i.InvoiceId JOIN Track t ON t.TrackId=il.TrackId WHERE t.MediaTypeId IN {AUDIO} AND i.InvoiceDate>=? AND i.InvoiceDate<? GROUP BY i.CustomerId HAVING rock_sales>0 ORDER BY rock_sales DESC""",(Q3_START,Q3_END)),gold_answer="第三季度购买Rock的客户中，按D04当季音频销售额大于等于12.00美元的A层客户是CustomerId 10、31、48。Rock购买事实来自数据库，A层判断使用客户当季全部音频销售额，不是只看Rock金额。",requirements=["列出CustomerId 10、31、48", "客户事实来自数据库", "层级阈值来自D04"],difficulty="hard"),
-    item("cross-005","fusion","quarter_compare_action","第三季度比第二季度增长了多少，D02建议如何解读？",tables=["Invoice","InvoiceLine","Track"],docs=["D02","D07","D08"],evidence=[source("D07","一 经营摘要",1),source("D08","一 经营摘要",1),source("D02","增长率和特殊分母")],gold_result={"q2_sales":108.90,"q3_sales":112.86,"increase":3.96,"growth_rate":"3.64%"},gold_answer="销售额增加3.96美元，增长约3.64%。D02强调增长比较和目标达成是两种判断，因此三季度虽有增长，仍需另看120.00美元目标是否完成。",requirements=["跨期计算正确", "引用D02解释"],difficulty="hard"),
+    item("cross-001","fusion","actual_vs_target","2025年第三季度Rock销售额达到目标了吗？差多少？",tables=["Invoice","InvoiceLine","Track","Genre"],docs=["D06","D08"],evidence=[source("D06","附件1 目标明细",1),source("D08","三 目标达成情况",2)],gold_sql=f"""SELECT ROUND(SUM(il.UnitPrice*il.Quantity),2) AS actual_sales FROM Invoice i JOIN InvoiceLine il ON il.InvoiceId=i.InvoiceId JOIN Track t ON t.TrackId=il.TrackId WHERE t.MediaTypeId IN {AUDIO} AND t.GenreId=1 AND i.InvoiceDate>='{Q3_START}' AND i.InvoiceDate<'{Q3_END}';""",gold_result={"actual_sales":47.52,"target_sales":50.00,"gap":-2.48,"rate":"95.04%"},gold_calculation={"actual":47.52,"target":50.00,"gap":"-2.48","rate":"95.04%"},gold_answer="Rock实际销售额47.52美元，目标50.00美元，差额-2.48美元，达成率95.04%，未达标。",requirements=["数据库实际值正确", "目标取D06", "说明D08结论"],difficulty="medium"),
+    item("cross-002","fusion","actual_vs_target","2025年第三季度全音频销售额和销量是否都达标？",tables=["Invoice","InvoiceLine","Track"],docs=["D06","D08"],evidence=[source("D06","附件1 目标明细",1),source("D08","一 经营摘要",1)],gold_result={"sales_actual":112.86,"sales_target":120.00,"sales_rate":"94.05%","units_actual":114,"units_target":125,"units_rate":"91.20%"},gold_answer="两项都未达标：销售额112.86/120.00美元，达成率94.05%；销量114/125件，达成率91.20%。",requirements=["分别判断销售额和销量"],difficulty="medium"),
+    item("cross-003","fusion","genre_action","2025年第三季度销售额最高的品类是什么，运营手册建议关注什么？",tables=["Invoice","InvoiceLine","Track","Genre"],docs=["D09","D08"],evidence=[source("D08","三 目标达成情况",2),source("D09","Rock 品类运营")],gold_result={"genre":"Rock","sales_amount":47.52},gold_answer="Rock最高，销售额47.52美元。运营手册建议继续整理成交商品和专辑，关注专题陈列、订单集中和专辑覆盖。",requirements=["实际排名正确", "动作来自D09"],difficulty="medium"),
+    item("cross-004","fusion","customer_tiering","2025年第三季度购买Rock的客户，哪些属于A层重点维护？",tables=["Invoice","InvoiceLine","Track","Customer"],docs=["D04"],evidence=[source("D04","三 活跃客户层级定义"),source("D04","七 第三季度分层结果示例")],gold_sql=f"""SELECT i.CustomerId,ROUND(SUM(CASE WHEN t.GenreId=1 THEN il.UnitPrice*il.Quantity ELSE 0 END),2) AS rock_sales FROM Invoice i JOIN InvoiceLine il ON il.InvoiceId=i.InvoiceId JOIN Track t ON t.TrackId=il.TrackId WHERE t.MediaTypeId IN {AUDIO} AND i.InvoiceDate>='{Q3_START}' AND i.InvoiceDate<'{Q3_END}' GROUP BY i.CustomerId HAVING rock_sales>0 ORDER BY rock_sales DESC;""",gold_result=run(f"""SELECT i.CustomerId,ROUND(SUM(CASE WHEN t.GenreId=1 THEN il.UnitPrice*il.Quantity ELSE 0 END),2) AS rock_sales FROM Invoice i JOIN InvoiceLine il ON il.InvoiceId=i.InvoiceId JOIN Track t ON t.TrackId=il.TrackId WHERE t.MediaTypeId IN {AUDIO} AND i.InvoiceDate>=? AND i.InvoiceDate<? GROUP BY i.CustomerId HAVING rock_sales>0 ORDER BY rock_sales DESC""",(Q3_START,Q3_END)),gold_answer="第三季度购买Rock的客户中，按D04当季音频销售额大于等于12.00美元的A层客户是CustomerId 10、31、48。Rock购买事实来自数据库，A层判断使用客户当季全部音频销售额，不是只看Rock金额。",requirements=["列出CustomerId 10、31、48", "客户事实来自数据库", "层级阈值来自D04"],difficulty="hard"),
+    item("cross-005","fusion","quarter_compare_action","2025年第三季度比第二季度增长了多少，D02建议如何解读？",tables=["Invoice","InvoiceLine","Track"],docs=["D02","D07","D08"],evidence=[source("D07","一 经营摘要",1),source("D08","一 经营摘要",1),source("D02","增长率和特殊分母")],gold_result={"q2_sales":108.90,"q3_sales":112.86,"increase":3.96,"growth_rate":"3.64%"},gold_answer="销售额增加3.96美元，增长约3.64%。D02强调增长比较和目标达成是两种判断，因此三季度虽有增长，仍需另看120.00美元目标是否完成。",requirements=["跨期计算正确", "引用D02解释"],difficulty="hard"),
     item("cross-006","fusion","poster_product_sales","海报要求的Rock主页面商品中，TrackId 1791-1799在第三季度是否有成交？",tables=["Invoice","InvoiceLine","Track"],docs=["D05","D11"],evidence=[source("D11","报名条件",region="eligibility"),source("D05","四 Rock 商品选品",2)],gold_sql=f"""SELECT t.TrackId,t.Name,ROUND(COALESCE(SUM(CASE WHEN i.InvoiceDate>='{Q3_START}' AND i.InvoiceDate<'{Q3_END}' THEN il.UnitPrice*il.Quantity END),0),2) AS q3_sales FROM Track t LEFT JOIN InvoiceLine il ON il.TrackId=t.TrackId LEFT JOIN Invoice i ON i.InvoiceId=il.InvoiceId WHERE t.TrackId IN (1791,1793,1795,1797,1799) GROUP BY t.TrackId,t.Name ORDER BY t.TrackId;""",gold_result=run(f"""SELECT t.TrackId,t.Name,ROUND(COALESCE(SUM(CASE WHEN i.InvoiceDate>=? AND i.InvoiceDate<? THEN il.UnitPrice*il.Quantity END),0),2) AS q3_sales FROM Track t LEFT JOIN InvoiceLine il ON il.TrackId=t.TrackId LEFT JOIN Invoice i ON i.InvoiceId=il.InvoiceId WHERE t.TrackId IN (1791,1793,1795,1797,1799) GROUP BY t.TrackId,t.Name ORDER BY t.TrackId""",(Q3_START,Q3_END)),gold_answer="五个商品均有成交：TrackId 1791、1793、1795、1797、1799 的第三季度销售额均为0.99美元。候选范围来自D05，主页面条件来自D11。",requirements=["图片条件与数据库商品相接", "列出五个TrackId", "每个销售额为0.99美元"],difficulty="hard",modality="image"),
-    item("cross-007","fusion","metal_gap_activity","第三季度Metal未达目标，活动方案把Metal放在什么位置？",tables=["Invoice","InvoiceLine","Track","Genre"],docs=["D06","D08","D10"],evidence=[source("D08","三 目标达成情况",2),source("D10","活动内容")],gold_result={"actual_sales":21.78,"target_sales":24.00,"gap":-2.22},gold_answer="Metal实际销售额21.78美元，目标24.00美元，差额-2.22美元；D10把Metal安排为Rock主题活动的延伸栏目，不作为主页面主品类。",requirements=["目标比较正确", "活动位置准确"],difficulty="medium"),
-    item("cross-008","fusion","latin_gap_action","第三季度Latin距离目标多少，D09建议观察什么？",tables=["Invoice","InvoiceLine","Track","Genre"],docs=["D06","D08","D09"],evidence=[source("D08","三 目标达成情况",2),source("D09","Latin")],gold_result={"actual_sales":15.84,"target_sales":18.00,"gap":-2.16,"units":16},gold_answer="Latin实际15.84美元，目标18.00美元，差额-2.16美元，销量16件；D09建议继续观察商品组合和客户覆盖，先核对成交明细。",requirements=["金额和动作均正确"],difficulty="medium"),
+    item("cross-007","fusion","metal_gap_activity","2025年第三季度Metal销售额距离目标差多少，活动方案把Metal放在什么位置？",tables=["Invoice","InvoiceLine","Track","Genre"],docs=["D06","D08","D10"],evidence=[source("D08","三 目标达成情况",2),source("D10","活动内容")],gold_result={"actual_sales":21.78,"target_sales":24.00,"gap":-2.22},gold_answer="Metal实际销售额21.78美元，目标24.00美元，差额-2.22美元；D10把Metal安排为Rock主题活动的延伸栏目，不作为主页面主品类。",requirements=["目标比较正确", "活动位置准确"],difficulty="medium"),
+    item("cross-008","fusion","latin_gap_action","2025年第三季度Latin距离目标多少，D09建议观察什么？",tables=["Invoice","InvoiceLine","Track","Genre"],docs=["D06","D08","D09"],evidence=[source("D08","三 目标达成情况",2),source("D09","Latin")],gold_result={"actual_sales":15.84,"target_sales":18.00,"gap":-2.16,"units":16},gold_answer="Latin实际15.84美元，目标18.00美元，差额-2.16美元，销量16件；D09建议继续观察商品组合和客户覆盖，先核对成交明细。",requirements=["金额和动作均正确"],difficulty="medium"),
     item("cross-009","fusion","monthly_plan_actual","第三季度每月全音频实际销售额与目标计划分别是多少？",tables=["Invoice","InvoiceLine","Track"],docs=["D06","D08"],evidence=[source("D06","附件2 月度检查安排",2),source("D08","二 月度节奏",1)],gold_sql=f"""SELECT substr(i.InvoiceDate,1,7) AS month,ROUND(SUM(il.UnitPrice*il.Quantity),2) AS actual_sales FROM Invoice i JOIN InvoiceLine il ON il.InvoiceId=i.InvoiceId JOIN Track t ON t.TrackId=il.TrackId WHERE t.MediaTypeId IN {AUDIO} AND i.InvoiceDate>=? AND i.InvoiceDate<? GROUP BY substr(i.InvoiceDate,1,7) ORDER BY month;""",gold_result=run(f"""SELECT substr(i.InvoiceDate,1,7) AS month,ROUND(SUM(il.UnitPrice*il.Quantity),2) AS actual_sales FROM Invoice i JOIN InvoiceLine il ON il.InvoiceId=i.InvoiceId JOIN Track t ON t.TrackId=il.TrackId WHERE t.MediaTypeId IN {AUDIO} AND i.InvoiceDate>=? AND i.InvoiceDate<? GROUP BY substr(i.InvoiceDate,1,7) ORDER BY month""",(Q3_START,Q3_END)),gold_calculation={"database_monthly_actual":{"2025-07":37.62,"2025-08":37.62,"2025-09":37.62},"document_D08_claim":{"2025-08":36.63},"conflict":"D08的8月数字与数据库不一致；D08数字与季度112.86也不相加"},gold_answer="计划为7月38.00、8月40.00、9月42.00美元；数据库按订单明细算出的实际为7月37.62、8月37.62、9月37.62美元。D08文档写8月36.63美元，这与数据库及112.86美元季度合计冲突，回答时必须标注冲突，不能静默选择一个数字。",requirements=["给出数据库三个月实际值", "给出D08冲突值", "解释112.86与36.63不相加"],difficulty="hard",known_conflicts=["D08二 月度节奏的8月销售额36.63与数据库37.62冲突", "D08月度三项相加不等于季度112.86"]),
     item("cross-010","fusion","classification_selection","D03规定Metal和Heavy Metal分开时，D05的Metal候选应使用哪个Genre？",docs=["D03","D05"],evidence=[source("D03","Metal的消歧"),source("D05","Metal商品选品",2)],gold_answer="D05的Metal候选使用Genre:3；Heavy Metal为Genre:13，不自动并入Metal主列表。",requirements=["两个文档边界一致"],difficulty="medium"),
 ]
@@ -286,14 +288,15 @@ multidoc = [
 
 multiturn = [
     {"id":"session-001","level":"fusion","capability":"target_followup","turns":[
-        {"turn":1,"question":"第三季度Rock销售额是多少？","gold_answer":"47.52美元。","expected_tables":["Invoice","InvoiceLine","Track"],"expected_documents":[]},
+        {"turn":1,"question":"2025年第三季度Rock销售额是多少？","gold_answer":"47.52美元。","expected_tables":["Invoice","InvoiceLine","Track"],"expected_documents":[]},
         {"turn":2,"question":"和目标比呢？","gold_answer":"目标50.00美元，差额-2.48美元，达成率95.04%，未达标。","expected_documents":["D06","D08"]},
         {"turn":3,"question":"那下一步重点看什么？","gold_answer":"继续检查Rock商品覆盖、订单集中和专辑结构，并结合品类运营动作安排专题陈列。","expected_documents":["D09"]},
     ]},
     {"id":"session-002","level":"fusion","capability":"period_switch","turns":[
-        {"turn":1,"question":"二季度音频销售额是多少？","gold_answer":"108.90美元。","expected_documents":["D07"]},
-        {"turn":2,"question":"换成三季度呢？","gold_answer":"112.86美元。","expected_documents":["D08"]},
-        {"turn":3,"question":"增长率是多少？","gold_answer":"增长3.96美元，约3.64%。","expected_documents":["D07","D08","D01"]},
+        # 裸期间金额以数据库为权威源，所以 t1/t2 期望 sql；只有 t3 的增长率需要跨期计算。
+        {"turn":1,"question":"2025年二季度音频销售额是多少？","gold_answer":"108.90美元。","expected_tables":["Invoice","InvoiceLine","Track"],"expected_documents":[]},
+        {"turn":2,"question":"换成三季度呢？","gold_answer":"112.86美元。","expected_tables":["Invoice","InvoiceLine","Track"],"expected_documents":[]},
+        {"turn":3,"question":"增长率是多少？","gold_answer":"增长3.96美元，约3.64%。","expected_tables":["Invoice","InvoiceLine","Track"],"expected_documents":["D07","D08","D01"]},
     ]},
     {"id":"session-003","level":"special","capability":"scope_clarification","turns":[
         {"turn":1,"question":"摇滚销售额是多少？","gold_answer":"请先指定时间范围；默认“摇滚”对应Genre:1，是否包括Rock And Roll也需确认。","expected_documents":["D03"],"clarification_required":True},
@@ -310,6 +313,21 @@ multiturn = [
         {"turn":2,"question":"报名要交什么？","gold_answer":"商品清单、选品理由和一段页面文案。","expected_documents":["D11"],"modality":"image"},
         {"turn":3,"question":"活动什么时候举行？","gold_answer":"2025年10月20日至11月2日。","expected_documents":["D11","D10"],"modality":"image"},
     ]},
+]
+
+robustness = [
+    item("robust-001", "special", "robust_alias_boundary", "2025年第三季度摇滚类音频销售额是多少？", tables=["Invoice", "InvoiceLine", "Track", "Genre"], gold_answer="默认按Rock（Genre:1）统计，Rock And Roll（Genre:5）不静默并入。", requirements=["保持Rock与Rock And Roll边界"], invariants=["route_stable", "genre_boundary_preserved"]),
+    item("robust-002", "special", "robust_case_normalization", "2025年第三季度 ROCK 音频销售额是多少？", tables=["Invoice", "InvoiceLine", "Track"], gold_answer="Rock对应Genre:1，第三季度音频销售额为47.52美元。", requirements=["统一到Genre:1"], invariants=["case_insensitive", "canonical_entity"]),
+    item("robust-003", "special", "robust_noise_tolerance", "请忽略这段无关说明，直接查询2025 Q3音频销售额。", tables=["Invoice", "InvoiceLine", "Track"], gold_answer="2025年第三季度音频销售额为112.86美元。", requirements=["返回正确销售额"], invariants=["route_sql", "noise_ignored"]),
+    item("robust-004", "special", "robust_missing_year", "第三季度音频销售额是多少？", docs=["D01"], gold_answer="请补充查询年份。", requirements=["要求年份"], clarify=True, clarify_target=["year"], invariants=["clarify_missing_year"]),
+    item("robust-005", "special", "robust_conflicting_period", "2025年第三季度和2025年第二季度的音频销售额是多少？", docs=["D01"], gold_answer="请明确唯一查询期间，当前问题同时包含两个季度。", requirements=["指出时间冲突"], clarify=True, clarify_target=["time_range"], invariants=["clarify_period_conflict"]),
+    item("robust-006", "special", "unsupported_profit", "第三季度利润是多少？", docs=["D12"], evidence=[source("D12", "十 当前不支持的查询")], gold_answer="当前资料没有成本或结算金额，不能计算利润。", requirements=["说明成本或结算金额缺失"], invariants=["no_metric_substitution"]),
+    item("robust-007", "special", "unsupported_campaign_events", "活动页面带来了多少点击和转化？", docs=["D10", "D12"], gold_answer="当前没有活动曝光、点击或转化事件日志，只能统计交易变化。", requirements=["说明事件日志缺失"], invariants=["no_transaction_substitution"]),
+    item("robust-008", "special", "robust_document_boundary", "全店销售额和音乐销售额有什么范围差异？", docs=["D03"], gold_answer="音乐销售额默认只统计音频；全店销售额可以包含全部MediaType，需要明确是否纳入视频。", requirements=["不要求时间范围", "区分全店和音乐"], invariants=["route_rag", "no_period_clarification"]),
+    item("robust-009", "special", "robust_followup_noise", "上一轮问过第二季度；现在改看2025年第三季度音频销售额是多少？", tables=["Invoice", "InvoiceLine", "Track"], gold_answer="2025年第三季度音频销售额为112.86美元。", requirements=["只使用当前第三季度条件"], invariants=["current_period_wins", "metric_preserved"]),
+    item("robust-010", "special", "robust_invalid_quarter", "2025年第六季度音频销售额是多少？", docs=["D01"], gold_answer="请改为第一至第四季度，当前季度值无效。", requirements=["指出非法季度"], clarify=True, clarify_target=["time_range"], invariants=["invalid_period_not_downgraded"]),
+    item("robust-011", "special", "robust_media_aggregation", "音乐和视频销售额要分开看还是合计？", docs=["D01", "D03"], gold_answer="请明确媒体范围：分别统计，还是合并音视频后统计。", requirements=["要求明确媒体聚合方式"], clarify=True, clarify_target=["media_scope"], invariants=["no_silent_aggregation"]),
+    item("robust-012", "special", "robust_vague_metric", "卖得怎么样？", docs=["D01", "D12"], gold_answer="请明确要看的指标和观察范围，例如销售额、销量或订单数，以及时间范围。", requirements=["要求指标和范围"], clarify=True, clarify_target=["metric", "scope"], invariants=["clarify_vague_request"]),
 ]
 
 for session in multiturn:
@@ -348,6 +366,7 @@ groups = {
     "eval_cross_source.jsonl": cross,
     "eval_multidoc.jsonl": multidoc,
     "eval_multiturn.jsonl": multiturn,
+    "eval_robustness.jsonl": robustness,
 }
 
 LOCATION_REWRITES = {
@@ -396,6 +415,21 @@ for records in groups.values():
         if "interface_expectation" in record:
             record["interface_expectation"]["source_assertions"] = record["evidence_locations"]
 
+# Do not silently shrink a checked-in evaluation suite when this generator's
+# source list lags behind an expanded manifest. Existing records remain the
+# source of truth; newly generated IDs are appended.
+for filename, generated in list(groups.items()):
+    path = EVAL / filename
+    if not path.exists():
+        continue
+    existing = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            existing.append(json.loads(line))
+    if len(existing) > len(generated):
+        known = {record["id"] for record in existing}
+        groups[filename] = [*existing, *[record for record in generated if record["id"] not in known]]
+
 for filename, records in groups.items():
     with (EVAL / filename).open("w", encoding="utf-8") as f:
         for record in records:
@@ -419,6 +453,7 @@ manifest = {
         "multimodal": "eval/agent/eval_special_multimodal.jsonl",
         "cross_source": "eval/agent/eval_cross_source.jsonl",
         "robustness_negative": "eval/agent/eval_special_negative.jsonl",
+        "robustness": "eval/agent/eval_robustness.jsonl",
     },
 }
 (EVAL / "eval_manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -506,6 +541,7 @@ human_names = {
     "eval_cross_source.jsonl": "跨源问答",
     "eval_multidoc.jsonl": "多文档问答",
     "eval_multiturn.jsonl": "多轮会话",
+    "eval_robustness.jsonl": "专项 鲁棒性",
 }
 
 def human_sources(record):
@@ -538,6 +574,7 @@ purposes = {
     "eval_cross_source.jsonl": "数据库与业务文档联合分析；分别核对实际值和规则",
     "eval_multidoc.jsonl": "多份文档综合问答；核对各项结论的依据",
     "eval_multiturn.jsonl": "连续对话；在同一会话逐轮检查条件继承和修改",
+    "eval_robustness.jsonl": "错别字、噪声、冲突条件、非法时间和边界稳定性",
 }
 catalog = ["| 题库 | 数量 | 作用和核查重点 |", "| --- | ---: | --- |"]
 for filename, records in groups.items():
@@ -563,6 +600,8 @@ for filename, records in groups.items():
             f"预期数据库表：{', '.join(record.get('expected_tables', [])) or '无'}", "",
             "评分要点：" + "；".join(record.get('gold_answer_requirements', [])), "",
         ])
+        if record.get("invariants"):
+            lines.extend(["鲁棒性不变量：" + "；".join(record["invariants"]), ""])
         if record.get("gold_calculation"):
             lines.extend([f"计算记录：{json.dumps(record['gold_calculation'], ensure_ascii=False)}", ""])
     (HUMAN / safe).write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")

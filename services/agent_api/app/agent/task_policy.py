@@ -11,6 +11,45 @@ from .state import BusinessTask, ParsedTurn
 
 POLICY_VERSION = "c-clarification-v3-20261011"
 
+# Internal metric keys are useful for routing and capability checks, but they
+# must not leak into user-facing unsupported answers.
+UNSUPPORTED_METRIC_LABELS = {
+    "profit": "利润",
+    "cost": "成本",
+    "inventory": "库存",
+    "refund": "退款",
+    "ad_impressions": "广告曝光",
+    "play_count": "播放量",
+    "ad_conversion": "广告点击/转化",
+    "employee_sales_ranking": "SupportRep 员工销售排名",
+}
+
+
+def unsupported_metric_label(metric: str) -> str:
+    return UNSUPPORTED_METRIC_LABELS.get(metric, metric)
+
+# A bare "not supported" refusal does not tell the user what is missing or why
+# the substitute metric is invalid.  Each refusal names the absent data and the
+# boundary, so the answer stays actionable instead of looking like a shrug.
+UNSUPPORTED_METRIC_REASONS = {
+    "profit": "当前没有成本或结算金额数据，不能计算利润，也不能用销售额代替利润。",
+    "cost": "当前没有成本或结算金额数据，不能计算成本相关指标。",
+    "inventory": "当前没有库存快照数据，无法计算库存数量或库存周转。",
+    "refund": "当前没有退款或退货记录，无法统计退款金额。",
+    "ad_impressions": "当前没有广告曝光事件日志，无法统计曝光量。",
+    "play_count": "当前只有播放列表收录关系，没有播放次数或收听日志，不能推断播放量。",
+    "ad_conversion": "当前没有活动曝光、点击或转化的事件日志，无法做归因；只能统计活动期间的交易变化，交易变化不能替代这些事件。",
+    "employee_sales_ranking": "SupportRep 表示客户维护责任，不等于个人销售归属，不能据此给员工做销售额排名。",
+}
+
+
+def unsupported_metric_reason(metric: str) -> str:
+    """User-facing refusal sentence for a metric with no backing data."""
+    reason = UNSUPPORTED_METRIC_REASONS.get(metric)
+    if reason:
+        return reason
+    return f"当前数据不支持{unsupported_metric_label(metric)}，不能用其他指标替代。"
+
 SLOT_SPECS = {
     "period": ("完整观察期间，例如2025Q3、2025年全年或明确起止日期", []),
     "year": ("目标/查询年度，请回复四位年份（例如2025年），不会自动补年度", ["2025年", "2024年"]),
@@ -37,6 +76,31 @@ def policy_clarify(task, missing, *, reused=False):
     return build_clarification(task, missing, SLOT_SPECS, reused=reused)
 
 
+GENERAL_CONTEXT_TERMS = (
+    "公司", "企业", "业务", "项目", "系统", "数据库", "本地", "我们", "本项目",
+    "实际", "销售", "销售额", "销量", "成交", "交易", "订单", "客户", "购买", "目标", "达标",
+    "经营", "活动", "海报", "报名", "选品", "分层", "音乐", "音频", "视频", "媒体",
+    "音乐类型", "Genre", "Rock", "Metal", "商品", "单曲", "曲目", "专辑", "艺术家",
+    "播放列表", "TrackId", "CustomerId", "PlaylistId", "GenreId", "MediaType", "Chinook", "AdventureWorks",
+    "数据表", "字段", "记录", "查询", "口径", "定义", "规则", "政策", "流程", "审批", "手册", "方案",
+    "D01", "D02", "D03", "D04", "D05", "D06",
+    "D07", "D08", "D09", "D10", "D11", "D12", "季度", "月份", "Q1", "Q2", "Q3", "Q4",
+)
+
+GENERAL_QUESTION_MARKERS = (
+    "什么是", "是什么", "怎么理解", "如何理解", "有哪些", "哪一些", "举例", "介绍一下",
+    "简单介绍", "通常包括", "一般包括", "常见的",
+)
+
+
+def looks_general_knowledge(question: str) -> bool:
+    """Recognize low-risk general questions before business capability gates."""
+    q = question.strip()
+    if not q or any(term.casefold() in q.casefold() for term in GENERAL_CONTEXT_TERMS):
+        return False
+    return any(marker in q for marker in GENERAL_QUESTION_MARKERS)
+
+
 @lru_cache(maxsize=1)
 def metric_requirements():
     # Read-only server catalog, not eval data; required slots remain B-owned.
@@ -52,6 +116,8 @@ def missing_conditions(task, profile):
         # A general layering-rule explanation does not select a customer cohort.
         # Keep the period gate for a high-value-customer request, not a synonym
         # of an already approved rule question.
+        if "客户怎么分层" in q or "客户如何分层" in q:
+            return ["observation_period"] if not (slots.get("year") and slots.get("quarter")) else []
         if "高价值客户" in q:
             return ["observation_period"] if not (slots.get("year") and slots.get("quarter")) else []
         return []
@@ -94,15 +160,42 @@ def missing_conditions(task, profile):
     return list(dict.fromkeys(missing))
 
 
+# 显式改口标记：标记之后出现的周期才是本轮要查的口径。
+PERIOD_SWITCH_MARKERS = ("现在改看", "现在只看", "改看", "改问", "改成", "改为", "换成", "现在看")
+
+
+def _period_switch_at(text):
+    """最早的改口标记位置；没有标记时返回 -1。"""
+    hits = [text.index(marker) for marker in PERIOD_SWITCH_MARKERS if marker in text]
+    return min(hits) if hits else -1
+
+
+def _spans(text):
+    """按出现位置返回 (年份, 季度, 月份) 三元组，供改口判定按序裁剪。"""
+    years = [(m.start(), int(m.group(1))) for m in re.finditer(r"(?<![A-Za-z\d])(\d{4})(?!\d)", text)]
+    quarters = []
+    for match in re.finditer(r"(?:第?([一二三四1-4])季度|Q([1-4]))", text, re.I):
+        token = match.group(1) or match.group(2)
+        quarters.append((match.start(), int(token) if token.isdigit() else "一二三四".index(token) + 1))
+    months = [(m.start(), int(m.group(1))) for m in re.finditer(r"(?<!\d)(\d{1,2})月", text)]
+    return years, quarters, months
+
+
 def typed_periods(question):
     # Entity identifiers and date-like poster values are not observation years.
     text = re.sub(r"(?i)(?:TrackId|CustomerId|GenreId|PlaylistId)\s*[:：=]?\s*\d+(?:\s*[-–至]\s*\d+)?", "", question)
     text = re.sub(r"(?i)(?<![A-Za-z0-9])D(?:0[1-9]|1[0-2])(?!\d)", " ", text)
-    years = [int(x) for x in re.findall(r"(?<![A-Za-z\d])(\d{4})(?!\d)", text)]
-    quarters = [int(x) if x.isdigit() else "一二三四".index(x) + 1
-                for x in re.findall(r"(?:第?([一二三四1-4])季度|Q([1-4]))", text, re.I)
-                for x in [x[0] or x[1]]]
-    months = [int(x) for x in re.findall(r"(?<!\d)(\d{1,2})月", text)]
+    years, quarters, months = _spans(text)
+    # 「上一轮问过第二季度；现在改看第三季度」里，改口标记之前的周期是被替换掉
+    # 的旧条件：既不能当 current，也不该留下来当对比基期。
+    switch = _period_switch_at(text)
+    if switch >= 0:
+        years = [item for item in years if item[0] >= switch] or years
+        quarters = [item for item in quarters if item[0] >= switch] or quarters
+        months = [item for item in months if item[0] >= switch] or months
+    years = [value for _, value in years]
+    quarters = [value for _, value in quarters]
+    months = [value for _, value in months]
     slots = {}
     if years:
         slots["year"] = years[0]
@@ -156,16 +249,27 @@ def semantic_task(question, profile):
     slots, years, quarters = typed_periods(question)
     entities, excluded = split_entities(question, profile)
     metrics = _matched_metrics(question, profile.question_rules)
+    if looks_general_knowledge(question):
+        return BusinessTask(
+            original_question=question,
+            normalized_question=question,
+            intent="general_knowledge",
+            route="general",
+            retrieval_question=question,
+            source_roles=["general_knowledge"],
+        )
     metric_explicit = bool(metrics) or ("销售" in question and "增长" in question)
     q = question
     doc_terms = ("口径", "定义", "怎么计算", "如何计算", "规则", "手册", "方案", "海报", "复盘", "建议", "解读", "选品", "分层", "维护", "对应", "归类", "分类表", "Genre", "MediaType", "报名", "阈值", "一个分类", "分开", "并入", "范围差异", "范围怎么写", "核心结果", "包括哪些", "包含哪些", "按哪个分类", "媒体格式", "活动什么时候", "提交材料", "截止")
-    document = _contains(q, doc_terms) or bool(re.search(r"(?<![A-Za-z0-9])D(?:0[1-9]|1[0-2])(?![A-Za-z0-9])", q, re.I))
+    document = _contains(q, (*doc_terms, "运营", "主题活动")) or bool(re.search(r"(?<![A-Za-z0-9])D(?:0[1-9]|1[0-2])(?![A-Za-z0-9])", q, re.I))
     target = _contains(q, ("目标", "达标", "达成", "完成了多少"))
-    compare = _contains(q, ("差多少", "差额", "距离", "达标", "达到目标", "和目标比", "是否都", "完成了多少", "完成了吗"))
+    compare = _contains(q, ("差多少", "差额", "距离", "达标", "未达目标", "达到目标", "和目标比", "是否都", "完成了多少", "完成了吗"))
     growth = _contains(q, ("增长", "环比", "同比"))
     plan_only = "计划" in q and not _contains(q, ("实际", "数据库", "查数"))
     ranking = _contains(q, ("最高", "排名", "Top", "前五", "前三"))
     query = bool(metrics) and not document or ranking or _contains(q, ("是否有成交", "购买Rock的客户", "购买 Rock 的客户"))
+    if _contains(q, ("按支持负责人", "支持负责人分布", "支持负责人统计")):
+        query = True
     if metrics and _contains(q, ("销售额是多少", "销量是多少", "订单数是多少", "客户数是多少", "实际销售额", "实际销量")) and not plan_only:
         query = True
     if document and (_contains(q, ("实际", "查数", "数据库", "最高", "哪些属于", "购买Rock的客户", "是否有成交", "增长了多少", "未达目标", "距离目标"))):
@@ -179,7 +283,10 @@ def semantic_task(question, profile):
     if growth and not document:
         query = True
     report_only = ("复盘" in q or bool(re.search(r"D0[78]", q))) and not _contains(q, ("数据库", "查数", "核验", "核对数据库")) and not ("每月" in q and "实际" in q)
-    premise_only = _contains(q, ("放在什么位置", "安排在哪里", "什么位置")) and _contains(q, ("活动", "方案")) and not _contains(q, ("核验", "实际", "差额", "差多少"))
+    # “Metal未达目标” 是用户给定的前提，不是要求本轮重新核验的结论。
+    # 只有显式的核验/差额措辞才把这轮送回数据库。
+    premise_only = (_contains(q, ("放在什么位置", "安排在哪里", "什么位置")) and _contains(q, ("活动", "方案"))
+                    and not _contains(q, ("核验", "核对数据库", "实际", "差额", "差多少", "距离目标")))
     if report_only or premise_only:
         document, query = True, False
     if plan_only:
@@ -210,6 +317,8 @@ def semantic_task(question, profile):
         metrics = list(dict.fromkeys(["media_type_sales", *metrics]))
     if calc and not metrics:
         metrics = ["sales_amount"]
+    if target and "距离目标" in q and "建议观察" in q and metrics == ["sales_amount"]:
+        metrics.append("units_sold")
     if query and "是否有成交" in q:
         metrics = ["track_sales"]
         metric_explicit = True
@@ -240,7 +349,11 @@ def semantic_task(question, profile):
         outputs.append("ranking")
     if calc:
         outputs = ["actual", "target", "attainment_rate", "verdict"] if target else ["current", "previous", "growth_rate"]
-        if "差" in q or "距离" in q or "和目标比" in q:
+        if "差" in q or "距离" in q or "和目标比" in q or "未达目标" in q:
+            outputs.append("difference")
+        if intent == "growth_rate" and "增长了多少" in q:
+            outputs.append("difference")
+        if target and _contains(q, ("完成了多少", "完成多少")):
             outputs.append("difference")
     if document and query:
         outputs.append("document_facts")
@@ -252,6 +365,9 @@ def semantic_task(question, profile):
         outputs.append("customer_tiers")
     if plan_only and "合计" in q:
         outputs.append("document_sum")
+        intent, route, calc, metrics = 'document_sum', 'rag', True, ['sales_amount']
+    if metrics == ['average_order_value'] and not document:
+        intent, route, calc = 'average_order_value', 'cross_source', True
     if ranking and "客户" in q:
         outputs.append("customer_ranking")
     if "按支持负责人" in q:
@@ -266,6 +382,19 @@ def semantic_task(question, profile):
         required_outputs=outputs, retrieval_question=q,
         slot_provenance={key: {"source": "explicit", "confirmed": True} for key in slots if key != "media_ids"})
     task.slot_provenance["metric"] = {"source": "explicit" if metric_explicit else "unconfirmed_default", "confirmed": metric_explicit}
+    # The profile declares sales as the default for its bounded business
+    # comparison workflows. Apply it only when the requested material and
+    # complete period/entity bind that workflow; bare “增长了多少” still asks.
+    anchored_default = (not metric_explicit and bool(task.slots.get('quarter')) and
+        ((intent == 'growth_rate' and task.slots.get('comparison_period') and _contains(q, ('D02', '销售分析')))
+         or (intent in {'target_difference', 'target_attainment'} and entities and _contains(q, ('D09', 'D10', '活动方案', '运营手册', '品类手册')))))
+    if anchored_default:
+        defaults = profile.question_rules.intent_default_metric_ids.get(intent, [])
+        if defaults:
+            task.business_metric_ids = list(dict.fromkeys([*defaults, *task.business_metric_ids]))
+            task.slot_provenance['metric'] = {'source': 'profile_workflow_default', 'confirmed': True}
+            task.slots['scope'] = task.slots['data_scope'] = task.slots.get('scope', '全部音频')
+            task.assumptions.append('按当前业务工作流默认销售额及音频范围回答。')
     from ..knowledge.facts import answer_obligations
     task.answer_obligations = answer_obligations(q)
     if "monthly_actuals" in outputs:
@@ -284,6 +413,34 @@ def semantic_task(question, profile):
         task.source_roles.append("plan")
     if premise_only and "未达" in q:
         task.assumptions = [q.split("，")[0].split(",")[0]]
+    # RoutePolicy is the shared semantic decision point.  Preserve the rich
+    # legacy intent/slot parsing above, while replacing only the route and
+    # output roles when the policy has a concrete classification.
+    from .route_policy import route_question
+    task.question_ir = route_question(q, profile_id=profile.profile_id)
+    # 报表/前提锚定要回答的是资料里已经写好的口径，不是重新取一次数据库实际值；
+    # 分类器即使判成 cross_source，也不能把这类问题升级掉。
+    document_anchored = report_only or premise_only
+    if task.question_ir.route == "rag" and task.question_ir.task_type == "document_rule" and (not task.needs_calculation or any(marker in q for marker in ("应该和", "怎么计算", "定义", "怎么处理", "一个分类")) or not metric_explicit and "目标" in q and "完成了吗" in q):
+        task.route, task.intent, task.needs_calculation = "rag", "document_rule", False
+        task.information_needs = ["rag"]
+        task.required_outputs = ["document_facts"]
+        task.source_roles = ["document_rule"]
+    elif not document_anchored and (
+            task.question_ir.route == "cross_source"
+            or (task.question_ir.route == "sql" and task.question_ir.task_type == "database_fact" and not task.needs_calculation)):
+        task.route = task.question_ir.route
+        task.required_outputs = list(dict.fromkeys([*task.required_outputs, *task.question_ir.requested_outputs]))
+    if _contains(q, ("按支持负责人", "支持负责人分布", "支持负责人统计")):
+        task.intent, task.route, task.needs_calculation = "fact_query", "sql", False
+        task.information_needs = ["sql"]
+        task.required_outputs = ["actual", "support_distribution"]
+        task.source_roles = ["database_actual"]
+    if "mixed_order_count" in task.business_metric_ids:
+        task.semantic_status = "answerable"
+        task.semantic_blockers = []
+        if task.question_ir is not None:
+            task.question_ir.clarification_blockers = []
     from .clarification_reply import augment_task
     return augment_task(task, q)
 
@@ -317,8 +474,14 @@ def finalize_task(task, profile):
             task.slots.update(start_date=task.time_range.start, end_date=task.time_range.end)
     except (ValueError, TypeError):
         missing.append("time_range")
+    if task.route == "general":
+        return ParsedTurn(decision="ready", task=task, rules=[POLICY_VERSION, "general_knowledge"])
     if task.route == "sql" and task.intent == "unknown":
         if "卖得怎么样" in task.original_question:
+            # A bare vague request names neither measure nor observation scope,
+            # so both are asked at once instead of deferring the period only.
+            if not task.time_range and not task.slots.get("quarter") and not task.entities:
+                return policy_clarify(task, ["metric", "scope"])
             deferred = [] if task.time_range else ["year" if task.slots.get("quarter") else "period"]
             return policy_clarify(task, ["metric", *deferred])
         return policy_clarify(task, ["intent"])
@@ -336,9 +499,16 @@ def finalize_task(task, profile):
             return ParsedTurn(decision="unsupported", task=task, reason=f"查询周期不在已核验数据覆盖{profile.data_start}至{profile.data_end}内。", rules=["data_coverage_gate"])
         if start < available_start or end > available_end:
             coverage.append("partial_data_coverage")
-    if task.route != "rag" and "数据库中" in task.original_question and not task.time_range:
+    if (task.route != "rag" and "数据库中" in task.original_question and not task.time_range
+            and "mixed_order_count" not in task.business_metric_ids):
         return ParsedTurn(decision="unsupported", task=task, reason="该全库交易任务需要无时间范围的指标契约；当前注册交易指标要求周期，未伪造日期执行。", rules=["full_database_capability_gap"])
     missing = missing_conditions(task, profile)
+    # Naming both target measures fixes which target to verify.  Naming only
+    # one leaves the handbook's paired-target rule unresolved, and the gate
+    # already proved that blocker, so the planner must not hide it.
+    if (missing and "target_metric" in task.semantic_blockers and "target_metric" not in missing
+            and not {"sales_amount", "units_sold"} <= set(task.business_metric_ids)):
+        missing.append("target_metric")
     if missing:
         return policy_clarify(task, missing)
     if task.intent == "classification_lookup":
@@ -355,6 +525,25 @@ def finalize_task(task, profile):
     return ParsedTurn(decision="ready", task=task, rules=[POLICY_VERSION, *coverage])
 
 
+def _answers_from_documents(task, question: str) -> bool:
+    """True when an answerable question should be served from the handbook.
+
+    A documented rule or scope-contrast question that states no observation
+    period is answered from documents.  Demanding a period there invents a
+    requirement the question never had, so it must not reach the SQL gate.
+    """
+    from .semantic_gate import _has_period, _is_document_rule
+
+    ir = task.question_ir
+    if ir.route == "rag" and task.route == "rag" and not task.needs_calculation:
+        return True
+    return (
+        _is_document_rule(ir, question)
+        and not _has_period(ir)
+        and task.route in {"sql", "cross_source"}
+    )
+
+
 def parse_c_v1(question, profile, memory):
     from .parsing import _contains
     q = question.strip()
@@ -367,13 +556,15 @@ def parse_c_v1(question, profile, memory):
         memory.active_task_id = None
     if q in {"取消", "取消当前问题", "重新开始", "清空上下文"}:
         return ParsedTurn(decision="cancelled", reason="已清空当前任务。", rules=["reset_context"])
-    for metric, terms in profile.question_rules.unsupported_terms.items():
-        if any(term.casefold() in q.casefold() for term in terms):
-            return ParsedTurn(decision="unsupported", reason=f"当前数据不支持{metric}，不能用其他指标替代。", rules=["data_gap"])
-    if any(term in q for term in ("点击", "转化")):
-        return ParsedTurn(decision="unsupported", reason="没有页面事件/归因数据，无法计算点击或转化。", rules=["event_data_gap"])
-    if "SupportRep" in q and "员工" in q and "销售额" in q:
-        return ParsedTurn(decision="unsupported", reason="SupportRep仅表示客户维护责任，不能据此认定员工个人销售贡献。", rules=["invalid_attribution"])
+    general_question = looks_general_knowledge(q)
+    if not general_question:
+        for metric, terms in profile.question_rules.unsupported_terms.items():
+            if any(term.casefold() in q.casefold() for term in terms):
+                return ParsedTurn(decision="unsupported", reason=unsupported_metric_reason(metric), rules=["data_gap"])
+        if any(term in q for term in ("点击", "转化")):
+            return ParsedTurn(decision="unsupported", reason="没有页面事件/归因数据，无法计算点击或转化。", rules=["event_data_gap"])
+        if "SupportRep" in q and "员工" in q and "销售额" in q:
+            return ParsedTurn(decision="unsupported", reason="SupportRep仅表示客户维护责任，不能据此认定员工个人销售贡献。", rules=["invalid_attribution"])
     if (re.search(r"(?:音乐|音频).*(?:和|与|及).*视频.*(?:分开|分别).*还是.*(?:合计|合并)", q)
             and memory.pending is None):
         return policy_clarify(semantic_task(q, profile), ["media_scope"])
@@ -382,6 +573,29 @@ def parse_c_v1(question, profile, memory):
         task.intent, task.route, task.needs_calculation = "document_rule", "rag", False
     else:
         task = semantic_task(q, profile)
+    # Apply the shared QuestionIR gate before legacy slot checks.  A formula
+    # or metric-definition question is a document task even when its wording
+    # contains transaction metric names; it must not inherit SQL period gates.
+    from .query_rewrite import rewrite_question
+    from .semantic_gate import decide
+    try:
+        task.question_ir = rewrite_question(q, profile_id=profile.profile_id)
+        gate = decide(task.question_ir, profile)
+    except (KeyError, ValueError):
+        gate = None
+    if gate is not None and gate.status == "unsupported":
+        task.semantic_status = gate.status
+        task.semantic_blockers = gate.blockers
+        return ParsedTurn(decision="unsupported", task=task, reason=gate.reason, rules=["semantic_gate"])
+    if gate is not None:
+        task.semantic_status = gate.status
+        task.semantic_blockers = gate.blockers
+    if gate is not None and gate.status == "answerable" and _answers_from_documents(task, q):
+        task.intent, task.route, task.needs_calculation = "document_rule", "rag", False
+        task.information_needs = ["rag"]
+        task.required_outputs = ["document_facts"]
+        task.retrieval_question = ("分析方法 公式 分母 " + q) if any(term in q for term in ("客单价", "成交均价", "分母")) else q
+        task.source_roles = ["document_rule"]
     if "track_attributes" in task.business_metric_ids:
         for key in ("year", "quarter", "month", "period_grain", "start_date", "end_date"):
             task.slots.pop(key, None)
@@ -398,12 +612,13 @@ def parse_c_v1(question, profile, memory):
         except ValueError:
             return policy_clarify(task, ["filter_scope"])
         task.intent, task.route, task.needs_calculation = "poster_candidates", "cross_source", False
-        task.business_metric_ids = ["sales_amount"]
+        # “是否有成交” 已显式匹配到 track_sales，不能被默认销售额覆盖。
+        task.business_metric_ids = task.business_metric_ids or ["sales_amount"]
         task.slots.update(business_workflow="poster_candidates", track_selection=selection)
-    anchored = {"customer_segmentation", "poster_candidates", "cross_source_query", "target_attainment", "target_difference", "growth_rate"}
-    if task.intent in anchored and task.slots.get("quarter") and not task.slots.get("year"):
-        task.slots["year"] = 2025
-        task.slots["year_assumed"] = 2025
+    # 缺年份一律走澄清：季度不足以定位年度，任何意图都不再默认锚定某一年。
+    comparison = task.slots.get('comparison_period')
+    if isinstance(comparison, dict) and comparison.get('quarter') and not comparison.get('year') and task.slots.get('year'):
+        comparison['year'] = task.slots['year']
     if task.slots.get("year") and task.slots.get("quarter") and not task.time_range:
         from .parsing import _time_range
         task.time_range = _time_range(task.slots)

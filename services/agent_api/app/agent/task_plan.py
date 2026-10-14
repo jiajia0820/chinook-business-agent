@@ -25,6 +25,12 @@ def document_needs(task):
     docs = list(dict.fromkeys(x.upper() for x in explicit))
     if docs and any(w in q for w in ("仅依据", "只依据", "仅使用", "只使用")):
         return docs
+    # SourcePlan owns the authoritative role-to-document mapping.  Explicit
+    # document references remain caller-owned so a question such as
+    # “D06、D08 和 D10 如何衔接” does not silently grow an extra source.
+    if not docs and task.route in {"rag", "cross_source"}:
+        from ..knowledge.source_plan import rag_source_plan
+        docs.extend(rag_source_plan(q).required_docs)
     from ..knowledge.facts import FACTS
     docs += [FACTS[role][0] for role in task.answer_obligations if role in FACTS]
     if task.intent == "customer_segmentation":
@@ -43,6 +49,17 @@ def document_needs(task):
         docs = [primary, *[d for d in docs if d != primary]]
         if primary == "D06":
             docs = [d for d in docs if d != "D01"]  # D06 itself defines the target formulas.
+        # Cross-source calculations also need the period review source.  D06
+        # supplies the approved target/formula, while D08 is the authoritative
+        # Q3 review evidence used by the answer and conflict checks.  Keep it
+        # as a retrieval requirement without turning document text into SQL.
+        if task.route == "cross_source":
+            if task.intent == "growth_rate":
+                docs.extend(doc for doc in ("D07", "D08") if doc not in docs)
+            elif task.intent in {"target_attainment", "target_difference", "document_calculation"}:
+                review_doc = {2: "D07", 3: "D08"}.get(task.slots.get("quarter"))
+                if review_doc and review_doc not in docs:
+                    docs.append(review_doc)
     if not docs and task.route in {"rag", "cross_source"}:
         return [None]  # Known document request without a catalog cue: bounded ordinary retrieval.
     return list(dict.fromkeys(docs))
@@ -69,10 +86,17 @@ def retrieval_requests(task, top_k):
 
 
 def retrieval_specs(task, top_k):
+    from ..response.fast_renderer import fast_rag_enabled
+    if task.route == "rag" and not task.needs_calculation and fast_rag_enabled():
+        # One whole-question recall. Graph supplies primary source preference
+        # and, if core content is missing, at most one focused repair.
+        return [(None, task.retrieval_question or task.normalized_question, top_k, None)]
     from ..knowledge.facts import FACTS
     docs = document_needs(task)
     if not docs:
         return []
+    from ..knowledge.source_plan import rag_source_plan
+    source_plan = rag_source_plan(task.retrieval_question or task.original_question)
     # Whole-question top_k budget. Prefer primary target/formula with two
     # passages while reserving one per other required source.
     roles = [(FACTS[role][0], role) for role in task.answer_obligations if role in FACTS and FACTS[role][0] in docs]
@@ -102,6 +126,8 @@ def retrieval_specs(task, top_k):
                 topic = "增长率 period_over_period_growth 本期 基期 " + entities
         if role:
             topic = FACTS[role][1] + " " + entities
+        elif source_plan.query_terms:
+            topic = " ".join(source_plan.query_terms) + " " + topic
         queries.append((doc, topic[:3900], count, role))
     return queries
 

@@ -2,6 +2,7 @@ import unittest
 
 from services.agent_api.app.agent.task_plan import document_needs, make_plan, retrieval_requests, retrieval_task_from_sql, retry_query
 from services.agent_api.app.agent.task_policy import semantic_task
+from services.agent_api.app.agent.state import BusinessTask
 from services.agent_api.app.profiles import ProfileRegistry
 from services.agent_api.app.contracts import SqlQueryResponse, SqlSource
 from services.agent_api.app.tools.models import SqlTaskOutcome
@@ -44,6 +45,21 @@ class CrossPlanTests(unittest.TestCase):
     def test_chinese_adjacent_document_ids_are_explicit(self):
         self.assertEqual(document_needs(self.task("D06目标、D08复盘和D10活动方案如何衔接？")), ["D06", "D08", "D10"])
         self.assertEqual(document_needs(self.task("D03规定Metal分开时，D05的候选应使用哪个Genre？")), ["D03", "D05"])
+
+    def test_cross_source_calculation_reserves_q3_review_source(self):
+        task = BusinessTask(
+            original_question="2025年第三季度Rock销售额达到目标了吗？",
+            normalized_question="2025年第三季度Rock销售额达到目标了吗？",
+            retrieval_question="2025年第三季度Rock销售额达到目标了吗？",
+            intent="target_attainment",
+            route="cross_source",
+            needs_calculation=True,
+            business_metric_ids=["sales_amount"],
+            slots={"year": 2025, "quarter": 3, "media_ids": [1, 2, 4, 5]},
+        )
+        self.assertIn("D06", document_needs(task))
+        self.assertIn("D08", document_needs(task))
+        self.assertIn("D08", {item[0] for item in retrieval_requests(task, 5)})
 
     def test_sql_identity_guides_only_dependent_retrieval(self):
         task = self.task("2025年第三季度销售额最高的品类是什么，运营手册建议关注什么？")

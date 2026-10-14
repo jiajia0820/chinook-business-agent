@@ -4,7 +4,7 @@
 
 测试配置名为 `chinook-music`，定义见 [测试配置](../agent/interface_profile_fixture.json)。正式测试前，开发同学需要在应用中接入这个配置。
 
-当前包含 97 道单轮题和 5 组多轮会话，机器文件清单见 [eval_manifest.json](../agent/eval_manifest.json)。
+当前包含 114 道单轮题和 5 组多轮会话，机器文件清单见 [eval_manifest.json](../agent/eval_manifest.json)。
 
 ## 目录结构
 
@@ -52,6 +52,7 @@
 | [跨源问答](eval_cross_source.md) | 10 题 | 数据库与业务文档联合分析；分别核对实际值和规则 |
 | [多文档问答](eval_multidoc.md) | 15 题 | 多份文档综合问答；核对各项结论的依据 |
 | [多轮会话](eval_multiturn.md) | 5 组 | 连续对话；在同一会话逐轮检查条件继承和修改 |
+| [专项 鲁棒性](eval_robustness.md) | 12 题 | 错别字、噪声、冲突条件、非法时间和边界稳定性 |
 
 ## 来源索引
 

@@ -3,6 +3,17 @@ import re
 import unicodedata
 
 
+# Named document-role contracts keep multi-document answers tied to the
+# source that owns each fact.  The mapping is serializable for traces and
+# coverage reports; it is deliberately independent from retrieval ranking.
+DOCUMENT_ROLES = {
+    "target_review_activity": {"D06": "target", "D08": "actual_review", "D10": "operation"},
+    "customer_category_action": {"D04": "segmentation", "D09": "category_operation"},
+    "activity_material_crosscheck": {"D10": "schedule_and_version", "D11": "registration_material"},
+    "metric_method_crosscheck": {"D01": "metric_definition", "D02": "analysis_method"},
+}
+
+
 FACTS = {
     "customer_thresholds": ("D04", "当季音频销售额 层级 大于等于 至 以下"),
     "customer_maintenance": ("D04", "A 重点维护 联络频率 主要动作 每月至少一次"),
@@ -20,11 +31,33 @@ FACTS = {
     "monthly_bundle": ("D06", "月度分解 7月金额 8月金额 9月金额 全部音频 销售额差额 销售额达成率"),
 }
 
+# Retrieval hints for evidence a document role still owes.  Each entry reuses the
+# role's own match vocabulary so a repair pass searches for the missing passage
+# instead of repeating the user's question, which keeps ranking on the summary.
+ROLE_REPAIR_HINTS = {
+    ("target_review_activity", "D06"): "附件1 季度目标明细 销售额目标 销量目标 Rock Genre:1",
+    ("target_review_activity", "D08"): "目标达成情况 实际 差额 达成率 Rock 复盘",
+    ("target_review_activity", "D10"): "页面与商品安排 Rock主页面 Metal延伸 延伸选择 相关专辑",
+    ("customer_category_action", "D04"): "活跃客户层级定义 阈值 A层 B层 C层 音频销售额",
+    ("customer_category_action", "D09"): "Rock 品类运营 成交商品 专辑覆盖 专题陈列",
+    ("activity_material_crosscheck", "D10"): "执行排期 拟执行周期 页面稿 上线版本 商品清单",
+    ("activity_material_crosscheck", "D11"): "报名截止 提交材料 商品清单 选品理由 页面文案",
+    ("metric_method_crosscheck", "D01"): "客单价 指标定义 销售额 订单数 分母",
+    ("metric_method_crosscheck", "D02"): "指标口径 汇总口径 销售分析方法 比较 分母",
+}
 
 def answer_obligations(question):
     q = question.replace(" ", "")
     roles = []
-    if any(w in q for w in ("客户如何分层", "客户怎么分层", "客户分层", "A、B、C", "属于A层", "各层级阈值")):
+    if all(word in q for word in ("目标", "复盘", "活动")) and any(doc in q for doc in ("D06", "D08", "D10")):
+        roles.append("target_review_activity")
+    if "客户" in q and "分层" in q and "Rock" in question and any(word in q for word in ("结合", "运营", "动作")):
+        roles.append("customer_category_action")
+    if "方案" in q and "海报" in q and any(word in q for word in ("核对", "共同")):
+        roles.append("activity_material_crosscheck")
+    if any(word in q for word in ("指标定义", "指标口径")) and any(word in q for word in ("比较方法", "应该和", "应该与")):
+        roles.append("metric_method_crosscheck")
+    if any(w in q for w in ("客户如何分层", "客户怎么分层", "客户分层", "属于A层")) or ("客户" in q and any(w in q for w in ("A、B、C", "各层级阈值"))):
         roles.append("customer_thresholds")
     if "维护" in q and any(w in q for w in ("A层", "客户", "分层")):
         roles.append("customer_maintenance")
@@ -36,7 +69,7 @@ def answer_obligations(question):
         roles += ["activity_period", "poster_activity_period"]
     if "Metal" in question and any(w in q for w in ("位置", "安排在哪", "放在哪")):
         roles.append("activity_position")
-    if "选品" in q and any(w in q for w in ("成交", "主页面", "候选")):
+    if "选品" in q and any(w in q for w in ("成交", "主页面", "候选")) and not re.search(r'A[、/,]B[、/,]C[、/,]D', q, re.I):
         roles.append("candidate_tracks")
     if "主页面" in q:
         roles.append("primary_page_rule")
@@ -44,8 +77,7 @@ def answer_obligations(question):
         roles.append("customer_upgrade")
     if "每月" in q and "计划" in q and any(w in q for w in ("实际", "查数", "数据库")):
         roles += ["monthly_plan", "target_formula"]
-        if "D08" in q or "复盘" in q:
-            roles.append("reported_monthly_actual")
+        roles.append("reported_monthly_actual")
     return list(dict.fromkeys(roles))
 
 
@@ -80,7 +112,95 @@ def fact_matches(role, text):
     return False
 
 
+def _document_role_matches(role, doc_id, text):
+    t = re.sub(r"\s+", "", unicodedata.normalize("NFKC", text))
+    if role == "target_review_activity":
+        return {
+            "D06": "Rock" in text and "销售额" in t and ("目标" in t or "季度目标" in t),
+            "D08": "Rock" in text and "销售额" in t and any(word in t for word in ("实际", "复盘", "达成")),
+            # The page plan and the Metal extension live in different D10 chunks,
+            # so a single chunk only has to carry one of the two page facts.
+            "D10": ("主页面" in t or "延伸" in t)
+            and any(word in t for word in ("页面", "商品", "专辑", "清单")),
+        }.get(doc_id, False)
+    if role == "customer_category_action":
+        return {
+            "D04": all(word in t for word in ("阈值", "A", "B", "C")),
+            "D09": all(word in t for word in ("Rock", "成交商品", "专辑", "专题陈列")),
+        }.get(doc_id, False)
+    if role == "activity_material_crosscheck":
+        return {
+            # D10's schedule table omits the year; D11's poster writes the
+            # deadline as "10月13日18:00" or "10.13 18:00".
+            "D10": bool(re.search(r"(?:2025年)?10月20日\s*至\s*(?:2025年)?11月2日", t)) and "版本" in t,
+            "D11": bool(re.search(r"(?:2025年)?10\s*[.月/-]\s*13日?\s*18[:：]00", t))
+            and all(word in t for word in ("商品清单", "选品理由", "页面文案")),
+        }.get(doc_id, False)
+    if role == "metric_method_crosscheck":
+        return {
+            "D01": "销售额" in t and any(word in t for word in ("UnitPrice", "指标", "口径")),
+            "D02": any(word in t for word in ("比较", "完整月", "上月", "同比", "环比")),
+        }.get(doc_id, False)
+    return False
+
+
 def coverage(task, chunks):
-    return [{"role": role, "complete": bool(refs := [c.chunk_id for c in chunks
-                if c.doc_id == FACTS[role][0] and fact_matches(role, c.text)]), "source_refs": refs}
-            for role in task.answer_obligations if role in FACTS]
+    results = []
+    for role in task.answer_obligations:
+        if role in DOCUMENT_ROLES:
+            refs = [
+                c.chunk_id for c in chunks
+                if c.doc_id in DOCUMENT_ROLES[role] and _document_role_matches(role, c.doc_id, c.text)
+            ]
+            expected_docs = set(DOCUMENT_ROLES[role])
+            covered_docs = {
+                c.doc_id for c in chunks
+                if c.doc_id in expected_docs and _document_role_matches(role, c.doc_id, c.text)
+            }
+            results.append({"role": role, "complete": covered_docs == expected_docs, "source_refs": refs})
+        elif role in FACTS:
+            refs = [c.chunk_id for c in chunks if c.doc_id == FACTS[role][0] and fact_matches(role, c.text)]
+            results.append({"role": role, "complete": bool(refs), "source_refs": refs})
+    return results
+
+
+def uncovered_role_documents(role, chunks):
+    """Documents that still owe evidence for ``role``, in contract order.
+
+    Mirrors :func:`coverage` so a role reported incomplete always yields at
+    least one document to repair, for both single-document ``FACTS`` roles and
+    multi-document ``DOCUMENT_ROLES`` obligations.
+    """
+    if role in DOCUMENT_ROLES:
+        return [
+            doc for doc in DOCUMENT_ROLES[role]
+            if not any(c.doc_id == doc and _document_role_matches(role, doc, c.text) for c in chunks)
+        ]
+    if role in FACTS:
+        doc = FACTS[role][0]
+        if any(c.doc_id == doc and fact_matches(role, c.text) for c in chunks):
+            return []
+        return [doc]
+    return []
+
+
+def role_repair_target(role, chunks):
+    """Return ``(query_hint, filter_patch)`` for one targeted repair of ``role``.
+
+    ``None`` means the role is unknown or already covered.  Only single-document
+    ``FACTS`` roles may carry ``fact_role``: the index rejects any
+    ``fact_role``/``doc_id`` pair it cannot validate, so multi-document
+    obligations steer retrieval through ``required_sources``/``preferred_doc``
+    and leave the query to the caller (empty ``query_hint``).
+    """
+    uncovered = uncovered_role_documents(role, chunks)
+    if not uncovered:
+        return None
+    if role in FACTS:
+        doc = FACTS[role][0]
+        return FACTS[role][1], {"doc_id": doc, "fact_role": role,
+                                "required_sources": [doc], "preferred_doc": doc}
+    hint = " ".join(dict.fromkeys(
+        term for doc in uncovered for term in ROLE_REPAIR_HINTS.get((role, doc), "").split()
+    ))
+    return hint, {"required_sources": uncovered, "preferred_doc": uncovered[0]}

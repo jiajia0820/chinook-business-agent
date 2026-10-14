@@ -26,9 +26,15 @@ class ClarificationPlanTests(unittest.TestCase):
         self.assertNotIn("year", result.task.slots)
 
     def test_explicit_metric_not_repeated_for_target(self):
-        result = self.parse("销售额达到目标了吗？")
-        self.assertEqual(set(s.name for s in result.clarification.missing_slots), {"period", "scope"})
+        # Naming both target measures fixes which target to verify, so the
+        # paired-target choice must not be asked again.
+        result = self.parse("第三季度全音频销售额和销量是否都达标？")
         self.assertNotIn("target_metric", result.blocking_slots)
+        # Naming only the actual measure leaves the handbook's paired sales and
+        # units target unresolved, so the target metric stays an open slot.
+        ambiguous = self.parse("销售额达到目标了吗？")
+        self.assertEqual(set(s.name for s in ambiguous.clarification.missing_slots),
+                         {"period", "scope", "target_metric"})
 
     def test_unknown_metric_has_a_goal_choice(self):
         result = self.parse("第三季度Rock卖得怎么样？")

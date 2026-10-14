@@ -50,6 +50,16 @@ def augment_task(task, question):
                 task.time_issues.append("invalid_interval")
         if re.search(r"今年|去年|本季度|上季度|本月|上月|最近", question):
             task.time_issues.append("relative_period")
+        # Two typed periods joined by a conjunction leave the base period
+        # unnamed.  An explicit comparison or delta wording does name it, so
+        # only the bare "A and B" shape is a conflicting period.
+        joined_periods = re.search(
+            r"(?:第?[一二三四1-4]季度|\d{4}年|Q[1-4])[^，。？?]{0,6}(?:和|与|及|、)"
+            r"[^，。？?]{0,6}(?:第?[一二三四1-4]季度|\d{4}年|Q[1-4])",
+            question, re.I)
+        compares = re.search(r"相比|比较|对比|环比|同比|增长|增加|减少|下降|变化|差多少|比(?:上|前|第)", question)
+        if joined_periods and not compares:
+            task.time_issues.append("conflicting_period")
     task.time_issues = list(dict.fromkeys(task.time_issues))
     return task
 

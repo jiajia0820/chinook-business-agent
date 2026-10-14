@@ -143,6 +143,12 @@ def update_task(question, candidate, memory, profile, *, force_action=None):
             task.slots["comparison_period"] = {k: prior.slots[k] for k in ("year", "quarter") if k in prior.slots}
         if task.slots.get("year") and task.slots.get("comparison_period") and not task.slots["comparison_period"].get("year"):
             task.slots["comparison_period"]["year"] = task.slots["year"]
+    # Keep the shared IR as an incremental semantic view.  Legacy task fields
+    # remain authoritative for execution, while the IR preserves confirmed
+    # time/entity/metric/output context across short follow-ups.
+    if getattr(candidate, "question_ir", None) is not None:
+        from .query_rewrite import merge_question_ir
+        task.question_ir = merge_question_ir(getattr(base, "question_ir", None), candidate.question_ir)
     topic = re.sub(r"\d{4}-\d{2}-\d{2}|\d{4}\s*年?|第?[一二三四1-4]季度|Q\d+|\d{1,2}月|对比\s*年第\d季度", "", topic, flags=re.I)
     if not task.time_issues:
         topic = re.sub(r"Q\d+|第?[五六七八九零0-9]+季度|今年|去年|本季度|上季度|本月|上月|最近", "", topic, flags=re.I)

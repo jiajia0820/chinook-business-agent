@@ -7,13 +7,14 @@ from pydantic import Field, JsonValue
 
 from ..contracts import Clarification, TimeRange
 from ..tools.models import InternalModel, Question
+from .semantic_ir import QuestionIR
 
 
 class BusinessTask(InternalModel):
     original_question: Question
     normalized_question: Question
     intent: str
-    route: Literal["sql", "rag", "cross_source"]
+    route: Literal["general", "sql", "rag", "cross_source"]
     slots: dict[str, JsonValue] = Field(default_factory=dict)
     entities: list[dict[str, JsonValue]] = Field(default_factory=list)
     business_metric_ids: list[str] = Field(default_factory=list)
@@ -32,6 +33,10 @@ class BusinessTask(InternalModel):
     assumptions: list[str] = Field(default_factory=list)
     evidence_coverage: list[dict[str, JsonValue]] = Field(default_factory=list)
     time_issues: list[str] = Field(default_factory=list)
+    # New semantic IR is optional so old checkpoints and callers remain valid.
+    question_ir: QuestionIR | None = None
+    semantic_status: Literal["answerable", "clarification_required", "unsupported"] | None = None
+    semantic_blockers: list[str] = Field(default_factory=list)
 
 
 class SessionMemory(InternalModel):

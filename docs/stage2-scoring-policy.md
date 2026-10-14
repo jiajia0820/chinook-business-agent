@@ -35,4 +35,17 @@
 
 用户明确授权新增基础011–015；当前正式85单位（80单轮、5会话）、95请求，历史80单位成绩不改写。原001–010及其他专项评分逻辑保留。独立核对发现v1.4的无序结果比较会接受月份乱序、并列客户ID倒序；金额0.01容差也会接受零值变0.01。仅对新增五题按gold逐行比较、金额允许最多0.000001的浮点表示误差（不允许不同分金额），计数与ID严格比较。新增响应字段/route、期间、未截断及商品编号不作为年份的断言。正反例测试覆盖错序、缺行、NULL/错误零、错ID、错计数、错期间和截断；这属于收紧验证，不是提高成绩的放宽。
 
-直接run_agent_eval.py的live入口复用现有完整证据包装，串行绑定请求与模型调用，保存原始候选与接受SQL；累计一次外部API失败后暂缓后续尝试，避免反复碰运气。最终报告保留business_passed作诊断，但pending_external_api题passed=false，保留在15题分母。现有stage2_eval.py历史入口默认评分行为保留；本次专项使用用户给定的直接命令。
+直接run_agent_eval.py的live入口复用现有完整证据包装，串行绑定请求与模型调用，保存原始候选与接受SQL；累计一次外部API失败后暂缓后续尝试，避免反复碰运气。最终报告保留business_passed作诊断，但pending_external_api题passed=false，保留在15题分母。现有stage2_eval.py历史入口默认评分行为保留；本次专项使用用户给定的直接命令。（失败预算口径已被 v1.5.1 替换。）
+
+
+## v1.5.1 补遗：外部API失败预算改为连续计数
+
+用户授权调整失败预算。原口径是"累计一次外部失败即暂缓后续全部尝试"，实测公共端点存在偶发抖动（单次 HTTP 5xx、31ms 连接重置），一次抖动就会让整轮 live 有 24–29 题被记为 pending_external_api，复测成本极高，且抖动与系统能力无关。
+
+新口径：失败预算按**连续**失败计数，任何一次成功调用即清零；`EXTERNAL_API_FAILURE_BUDGET = 6`（单题最多重试 2 次，约等于连续 3 题彻底失败）才判定外部 API 不可用并暂缓后续尝试。run-meta 增加 `external_api_failure_budget_kind: consecutive` 以标明口径。
+
+同时对可重试的外部失败加退避。实测网关故障是成簇出现的：`HTTP 500 {"code":"get_channel_failed","message":"分组 auto 下模型 MiMo-V2.6-Flash 的可用渠道不存在（retry）"}`，一簇 6 次、每次约 1s，随后自行恢复。C 自身的第二次尝试是立刻发出的，正好撞进同一簇，等于两次都白扔。审计壳因此在连续失败后按 `8s × 连续失败次数`（上限 30s）等待再发下一次真实请求，且等待时长受调用预算约束（`remaining − 8s`，不足则不退避），保证退避不会把真实请求挤成 MODEL_TIMEOUT。退避只发生在评测壳里，`backend/` 未改，`code_sha256` 与改动前保持可比；等待秒数记入 model-calls.jsonl 的 `backoff_seconds` 字段，`elapsed_ms` 仍只计真实请求耗时。
+
+判分规则本身未变，因此 `scorer_version` 保持 `stage2-policy-1.5`：`mark_pending_external` 仍然把"被暂缓"和"两次尝试都失败"的题记为 pending 且 passed=false，只有"失败后重试成功"的题保留通过（原有 `test_deferred_or_failed_external_call_is_never_live_pass` 与 `test_successful_retry_keeps_pass` 覆盖）。预算只决定何时停止尝试，不决定任何一题的得分，放宽预算不可能把失败题变成通过题。model-calls.jsonl 继续逐次追加每一条尝试，error 条目增加 `detail` 字段记录已脱敏的 ModuleError 消息（含 HTTP 状态码），便于区分限流与服务端故障。
+
+预算耗尽后不能永久停摆。首轮实现里"连续失败达预算即暂缓"是一次性的：暂缓路径不再发起真实调用，`record_success` 因此永远没有机会触发，端点恢复后整轮后半段仍被记为 pending（实测一轮 119 题只有 6 次真实 `model_attempt`、34 题 pending）。修正为**冷却 + 探测**：耗尽后进入 `PROBE_COOLDOWN = 60s` 冷却期，期内继续直接暂缓（不消耗调用预算）；冷却结束后放行一次真实探测调用，探测不额外退避，成功即清零并恢复正常节奏，失败则立刻重新进入冷却。长时间故障下的代价是每 60s 一次探测，而不是一题一次超时。新增 `test_exhaustion_cools_down_and_then_admits_a_probe`、`test_probe_success_restores_real_calls_for_the_rest_of_the_run`、`test_zero_budget_never_goes_quiet` 三个用例覆盖该恢复语义。

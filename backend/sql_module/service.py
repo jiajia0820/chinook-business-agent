@@ -2,10 +2,14 @@
 
 This response is the documented C draft, not the full B /api/v1/ask response.
 """
-from datetime import datetime
+from datetime import date, datetime, timedelta
+import copy
+import hashlib
 import json
 import math
+import os
 import re
+import threading
 import time
 import uuid
 from .catalog import load_catalog
@@ -18,6 +22,63 @@ from .query_intent import parse_query_intent, validate_intent
 from .semantic_scope import covers_context, same_registered_query
 from .catalog_queries import CATALOG_COLUMNS, catalog_query, zero_media_query
 from .business_queries import OPERATIONS, build_query, output_columns
+
+
+class _CachedSchemaService(SchemaService):
+    """Service-local schema snapshot cache with per-call access revalidation.
+
+    A cached snapshot is metadata only.  ``get_schema`` always resolves the
+    profile against the caller's AccessContext first, and the cache key keeps
+    the effective table set and profile/database fingerprint separate.  Remote
+    databases are deliberately uncached because a portable server-side
+    freshness signal is not available here.
+    """
+
+    def __init__(self, registry):
+        super().__init__(registry)
+        self._snapshots = {}
+        self._cache_lock = threading.RLock()
+
+    @staticmethod
+    def _profile_fingerprint(profile):
+        raw = json.dumps(profile.data, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _sqlite_fingerprint(profile):
+        try:
+            path = profile.connection_url().database
+            records = []
+            for candidate in (path, path + "-wal", path + "-shm", path + "-journal"):
+                try:
+                    stat = os.stat(candidate)
+                    records.append((candidate, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size, stat.st_ino))
+                except FileNotFoundError:
+                    records.append((candidate, None, None))
+            return tuple(records)
+        except (OSError, ModuleError):
+            return None
+
+    def get_schema(self, profile_id, access):
+        profile, allowed = self.registry.resolve(profile_id, access)
+        if profile.database.get("dialect") != "sqlite":
+            return super().get_schema(profile_id, access)
+        database_fingerprint = self._sqlite_fingerprint(profile)
+        if database_fingerprint is None:
+            return super().get_schema(profile_id, access)
+        key = (profile_id, frozenset(allowed))
+        fingerprint = (str(profile.directory), self._profile_fingerprint(profile), database_fingerprint)
+        with self._cache_lock:
+            cached = self._snapshots.get(key)
+            if cached is not None and cached[0] == fingerprint:
+                return copy.deepcopy(cached[1])
+            snapshot = super().get_schema(profile_id, access)
+            # A concurrent writer must not make a snapshot appear current.
+            if self._sqlite_fingerprint(profile) == database_fingerprint:
+                self._snapshots[key] = (fingerprint, copy.deepcopy(snapshot))
+            else:
+                self._snapshots.pop(key, None)
+            return snapshot
 
 
 def request_error(message):
@@ -372,11 +433,252 @@ def validate_request(request, profile):
     return context,options
 
 
+REGISTERED_METRIC_TERMS = {
+    'customer_count': ('客户记录数', '登记客户数', '客户总数', '客户数量'),
+    'sales_amount': ('销售金额', '销售额', '营收'),
+    'units_sold': ('销售件数', '销售量', '销量'),
+    'order_count': ('订单数量', '订单数', '订单量'),
+    'purchasing_customers': ('购买客户数', '购买人数'),
+}
+REGISTERED_FILLER = ('分别是多少', '分别', '是多少', '是什么', '有多少', '多少',
+    '请查询', '帮我查询', '查询', '统计', '合计', '总计', '全部', '仅', '的', '和', '与', '及')
+
+
+def _consume_terms(text, terms):
+    pattern = '|'.join(re.escape(term) for term in sorted(set(terms), key=len, reverse=True) if term)
+    return re.sub(pattern, ' ', text, flags=re.I) if pattern else text
+
+
+def _registered_period(question, slots):
+    """Consume one explicit period only when it agrees with the bound dates."""
+    try:
+        start, end = (date.fromisoformat(slots[key]) for key in ('start_date', 'end_date'))
+        if start >= end:
+            return None
+        interval = re.search(r'(\d{4}-\d{2}-\d{2})\s*(?:至|到|~|～)\s*(\d{4}-\d{2}-\d{2})', question)
+        if interval:
+            explicit_end = date.fromisoformat(interval[2])
+            exclusive = any(term in question for term in ('左闭右开', '不含结束'))
+            if (date.fromisoformat(interval[1]), explicit_end if exclusive else explicit_end + timedelta(days=1)) != (start, end):
+                return None
+            return _consume_terms(question[:interval.start()] + ' ' + question[interval.end():], ('左闭右开', '不含结束'))
+        pattern = r'(?<!\d)(\d{4})\s*年?\s*(?:第?\s*([一二三四1-4])\s*季度|q([1-4])|(\d{1,2})\s*月|(?:全年|年度))?'
+        periods = list(re.finditer(pattern, question, re.I))
+        if len(periods) != 1:
+            return None
+        match = periods[0]
+        year = int(match[1])
+        quarter = match[2] or match[3]
+        month = int(match[4]) if match[4] else None
+        if quarter:
+            quarter = int(quarter) if quarter.isdigit() else '一二三四'.index(quarter) + 1
+            expected = (date(year, 3 * quarter - 2, 1), date(year + 1, 1, 1) if quarter == 4 else date(year, 3 * quarter + 1, 1))
+        elif month:
+            expected = (date(year, month, 1), date(year + (month == 12), 1 if month == 12 else month + 1, 1))
+        else:
+            expected = (date(year, 1, 1), date(year + 1, 1, 1))
+        if expected != (start, end):
+            return None
+        return question[:match.start()] + ' ' + question[match.end():]
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+
+
+def _registered_query(question, context, max_rows):
+    """Closed semantic boundary for the small registered fast path.
+
+    Any unconsumed text, unused slot or unsupported shape returns None.  This
+    deliberately avoids treating the existing fallback builder as proof that
+    every condition in a free-form question has been understood.
+    """
+    slots, metrics = context.get('resolved_slots', {}), context.get('metric_ids', [])
+    intent, entities = slots.get('query_intent', {}), context.get('entities', [])
+    if not metrics or not validate_intent(intent):
+        return None
+    text = question
+    if metrics == ['track_attributes']:
+        from .entity_ids import catalog_ids, mask_identifiers
+        if set(slots) != {'query_intent'} or entities or intent.get('operation') != 'track_attributes':
+            return None
+        try:
+            if set(catalog_ids(text)) != set(intent['track_ids']):
+                return None
+        except (KeyError, ValueError):
+            return None
+        text = mask_identifiers(text)
+        text = _consume_terms(text, ('商品属性', '目录属性', '标价', '单价', '媒体类型', '商品名称', '名称', '分类', '叫什么'))
+    else:
+        if intent.get('operation') == 'mixed_media_orders':
+            if metrics != ['mixed_order_count'] or set(slots) - {'media_ids', 'query_intent', 'scope', 'data_scope', 'genre_boundary_resolved'}:
+                return None
+            if not all(word in text for word in ('同时', '音频', '视频', '订单')):
+                return None
+            return _controlled_query(context, metrics, max_rows=max_rows)
+        support_rep_distribution = intent.get('dimension') == 'support_rep'
+        if support_rep_distribution:
+            if metrics != ['purchasing_customers'] or set(intent) - {'dimension', 'measures', 'order_by', 'order_desc'}:
+                return None
+            if '支持负责人' not in text and 'SupportRep' not in text:
+                return None
+            if set(slots) - {'start_date', 'end_date', 'media_ids', 'query_intent'} or entities:
+                return None
+            return _controlled_query(context, metrics, max_rows=max_rows)
+        if set(metrics) - set(REGISTERED_METRIC_TERMS) or set(intent) - {'measures'}:
+            return None
+        if 'measures' in intent and set(intent['measures']) != set(metrics):
+            return None
+        if metrics == ['customer_count']:
+            if set(slots) - {'query_intent'} or entities:
+                return None
+        else:
+            if 'customer_count' in metrics or set(slots) - {'start_date', 'end_date', 'media_ids', 'query_intent'}:
+                return None
+            text = _registered_period(text, slots)
+            if text is None:
+                return None
+            audio = bool(re.search('音频|音乐', text))
+            video = '视频' in text
+            if audio or video:
+                expected_media = {1, 2, 3, 4, 5} if audio and video else {1, 2, 4, 5} if audio else {3}
+                if set(slots.get('media_ids', [])) != expected_media:
+                    return None
+            text = _consume_terms(text, ('音频', '音乐', '视频'))
+            country_count = 0
+            labels = []
+            for entity in entities:
+                identity = entity.get('id', '')
+                if entity.get('type') == 'genre' and re.fullmatch(r'Genre:[1-9]\d*', identity):
+                    pass
+                elif entity.get('type') == 'country' and re.fullmatch(r'Country:[A-Za-z][A-Za-z ]*', identity):
+                    country_count += 1
+                else:
+                    return None
+                label = entity.get('label')
+                if not isinstance(label, str) or not label.strip():
+                    return None
+                labels.append(label)
+            if country_count > 1:
+                return None
+            text = _consume_terms(text, labels)
+        terms = {term: metric for metric, aliases in REGISTERED_METRIC_TERMS.items() for term in aliases}
+        observed = set()
+        def metric_term(match):
+            observed.add(terms[match[0]])
+            return ' '
+        text = re.sub('|'.join(re.escape(term) for term in sorted(terms, key=len, reverse=True)), metric_term, text)
+        if observed != set(metrics):
+            return None
+    text = _consume_terms(text, REGISTERED_FILLER)
+    if re.sub(r'[\s，,、。；;？！?!：:（）()]', '', text):
+        return None
+    return _controlled_query(context, metrics, max_rows=max_rows)
+
+
 class NLQueryService:
     def __init__(self, registry, model=None):
         self.registry,self.model=registry,model
-        self.schemas=SchemaService(registry)
+        self.schemas=_CachedSchemaService(registry)
         self.executor=SQLExecutor(registry)
+        # SQLExecutor performs its own schema preflight. Share the same
+        # service-local cache while retaining its per-call access resolution.
+        self.executor.schemas=self.schemas
+        self._catalog_cache={}
+        self._catalog_lock=threading.RLock()
+
+    @staticmethod
+    def _catalog_fingerprint(profile):
+        records=[]
+        for name in profile.data.get('catalog_files', {}).values():
+            path=(profile.directory / name).resolve()
+            try:
+                stat=path.stat()
+                records.append((str(path), stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size, stat.st_ino))
+            except FileNotFoundError:
+                records.append((str(path), None, None))
+        return tuple(records)
+
+    def _load_catalog_cached(self, profile, snapshot):
+        files=self._catalog_fingerprint(profile)
+        fingerprint=(str(profile.directory), _CachedSchemaService._profile_fingerprint(profile), snapshot['schema_version'], files)
+        with self._catalog_lock:
+            cached=self._catalog_cache.get(profile.id)
+            if cached is not None and cached[0]==fingerprint:
+                return copy.deepcopy(cached[1])
+            catalog=load_catalog(profile, snapshot)
+            if self._catalog_fingerprint(profile)==files:
+                self._catalog_cache[profile.id]=(fingerprint, copy.deepcopy(catalog))
+            else:
+                self._catalog_cache.pop(profile.id, None)
+            return catalog
+
+    def answer_registered(self, request, access):
+        """Return a validated registered draft, or None to keep the live chain.
+
+        This entry point never initializes or calls a model.  It shares the
+        request, catalog, schema and read-only executor boundary with answer_sql.
+        """
+        data = request if isinstance(request, dict) else {}
+        response = dict(request_id=data.get('request_id'), profile_id=data.get('profile_id'), status='error',
+            sql_results=[], query_artifacts=[], metric_definitions=[], limitations=[], clarification=None, trace=[], error=None)
+        try:
+            obj(request, ['request_id', 'profile_id', 'question', 'context', 'options'], ['request_id', 'profile_id', 'question'], 'NL 请求')
+            profile, _ = self.registry.resolve(data['profile_id'], access)
+            context, options = validate_request(request, profile)
+            # Registered plans below are Chinook/SQLite-specific; another
+            # catalog with matching metric names does not approve these joins.
+            if profile.id != 'chinook' or profile.database['dialect'] != 'sqlite':
+                return None
+            if 'query_intent' not in context.get('resolved_slots', {}):
+                context = {**context, 'resolved_slots': {**context.get('resolved_slots', {}),
+                    'query_intent': parse_query_intent(data['question'], context.get('metric_ids', []))}}
+            snapshot = self.schemas.get_schema(profile.id, access)
+            catalog = self._load_catalog_cached(profile, snapshot)
+            metrics_by_id = {metric['metric_id']: metric for metric in catalog['metrics']}
+            metric_ids = context.get('metric_ids', [])
+            if set(metric_ids) - set(metrics_by_id):
+                raise request_error('指定 metric_ids 不属于该 profile 的已注册指标')
+            selected = [metrics_by_id[metric_id] for metric_id in metric_ids]
+            required = {name for metric in selected for name in metric['required_slots']}
+            required |= {name for name, rule in profile.data.get('slots', {}).items() if rule.get('required_by_default')}
+            if not required <= set(context.get('resolved_slots', {})):
+                raise ModuleError('MISSING_REQUIRED_SLOT', '缺少已注册指标必要槽位')
+            generated = _registered_query(data['question'], context, options.get('max_rows', 50))
+            if generated is None:
+                return None
+            query_id = 'sql-' + str(uuid.uuid4())
+            result = self.executor.execute_sql(dict(query_id=query_id, profile_id=profile.id,
+                sql=generated['sql'], params=generated['params'], max_rows=options.get('max_rows', 50), timeout_ms=5000), access)
+            response['sql_results'] = [result]
+            if options.get('show_trace', True):
+                response['trace'] = [dict(step=1, tool='sql.query', status=result['status'], source_refs=[query_id],
+                    summary='执行已注册参数化 SQL 快路径；未调用模型', duration_ms=result['execution_ms'])]
+            if result['status'] != 'success':
+                response['error'] = result['error']
+                return response
+            contract = CATALOG_COLUMNS if metric_ids == ['track_attributes'] else metric_ids
+            mapping = _contract_column_mapping(result, contract)
+            if mapping is None:
+                raise ModuleError('SQL_EXECUTION_FAILED', '已注册查询输出契约不完整', 'SEMANTIC_SCOPE_MISMATCH')
+            result['columns'] = [mapping.get(name, name) for name in result['columns']]
+            result['rows'] = [{mapping.get(name, name): value for name, value in row.items()} for row in result['rows']]
+            response['status'] = 'answered'
+            response['limitations'] = [*snapshot['limitations'], '本轮使用已注册指标的受控 SQL 快路径；未调用模型，不是模型失败降级。']
+            response['metric_definitions'] = [{key: metric.get(key) for key in ('metric_id', 'name', 'definition', 'unit', 'source_refs')} for metric in selected]
+            response['query_artifacts'] = [dict(query_id=query_id, sql=generated['sql'], params=generated['params'],
+                selected_tables=result['source']['tables'], schema_version=snapshot['schema_version'],
+                metric_refs=[metric['metric_id'] + '@' + catalog['version'] for metric in selected], attempt_count=1)]
+            if result['truncated']:
+                response['limitations'].append('结果已按 max_rows 截断')
+            if not result['rows']:
+                response['limitations'].append('本次查询没有匹配记录')
+            return response
+        except ModuleError as exc:
+            response['status'] = 'unsupported' if exc.code == 'UNSUPPORTED_CAPABILITY' else 'error'
+            response['error'] = exc.as_dict()
+            return response
+        except Exception:
+            response['error'] = ModuleError('INTERNAL_ERROR', '已注册自然语言查询模块内部异常').as_dict()
+            return response
 
     def answer_sql(self, request, access):
         data=request if isinstance(request,dict) else {}
@@ -392,7 +694,7 @@ class NLQueryService:
                 context = {**context, 'resolved_slots': {**context.get('resolved_slots', {}),
                     'query_intent': parse_query_intent(data['question'], context.get('metric_ids', []))}}
             snapshot=self.schemas.get_schema(profile.id,access)
-            catalog=load_catalog(profile,snapshot)
+            catalog=self._load_catalog_cached(profile,snapshot)
             metrics_by_id={m['metric_id']:m for m in catalog['metrics']}
             metric_ids=context.get('metric_ids',[])
             if set(metric_ids)-set(metrics_by_id):

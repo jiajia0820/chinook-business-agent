@@ -154,7 +154,7 @@ class KnowledgeIndex:
                 status="failed", error=ApiError(code="PROFILE_NOT_FOUND", message="该知识索引不属于请求 profile。", retryable=False),
             )
         filters = request.filters
-        if not set(filters) <= {"doc_id", "section", "business_metric_ids", "slots", "fact_role", "required_sources", "preferred_doc", "answer_type", "query_terms", "evidence_requirements", "dense_retrieval"}:
+        if not set(filters) <= {"doc_id", "section", "business_metric_ids", "slots", "fact_role", "required_sources", "required_roles", "preferred_doc", "answer_type", "query_terms", "evidence_requirements", "dense_retrieval"}:
             return self._failure(request, "INVALID_REQUEST", "检索筛选条件不受支持。")
         doc_id = filters.get("doc_id")
         from .facts import FACTS, fact_matches
@@ -169,6 +169,24 @@ class KnowledgeIndex:
         required_sources = filters.get("required_sources", [])
         if not isinstance(required_sources, list) or any(source not in self.documents for source in required_sources):
             return self._failure(request, "INVALID_REQUEST", "必要来源必须属于当前知识快照。")
+        required_roles = filters.get("required_roles", [])
+        if not isinstance(required_roles, list) or any(not isinstance(item, str) for item in required_roles):
+            return self._failure(request, "INVALID_REQUEST", "必要事实角色必须是字符串列表。")
+        role_docs: dict[str, list[str]] = {}
+        for role_name in required_roles:
+            from .source_plan import SOURCE_ROLES
+            metadata_docs = [doc_id for doc_id, metadata in self.profile.document_metadata.items()
+                             if role_name in metadata.answer_types and metadata.authority_scope.get(role_name, 0) > 0]
+            # SourcePlan owns complementary-source requirements (D10+D11,
+            # D01+D03+D12); profile metadata contributes authority scoring.
+            docs_for_role = list(dict.fromkeys([*SOURCE_ROLES.get(role_name, ()), *metadata_docs]))
+            docs_for_role = [doc for doc in docs_for_role if doc in self.documents]
+            if not docs_for_role:
+                return self._failure(request, "INVALID_REQUEST", "必要事实角色不属于当前知识快照。")
+            role_docs[role_name] = docs_for_role
+            for doc in docs_for_role:
+                if doc not in required_sources:
+                    required_sources.append(doc)
         preferred_doc = filters.get("preferred_doc")
         if preferred_doc is not None and preferred_doc not in self.documents:
             return self._failure(request, "INVALID_REQUEST", "首选来源必须属于当前知识快照。")
@@ -270,6 +288,8 @@ class KnowledgeIndex:
             hinted_docs.update({"D10", "D11"})
         if preferred_doc:
             hinted_docs.add(preferred_doc)
+        for docs_for_role in role_docs.values():
+            hinted_docs.update(docs_for_role)
         if not preferred_doc and answer_type:
             authority_candidates = [
                 (metadata.authority_scope.get(answer_type, 0), doc_id)
@@ -310,6 +330,8 @@ class KnowledgeIndex:
             metadata = self.profile.document_metadata.get(item.record.doc_id)
             if metadata and answer_type:
                 score += float(metadata.authority_scope.get(answer_type, 0)) * 10
+            if metadata and required_roles:
+                score += max((metadata.authority_scope.get(role_name, 0) for role_name in required_roles), default=0) * 5
             if required_sources and item.record.doc_id in required_sources:
                 score += 250.0
             if structured_matches and item.record.source_uri == structured_matches[0].source_uri:

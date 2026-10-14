@@ -1,0 +1,40 @@
+{
+  "version": "chinook-formula-1",
+  "formulas": [
+    {
+      "function": "target_difference",
+      "expression": "actual - target",
+      "inputs": ["actual", "target"],
+      "unit": "USD",
+      "source_refs": ["D01", "D06"]
+    },
+    {
+      "function": "attainment_rate",
+      "expression": "actual / target * 100",
+      "inputs": ["actual", "target"],
+      "unit": "%",
+      "source_refs": ["D01", "D06"]
+    },
+    {
+      "function": "growth_rate",
+      "expression": "(current - previous) / previous * 100",
+      "inputs": ["current", "previous"],
+      "unit": "%",
+      "source_refs": ["D01", "D02", "D07", "D08"]
+    },
+    {
+      "function": "average_order_value",
+      "expression": "sales_amount / order_count",
+      "inputs": ["sales_amount", "order_count"],
+      "unit": "USD",
+      "source_refs": ["D01", "D02"]
+    },
+    {
+      "function": "monthly_sum",
+      "expression": "sum(monthly_plan)",
+      "inputs": ["monthly_plan"],
+      "unit": "USD",
+      "source_refs": ["D06"]
+    }
+  ]
+}

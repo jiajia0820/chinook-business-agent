@@ -106,6 +106,30 @@ class CrossCompletionTests(unittest.IsolatedAsyncioTestCase):
         finally:
             self.assertTrue(await integration.aclose(grace_seconds=3))
 
+    async def test_one_failed_metric_binding_keeps_other_calculation(self):
+        from services.agent_api.app.integrations.business_calculation import create_business_resolver as real_resolver
+
+        def resolver_factory(index):
+            resolve = real_resolver(index)
+
+            def resolve_one(task, sql, rag, calculation_id, context):
+                if task.business_metric_ids == ["units_sold"]:
+                    return None
+                return resolve(task, sql, rag, calculation_id, context)
+
+            return resolve_one
+
+        with patch("services.agent_api.app.integrations.sql_d12._business_evidence_resolver", resolver_factory):
+            integration = await create_canonical_knowledge_integration()
+        try:
+            answer = await integration.create_formal_graph_service().ask(AskRequest(
+                question="2025年第三季度全音频销售额和销量是否都达到目标？", profile_id="chinook-music"), request_id="partial-binding")
+            self.assertEqual(answer.status, "answered", answer.limitations)
+            self.assertEqual([c.result for c in answer.calculations], [94.05])
+            self.assertIn("units_sold", " ".join(answer.limitations))
+        finally:
+            self.assertTrue(await integration.aclose(grace_seconds=3))
+
     async def test_empty_source_has_only_one_repair(self):
         spec = self.integration.runtime._tools["rag.retrieve"]
         calls = []

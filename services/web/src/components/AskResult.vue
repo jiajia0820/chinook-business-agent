@@ -15,7 +15,7 @@ const titles: Record<AskStatus, string> = {
   answered: '已回答', clarification_required: '需要补充条件',
   insufficient_evidence: '证据不足', unsupported: '当前能力不支持', error: '业务处理出错',
 };
-const routes: Record<Route, string> = { sql: '数据库问数', rag: '文档检索', cross_source: '跨源', clarification: '澄清', unsupported: '不支持' };
+const routes: Record<Route, string> = { sql: '数据库问数', rag: '文档检索', cross_source: '跨源', general: '通用回答', clarification: '澄清', unsupported: '不支持' };
 const citations = computed(() => business.value ? citationTargets(business.value) : []);
 const documentCitations = computed(() => {
   const seen = new Set<string>();
