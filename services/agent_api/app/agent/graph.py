@@ -542,7 +542,7 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
             chunks = [c for c in chunks if c.doc_id in source_plan.required_docs]
         missing_docs = [d for d in primary if not any(c.doc_id == d for c in chunks)]
         missing_secondary = [d for d in source_plan.secondary_docs if not any(c.doc_id == d for c in chunks)] if not only_sources else []
-        from ..knowledge.facts import FACTS, coverage as fact_coverage
+        from ..knowledge.facts import coverage as fact_coverage, role_repair_target
         missing_fact_roles = [item['role'] for item in fact_coverage(task, chunks) if not item['complete']]
         missing_content = core_content_missing(task.original_question, chunks) if task.route == 'rag' and not task.needs_calculation else []
         missing_formula = False
@@ -556,6 +556,7 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
         if outcome.succeeded and (missing_docs or missing_content or missing_formula or missing_secondary or missing_fact_roles):
             repair_filters = dict(filters)
             covered_roles = set()
+            repair_query = ' '.join(filters['query_terms']) + ' ' + question
             if missing_docs:
                 repair_filters['required_sources'] = missing_docs
                 repair_filters['preferred_doc'] = missing_docs[0]
@@ -563,21 +564,35 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
                 repair_filters.update(doc_id='D06', fact_role='target_formula', required_sources=['D06'])
                 covered_roles.add('target_formula')
             elif missing_fact_roles:
-                role = missing_fact_roles[0]
-                doc = FACTS[role][0]
-                repair_filters.update(doc_id=doc, fact_role=role, required_sources=[doc], preferred_doc=doc)
-                covered_roles.add(role)
+                repair = role_repair_target(missing_fact_roles[0], chunks)
+                if repair:
+                    hint, patch = repair
+                    # Multi-document roles drop the single-doc pin so every
+                    # required source stays reachable.
+                    if 'doc_id' not in patch:
+                        repair_filters.pop('doc_id', None)
+                    repair_filters.update(patch)
+                    covered_roles.add(missing_fact_roles[0])
+                    if hint:
+                        # Lead with the owed evidence terms: the question alone
+                        # keeps re-ranking the same summary chunk.
+                        repair_query = hint + ' ' + repair_query
             elif missing_secondary and not missing_content and not missing_formula:
                 repair_filters.update(required_sources=missing_secondary, preferred_doc=missing_secondary[0])
-            plans.append((' '.join(filters['query_terms']) + ' ' + question, repair_filters))
+            plans.append((repair_query, repair_filters))
             # A single repair slot can be consumed by the formula fetch, so give an
             # uncovered fact obligation one more targeted pass (whole turn capped at 2).
             for role in missing_fact_roles:
                 if len(plans) >= 2 or role in covered_roles:
                     continue
-                doc = FACTS[role][0]
-                plans.append((FACTS[role][1], dict(filters, doc_id=doc, fact_role=role,
-                                                   required_sources=[doc], preferred_doc=doc)))
+                repair = role_repair_target(role, chunks)
+                if not repair:
+                    continue
+                hint, patch = repair
+                plan_filters = dict(filters, **patch)
+                if 'doc_id' not in patch:
+                    plan_filters.pop('doc_id', None)
+                plans.append((hint or question, plan_filters))
         for repair_query, repair_filters in plans:
             repair = await runtime.run('rag.retrieve', payload.model_copy(update={
                 'retrieval_id':'retrieval-'+str(uuid.uuid4()), 'query':repair_query, 'filters':repair_filters}), context(current))

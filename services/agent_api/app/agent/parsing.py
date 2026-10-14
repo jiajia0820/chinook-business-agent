@@ -204,10 +204,8 @@ def _parse_question(question: str, profile: BusinessProfile, memory: SessionMemo
     general_question = looks_general_knowledge(q)
     for metric, terms in rules.unsupported_terms.items():
         if not general_question and _contains(q, terms):
-            reasons = {'profit':'当前没有成本与利润数据，不能用销售额代替利润。','inventory':'当前没有库存快照，无法计算库存数量。',
-                'play_count':'当前只有播放列表收录关系，没有播放次数或收听日志，不能推断播放量。'}
-            from .task_policy import unsupported_metric_label
-            return ParsedTurn(decision="unsupported", reason=reasons.get(metric, f"当前数据与工具不支持指标 {unsupported_metric_label(metric)}，不能用其他指标替代。"), rules=[f"data_gap:{metric}"])
+            from .task_policy import unsupported_metric_reason
+            return ParsedTurn(decision="unsupported", reason=unsupported_metric_reason(metric), rules=[f"data_gap:{metric}"])
     if not general_question and _contains(q,['点击','转化','曝光']) and _contains(q,['活动','页面']):
         return ParsedTurn(decision='unsupported',reason='当前没有活动点击、曝光或转化事件数据；交易变化不能替代这些事件。',rules=['data_gap:activity_events'])
     if not general_question and _contains(q,['SupportRep','支持负责人']) and _contains(q,['员工','个人','贡献']) and _contains(q,['销售','排名']):

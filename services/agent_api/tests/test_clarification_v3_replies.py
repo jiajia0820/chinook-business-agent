@@ -202,7 +202,8 @@ class ClarificationReplyTests(unittest.TestCase):
     def test_new_question_does_not_apply_stale_reply(self):
         self.turn("第三季度Rock销售额是多少？")
         self.memory.pending_clarification["task_id"] = "old-task"
-        result = self.turn("新问题：客户怎么分层？")
+        # 用已登记的规则问法，避免与“客户怎么分层”需要观察周期的澄清契约混淆。
+        result = self.turn("新问题：客户分层规则是什么？")
         self.assertEqual(result.decision, "ready")
         self.assertEqual(result.task.route, "rag")
         self.assertNotIn("quarter", result.task.slots)

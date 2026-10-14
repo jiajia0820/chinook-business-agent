@@ -28,6 +28,28 @@ UNSUPPORTED_METRIC_LABELS = {
 def unsupported_metric_label(metric: str) -> str:
     return UNSUPPORTED_METRIC_LABELS.get(metric, metric)
 
+# A bare "not supported" refusal does not tell the user what is missing or why
+# the substitute metric is invalid.  Each refusal names the absent data and the
+# boundary, so the answer stays actionable instead of looking like a shrug.
+UNSUPPORTED_METRIC_REASONS = {
+    "profit": "当前没有成本或结算金额数据，不能计算利润，也不能用销售额代替利润。",
+    "cost": "当前没有成本或结算金额数据，不能计算成本相关指标。",
+    "inventory": "当前没有库存快照数据，无法计算库存数量或库存周转。",
+    "refund": "当前没有退款或退货记录，无法统计退款金额。",
+    "ad_impressions": "当前没有广告曝光事件日志，无法统计曝光量。",
+    "play_count": "当前只有播放列表收录关系，没有播放次数或收听日志，不能推断播放量。",
+    "ad_conversion": "当前没有活动曝光、点击或转化的事件日志，无法做归因；只能统计活动期间的交易变化，交易变化不能替代这些事件。",
+    "employee_sales_ranking": "SupportRep 表示客户维护责任，不等于个人销售归属，不能据此给员工做销售额排名。",
+}
+
+
+def unsupported_metric_reason(metric: str) -> str:
+    """User-facing refusal sentence for a metric with no backing data."""
+    reason = UNSUPPORTED_METRIC_REASONS.get(metric)
+    if reason:
+        return reason
+    return f"当前数据不支持{unsupported_metric_label(metric)}，不能用其他指标替代。"
+
 SLOT_SPECS = {
     "period": ("完整观察期间，例如2025Q3、2025年全年或明确起止日期", []),
     "year": ("目标/查询年度，请回复四位年份（例如2025年），不会自动补年度", ["2025年", "2024年"]),
@@ -94,6 +116,8 @@ def missing_conditions(task, profile):
         # A general layering-rule explanation does not select a customer cohort.
         # Keep the period gate for a high-value-customer request, not a synonym
         # of an already approved rule question.
+        if "客户怎么分层" in q or "客户如何分层" in q:
+            return ["observation_period"] if not (slots.get("year") and slots.get("quarter")) else []
         if "高价值客户" in q:
             return ["observation_period"] if not (slots.get("year") and slots.get("quarter")) else []
         return []
@@ -136,15 +160,42 @@ def missing_conditions(task, profile):
     return list(dict.fromkeys(missing))
 
 
+# 显式改口标记：标记之后出现的周期才是本轮要查的口径。
+PERIOD_SWITCH_MARKERS = ("现在改看", "现在只看", "改看", "改问", "改成", "改为", "换成", "现在看")
+
+
+def _period_switch_at(text):
+    """最早的改口标记位置；没有标记时返回 -1。"""
+    hits = [text.index(marker) for marker in PERIOD_SWITCH_MARKERS if marker in text]
+    return min(hits) if hits else -1
+
+
+def _spans(text):
+    """按出现位置返回 (年份, 季度, 月份) 三元组，供改口判定按序裁剪。"""
+    years = [(m.start(), int(m.group(1))) for m in re.finditer(r"(?<![A-Za-z\d])(\d{4})(?!\d)", text)]
+    quarters = []
+    for match in re.finditer(r"(?:第?([一二三四1-4])季度|Q([1-4]))", text, re.I):
+        token = match.group(1) or match.group(2)
+        quarters.append((match.start(), int(token) if token.isdigit() else "一二三四".index(token) + 1))
+    months = [(m.start(), int(m.group(1))) for m in re.finditer(r"(?<!\d)(\d{1,2})月", text)]
+    return years, quarters, months
+
+
 def typed_periods(question):
     # Entity identifiers and date-like poster values are not observation years.
     text = re.sub(r"(?i)(?:TrackId|CustomerId|GenreId|PlaylistId)\s*[:：=]?\s*\d+(?:\s*[-–至]\s*\d+)?", "", question)
     text = re.sub(r"(?i)(?<![A-Za-z0-9])D(?:0[1-9]|1[0-2])(?!\d)", " ", text)
-    years = [int(x) for x in re.findall(r"(?<![A-Za-z\d])(\d{4})(?!\d)", text)]
-    quarters = [int(x) if x.isdigit() else "一二三四".index(x) + 1
-                for x in re.findall(r"(?:第?([一二三四1-4])季度|Q([1-4]))", text, re.I)
-                for x in [x[0] or x[1]]]
-    months = [int(x) for x in re.findall(r"(?<!\d)(\d{1,2})月", text)]
+    years, quarters, months = _spans(text)
+    # 「上一轮问过第二季度；现在改看第三季度」里，改口标记之前的周期是被替换掉
+    # 的旧条件：既不能当 current，也不该留下来当对比基期。
+    switch = _period_switch_at(text)
+    if switch >= 0:
+        years = [item for item in years if item[0] >= switch] or years
+        quarters = [item for item in quarters if item[0] >= switch] or quarters
+        months = [item for item in months if item[0] >= switch] or months
+    years = [value for _, value in years]
+    quarters = [value for _, value in quarters]
+    months = [value for _, value in months]
     slots = {}
     if years:
         slots["year"] = years[0]
@@ -427,6 +478,10 @@ def finalize_task(task, profile):
         return ParsedTurn(decision="ready", task=task, rules=[POLICY_VERSION, "general_knowledge"])
     if task.route == "sql" and task.intent == "unknown":
         if "卖得怎么样" in task.original_question:
+            # A bare vague request names neither measure nor observation scope,
+            # so both are asked at once instead of deferring the period only.
+            if not task.time_range and not task.slots.get("quarter") and not task.entities:
+                return policy_clarify(task, ["metric", "scope"])
             deferred = [] if task.time_range else ["year" if task.slots.get("quarter") else "period"]
             return policy_clarify(task, ["metric", *deferred])
         return policy_clarify(task, ["intent"])
@@ -448,6 +503,12 @@ def finalize_task(task, profile):
             and "mixed_order_count" not in task.business_metric_ids):
         return ParsedTurn(decision="unsupported", task=task, reason="该全库交易任务需要无时间范围的指标契约；当前注册交易指标要求周期，未伪造日期执行。", rules=["full_database_capability_gap"])
     missing = missing_conditions(task, profile)
+    # Naming both target measures fixes which target to verify.  Naming only
+    # one leaves the handbook's paired-target rule unresolved, and the gate
+    # already proved that blocker, so the planner must not hide it.
+    if (missing and "target_metric" in task.semantic_blockers and "target_metric" not in missing
+            and not {"sales_amount", "units_sold"} <= set(task.business_metric_ids)):
+        missing.append("target_metric")
     if missing:
         return policy_clarify(task, missing)
     if task.intent == "classification_lookup":
@@ -462,6 +523,25 @@ def finalize_task(task, profile):
     if "media_ids" in task.slots:
         task.slot_provenance.setdefault("media_ids", {"source": "profile_default", "confirmed": False})
     return ParsedTurn(decision="ready", task=task, rules=[POLICY_VERSION, *coverage])
+
+
+def _answers_from_documents(task, question: str) -> bool:
+    """True when an answerable question should be served from the handbook.
+
+    A documented rule or scope-contrast question that states no observation
+    period is answered from documents.  Demanding a period there invents a
+    requirement the question never had, so it must not reach the SQL gate.
+    """
+    from .semantic_gate import _has_period, _is_document_rule
+
+    ir = task.question_ir
+    if ir.route == "rag" and task.route == "rag" and not task.needs_calculation:
+        return True
+    return (
+        _is_document_rule(ir, question)
+        and not _has_period(ir)
+        and task.route in {"sql", "cross_source"}
+    )
 
 
 def parse_c_v1(question, profile, memory):
@@ -480,8 +560,7 @@ def parse_c_v1(question, profile, memory):
     if not general_question:
         for metric, terms in profile.question_rules.unsupported_terms.items():
             if any(term.casefold() in q.casefold() for term in terms):
-                label = unsupported_metric_label(metric)
-                return ParsedTurn(decision="unsupported", reason=f"当前数据不支持{label}，不能用其他指标替代。", rules=["data_gap"])
+                return ParsedTurn(decision="unsupported", reason=unsupported_metric_reason(metric), rules=["data_gap"])
         if any(term in q for term in ("点击", "转化")):
             return ParsedTurn(decision="unsupported", reason="没有页面事件/归因数据，无法计算点击或转化。", rules=["event_data_gap"])
         if "SupportRep" in q and "员工" in q and "销售额" in q:
@@ -511,7 +590,7 @@ def parse_c_v1(question, profile, memory):
     if gate is not None:
         task.semantic_status = gate.status
         task.semantic_blockers = gate.blockers
-    if gate is not None and gate.status == "answerable" and task.question_ir.route == "rag" and task.route == "rag" and not task.needs_calculation:
+    if gate is not None and gate.status == "answerable" and _answers_from_documents(task, q):
         task.intent, task.route, task.needs_calculation = "document_rule", "rag", False
         task.information_needs = ["rag"]
         task.required_outputs = ["document_facts"]

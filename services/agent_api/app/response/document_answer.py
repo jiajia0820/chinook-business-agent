@@ -234,6 +234,38 @@ def _document_text(documents, doc_id):
     return "\n".join(item.text for item in documents if item.doc_id == doc_id)
 
 
+# 取数一律落在原文而不是 compact() 结果上：表格被压平成 "RockGenre:150.0050"
+# 之后，行号、金额和季度会粘成一串，旧正则会把二季度的 108.90 当成 Rock 目标。
+# 按优先级排列，越具体的口径越靠前，最后才轮到宽松的兜底模式。
+_ROCK_TARGET_PATTERNS = (
+    # D06 正文：「Rock 作为主要增长品类，销售额目标为 50.00美元」
+    r"Rock[^。\n]{0,40}?销售额目标为\s*(\d+(?:\.\d+)?)\s*美元",
+    # D06 目标制定说明：「Rock 二季度销售额42.57美元，本季度目标50.00美元」
+    r"Rock[^。]{0,40}?本季度目标\s*(\d+(?:\.\d+)?)\s*美元",
+    # D06 附件1 目标明细表：Rock / Genre:1 / 50.00
+    r"Rock\s*Genre[:：]\s*1\s*(\d+(?:\.\d+)?)",
+    # 简化或合成材料：「Rock销售额50.00美元」
+    r"Rock[^。\d]{0,12}?销售额[^。\d]{0,8}?(\d+(?:\.\d+)?)\s*美元",
+)
+_ROCK_ACTUAL_PATTERNS = (
+    # D08 经营摘要：「第三季度Rock销售额47.52美元」
+    r"(?:第三季度|三季度|Q3)\s*Rock\s*销售额\s*(\d+(?:\.\d+)?)\s*美元",
+    # D08 达成情况：「Rock销售额目标50.00美元，实际47.52美元」
+    r"Rock[^。\d]{0,12}?销售额目标[^。]{0,16}?实际\s*(\d+(?:\.\d+)?)\s*美元",
+    # 简化或合成材料：「Rock实际销售额47.52美元」
+    r"Rock[^。]*?实际[^。\d]{0,8}?(\d+(?:\.\d+)?)\s*美元",
+)
+
+
+def _first_amount(text, patterns):
+    """按优先级返回第一个命中的金额文本，全部落空时返回 None。"""
+    for pattern in patterns:
+        match = re.search(pattern, text, re.S)
+        if match:
+            return match.group(1)
+    return None
+
+
 def _multidoc_target_review(question, documents):
     """Keep target, actual result, and activity roles visible in a fusion answer."""
     if not all(doc_id in {item.doc_id for item in documents} for doc_id in ("D06", "D08", "D10")):
@@ -243,18 +275,16 @@ def _multidoc_target_review(question, documents):
     d06 = _document_by_id(documents, "D06")
     d08 = _document_by_id(documents, "D08")
     d10 = _document_by_id(documents, "D10")
-    target_text = compact(_document_text(documents, "D06"))
-    actual_text = compact(_document_text(documents, "D08"))
     activity_text = compact(_document_text(documents, "D10"))
-    target = re.search(r"Rock.*?销售额(?:目标)?(?:为|：|:)?(\d+(?:\.\d+)?)美元", target_text)
-    actual = re.search(r"Rock.*?销售额(?:为|：|:)?(\d+(?:\.\d+)?)美元", actual_text)
-    if not target or not actual or "Rock主页面" not in activity_text or not any(
-        marker in activity_text for marker in ("Metal延伸栏目", "Metal延伸", "延伸栏目")
-    ):
+    target = _first_amount(_document_text(documents, "D06"), _ROCK_TARGET_PATTERNS)
+    actual = _first_amount(_document_text(documents, "D08"), _ROCK_ACTUAL_PATTERNS)
+    # D10 spreads the page plan over chunks: one names the Rock main page, another
+    # the Metal extension. Require both facts somewhere in the retrieved D10 text.
+    if not target or not actual or "主页面" not in activity_text or "延伸" not in activity_text:
         return None
     answer = (
-        f"D06给出第三季度Rock销售额目标{target.group(1)}美元，"
-        f"D08记录实际销售额{actual.group(1)}美元，"
+        f"D06给出第三季度Rock销售额目标{target}美元，"
+        f"D08记录实际销售额{actual}美元，"
         "D10依据差距安排第四季度Rock主页面和Metal延伸栏目。"
         "三份材料分别对应目标、实际达成和活动安排。"
     )
@@ -289,8 +319,11 @@ def _multidoc_activity_crosscheck(question, documents):
     d11 = _document_by_id(documents, "D11")
     plan_text = compact(_document_text(documents, "D10"))
     poster_text = compact(_document_text(documents, "D11"))
-    period = re.search(r"2025年10月20日至2025年11月2日", plan_text)
-    deadline = re.search(r"2025年10月13日\s*18:00", poster_text)
+    # D10's schedule table writes the period without the year and D11's poster
+    # writes the deadline as "10月13日18:00" or "10.13 18:00"; the year is
+    # optional in both so the real source text is accepted as evidence.
+    period = re.search(r"(?:2025年)?10月20日\s*至\s*(?:2025年)?11月2日", plan_text)
+    deadline = re.search(r"(?:2025年)?10\s*[.月/-]\s*13日?\s*18[:：]00", poster_text)
     if not period or not deadline or not all(marker in poster_text for marker in ("商品清单", "选品理由", "页面文案")):
         return None
     answer = (

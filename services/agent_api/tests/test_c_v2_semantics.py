@@ -50,12 +50,20 @@ class TaskSemanticsV2Tests(unittest.TestCase):
         self.assertEqual(r.task.time_range.start, "2025-01-01")
 
     def test_general_customer_rules_do_not_require_a_cohort_period(self):
-        for question in ("客户怎么分层？", "客户如何分层？", "客户分层规则是什么？"):
+        # 已登记的规则问法直接作答，不需要额外确认客户群体周期。
+        result = self.parse("客户分层规则是什么？")
+        self.assertEqual(result.decision, "ready")
+        self.assertEqual(result.task.route, "rag")
+        self.assertIn("customer_thresholds", result.task.answer_obligations)
+        # D04 的分层结果按季度音频销售额计算：只问“怎么分层”而没有周期时先确认观察季度。
+        for question in ("客户怎么分层？", "客户如何分层？"):
             with self.subTest(question=question):
-                result = self.parse(question)
-                self.assertEqual(result.decision, "ready")
-                self.assertEqual(result.task.route, "rag")
-                self.assertIn("customer_thresholds", result.task.answer_obligations)
+                tiering = self.parse(question)
+                self.assertEqual(tiering.decision, "clarification")
+                self.assertEqual(
+                    [slot.name for slot in tiering.clarification.missing_slots],
+                    ["observation_period"],
+                )
         selected = self.parse("哪些客户是高价值客户？")
         self.assertEqual(selected.decision, "clarification")
         self.assertEqual([s.name for s in selected.clarification.missing_slots], ["observation_period"])

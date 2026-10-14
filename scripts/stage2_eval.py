@@ -30,6 +30,64 @@ def write(path, value):
     path.write_text(safe_json(value), encoding='utf-8')
 
 
+class ExternalFailureBudget:
+    """连续失败预算：成功一次即清零。
+
+    偶发抖动（单次 HTTP 5xx / 连接重置）不该让整轮 live 作废；
+    只有连续失败才判定外部 API 真的不可用并暂缓后续尝试。
+    """
+
+    # 网关 get_channel_failed 类的 HTTP 500 是成簇出现的（实测一簇 6 次、每次约 1s）。
+    # C 自身的第二次尝试是立刻发的，正好撞在同一簇里，所以在这里按连续失败次数退避。
+    BACKOFF_BASE = 8.0
+    BACKOFF_MAX = 30.0
+    RESERVE_SECONDS = 8.0
+    # 预算耗尽后进入冷却：期间直接暂缓（不消耗调用预算），冷却结束放一次探测。
+    # 没有探测就永远等不到 record_success，整轮后半段会被一次故障全部拖成 pending。
+    PROBE_COOLDOWN = 60.0
+
+    def __init__(self, budget, clock=time.monotonic):
+        self.budget, self.reasons, self._clock = budget, [], clock
+        self._quiet_until, self._probing = 0.0, False
+
+    def record_success(self):
+        self.reasons, self._quiet_until, self._probing = [], 0.0, False
+
+    def record_failure(self, reason):
+        self.reasons.append(reason)
+        self._probing = False
+        if self.exhausted:
+            self._quiet_until = self._clock() + self.PROBE_COOLDOWN
+
+    @property
+    def exhausted(self):
+        return bool(self.budget) and len(self.reasons) >= self.budget
+
+    @property
+    def quiet(self):
+        """True 表示正在冷却，应当直接暂缓而不是发起真实调用。"""
+        return self.exhausted and self._clock() < self._quiet_until
+
+    def admit_probe(self):
+        """冷却结束：放行一次真实探测，探测不再额外退避；再失败立刻重新冷却。"""
+        self._probing, self._quiet_until = True, 0.0
+
+    @property
+    def count(self):
+        return len(self.reasons)
+
+    @property
+    def last_reason(self):
+        return self.reasons[-1] if self.reasons else None
+
+    def backoff_seconds(self, remaining):
+        """等待时长受调用预算约束：绝不让退避把真实请求挤成 MODEL_TIMEOUT。"""
+        if self._probing or not self.reasons:
+            return 0.0
+        return max(0.0, min(self.BACKOFF_BASE * len(self.reasons), self.BACKOFF_MAX,
+            remaining - self.RESERVE_SECONDS))
+
+
 def fingerprint(paths):
     digest = hashlib.sha256()
     for path in sorted(paths):
@@ -133,7 +191,7 @@ async def live(out, argv, failure_budget=0, *, report_path=None, strict_external
     from services.agent_api.app.services.graph_ask_service import GraphAskService
     lock = threading.Lock()
     attempts = {}
-    external_failures = []
+    external_failures = ExternalFailureBudget(failure_budget)
     active_requests = set()
     original_ask, original_generate = GraphAskService.ask, HTTPJSONModel.generate_json
 
@@ -178,19 +236,33 @@ async def live(out, argv, failure_budget=0, *, report_path=None, strict_external
                 entry['request_id'] = next(iter(active_requests))
             attempts[entry['question']] = attempts.get(entry['question'], 0) + 1
             entry['question_attempt_ordinal'] = attempts[entry['question']]
-        if failure_budget and len(external_failures) >= failure_budget:
+        if external_failures.quiet:
             append('model-calls.jsonl', {**entry, 'event': 'deferred_external_api',
-                'status': 'not_called', 'reason': external_failures[-1], 'elapsed_ms': 0})
-            raise ModuleError('SQL_EXECUTION_FAILED', '本轮外部 API 累计失败已达预算；记录待复测，继续检查受控工具。', external_failures[-1])
+                'status': 'not_called', 'reason': external_failures.last_reason, 'elapsed_ms': 0})
+            raise ModuleError('SQL_EXECUTION_FAILED',
+                f'外部 API 连续失败 {external_failures.count} 次已达预算；记录待复测，继续检查受控工具。',
+                external_failures.last_reason)
+        if external_failures.exhausted:
+            external_failures.admit_probe()
+        wait = external_failures.backoff_seconds(deadline - time.monotonic())
+        if wait > 0:
+            entry['backoff_seconds'] = round(wait, 1)
+            time.sleep(wait)
+            started = time.monotonic()  # elapsed_ms 只计真实请求，不含退避等待
         try:
             result = original_generate(self, messages, output_schema, deadline)
             entry['status'] = 'success'
             entry['generated_json'] = result
+            with lock:
+                external_failures.record_success()
             return result
         except Exception as exc:
-            entry.update(status='error', error_type=type(exc).__name__, reason=getattr(exc, 'reason', None), code=getattr(exc, 'code', None))
+            entry.update(status='error', error_type=type(exc).__name__, reason=getattr(exc, 'reason', None),
+                code=getattr(exc, 'code', None),
+                detail=str(exc)[:200] if isinstance(exc, ModuleError) else type(exc).__name__)
             if getattr(exc, 'reason', None) in {'MODEL_TIMEOUT', 'MODEL_NETWORK_FAILED', 'MODEL_HTTP_FAILED'}:
-                external_failures.append(exc.reason)
+                with lock:
+                    external_failures.record_failure(exc.reason)
             raise
         finally:
             entry['elapsed_ms'] = round((time.monotonic()-started)*1000)
@@ -227,6 +299,7 @@ if __name__ == '__main__':
     out = new_run(kind)
     meta = metadata(kind, argv)
     meta['external_api_failure_budget'] = failure_budget
+    meta['external_api_failure_budget_kind'] = 'consecutive'
     write(out/'run-meta.json', meta)
     print(f'证据目录：{out}', flush=True)
     try:

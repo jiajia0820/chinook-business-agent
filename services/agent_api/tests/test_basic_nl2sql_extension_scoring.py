@@ -6,7 +6,7 @@ from types import SimpleNamespace as N
 import unittest
 
 from scripts.eval_scoring import compare_rows, judge
-from scripts.stage2_eval import mark_pending_external
+from scripts.stage2_eval import ExternalFailureBudget, mark_pending_external
 
 ROOT = Path(__file__).resolve().parents[3]
 CASES = {c['id']: c for c in (json.loads(line) for line in
@@ -93,6 +93,80 @@ class BasicExtensionScoringTests(unittest.TestCase):
                {'request_id':'eval-basic-nl2sql-001','event':'model_attempt','status':'success'}]
         mark_pending_external(report,calls)
         self.assertEqual(report['passed'],1)
+
+    def test_isolated_external_failure_does_not_exhaust_consecutive_budget(self):
+        budget=ExternalFailureBudget(6)
+        budget.record_failure('MODEL_HTTP_FAILED')
+        self.assertFalse(budget.exhausted)
+        budget.record_success()
+        self.assertEqual(budget.count,0)
+        for _ in range(5):
+            budget.record_failure('MODEL_NETWORK_FAILED')
+        self.assertFalse(budget.exhausted)
+        budget.record_failure('MODEL_NETWORK_FAILED')
+        self.assertTrue(budget.exhausted)
+        self.assertEqual(budget.last_reason,'MODEL_NETWORK_FAILED')
+
+    def test_zero_budget_never_defers(self):
+        budget=ExternalFailureBudget(0)
+        for _ in range(20):
+            budget.record_failure('MODEL_TIMEOUT')
+        self.assertFalse(budget.exhausted)
+
+    def test_backoff_grows_with_consecutive_failures_and_is_capped(self):
+        budget=ExternalFailureBudget(6)
+        self.assertEqual(budget.backoff_seconds(100),0.0)
+        budget.record_failure('MODEL_HTTP_FAILED')
+        self.assertEqual(budget.backoff_seconds(100),8.0)
+        budget.record_failure('MODEL_HTTP_FAILED')
+        budget.record_failure('MODEL_HTTP_FAILED')
+        self.assertEqual(budget.backoff_seconds(100),24.0)
+        budget.record_failure('MODEL_HTTP_FAILED')
+        budget.record_failure('MODEL_HTTP_FAILED')
+        self.assertEqual(budget.backoff_seconds(100),30.0)
+        budget.record_success()
+        self.assertEqual(budget.backoff_seconds(100),0.0)
+
+    def test_backoff_never_eats_the_call_budget(self):
+        budget=ExternalFailureBudget(6)
+        budget.record_failure('MODEL_TIMEOUT')
+        budget.record_failure('MODEL_TIMEOUT')
+        self.assertEqual(budget.backoff_seconds(20),12.0)
+        self.assertEqual(budget.backoff_seconds(12),4.0)
+        self.assertEqual(budget.backoff_seconds(8),0.0)
+
+    def test_exhaustion_cools_down_and_then_admits_a_probe(self):
+        now=[0.0]
+        budget=ExternalFailureBudget(3,clock=lambda:now[0])
+        for _ in range(3):
+            budget.record_failure('MODEL_HTTP_FAILED')
+        self.assertTrue(budget.quiet)
+        self.assertEqual(budget.backoff_seconds(100),24.0)
+        now[0]+=ExternalFailureBudget.PROBE_COOLDOWN+1
+        self.assertFalse(budget.quiet)
+        budget.admit_probe()
+        self.assertEqual(budget.backoff_seconds(100),0.0)
+        budget.record_failure('MODEL_HTTP_FAILED')
+        self.assertTrue(budget.quiet)
+
+    def test_probe_success_restores_real_calls_for_the_rest_of_the_run(self):
+        now=[0.0]
+        budget=ExternalFailureBudget(3,clock=lambda:now[0])
+        for _ in range(3):
+            budget.record_failure('MODEL_TIMEOUT')
+        now[0]+=ExternalFailureBudget.PROBE_COOLDOWN+1
+        budget.admit_probe()
+        budget.record_success()
+        self.assertFalse(budget.exhausted)
+        self.assertFalse(budget.quiet)
+        self.assertEqual(budget.count,0)
+        self.assertEqual(budget.backoff_seconds(100),0.0)
+
+    def test_zero_budget_never_goes_quiet(self):
+        budget=ExternalFailureBudget(0)
+        for _ in range(20):
+            budget.record_failure('MODEL_TIMEOUT')
+        self.assertFalse(budget.quiet)
 
 
 if __name__ == '__main__':

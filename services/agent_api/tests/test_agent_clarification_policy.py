@@ -21,8 +21,14 @@ class ClarificationPolicyTests(unittest.TestCase):
         self.assertNotIn("year_assumed", response.task.slots)
 
     def test_specific_metric_no_redundant_metric_question(self):
-        response = self.parse("销售额达到目标了吗？")
+        # A question listing both target measures names the target completely.
+        response = self.parse("第三季度全音频销售额和销量是否都达标？")
         self.assertNotIn("target_metric", [s.name for s in response.clarification.missing_slots])
+        # Naming only the actual measure does not choose between the handbook's
+        # paired sales target and units target, so that slot stays explicit.
+        ambiguous = self.parse("销售额达到目标了吗？")
+        self.assertEqual(sorted(s.name for s in ambiguous.clarification.missing_slots),
+                         ["period", "scope", "target_metric"])
 
     def test_dynamic_slots(self):
         dimension = self.parse("某商品属于什么类型？")

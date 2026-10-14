@@ -97,6 +97,48 @@ SQL_NOTE = "展示 SQL 为 C 已接受候选；C 执行前会校验并规范化�
 RAG_NOTE = "以上为知识库检索到的原文片段，未改写、未推断；请结合来源文档核对完整上下文。"
 
 
+# D03 要求名称相近的分类分列：Rock（Genre:1）与 Rock And Roll（Genre:5）、
+# Metal（Genre:3）与 Heavy Metal（Genre:13）。中文提问只说“摇滚/金属”时，
+# SQL 口径必须把未并入的近名分类写出来，否则等于静默合并。
+def _lookalike_pair(left, right):
+    """True 表示两条别名记录名称相近，却指向不同的实体编号。"""
+    if left.entity_id == right.entity_id or left.entity_type != right.entity_type:
+        return False
+    labels = (left.label.casefold(), right.label.casefold())
+    if labels[0] != labels[1] and any(
+        re.search(rf"(?<![a-z]){re.escape(one)}(?![a-z])", other)
+        for one, other in (labels, labels[::-1])
+    ):
+        return True
+    aliases = (left.alias or "", right.alias or "")
+    return bool(aliases[0] and aliases[1] and aliases[0] != aliases[1]
+        and (aliases[0] in aliases[1] or aliases[1] in aliases[0]))
+
+
+def genre_boundary_note(profile, task):
+    """为 SQL 口径补一句近名分类边界说明；没有近名分类时返回空串。"""
+    catalog = {alias.entity_id: alias for alias in getattr(profile, "aliases", ()) or ()
+        if alias.entity_type == "genre"}
+    chosen = [entity for entity in task.entities if entity.get("type") == "genre"]
+    in_scope = {entity["id"] for entity in task.entities}
+    in_scope |= {entity["id"] for entity in getattr(task, "excluded_entities", ()) or ()}
+    notes = []
+    for entity in chosen:
+        current = catalog.get(entity["id"])
+        if current is None:
+            continue
+        for alias in catalog.values():
+            if alias.entity_id in in_scope or not _lookalike_pair(current, alias):
+                continue
+            notes.append(
+                f"{current.label}（{current.entity_id}）不包含名称相近的 "
+                f"{alias.label}（{alias.alias}，{alias.entity_id}），两者分开维护"
+            )
+    if not notes:
+        return ""
+    return "口径边界：" + "；".join(notes) + "。"
+
+
 def question_key(value: str) -> str:
     return unicodedata.normalize("NFKC", value).strip().rstrip("?？。")
 
@@ -562,7 +604,10 @@ class FormalResponseComposer:
             rendered_results.append(f"{rendered}\n来源：SQL {result.query_id}。")
         scope = '；'.join(f"{entity['label']}（{entity['id']}）" for entity in task.entities)
         period = task.time_range.label if task.time_range else ''
-        return f"查询口径：{period}；{scope or '当前确认范围'}。\n查询结果：" + "\n".join(rendered_results) + SQL_NOTE
+        boundary = genre_boundary_note(context.profile, task)
+        boundary = f"\n{boundary}" if boundary else ''
+        return (f"查询口径：{period}；{scope or '当前确认范围'}。{boundary}\n查询结果："
+            + "\n".join(rendered_results) + SQL_NOTE)
 
     def _cross_source_answer(self, context):
         if context.task.needs_calculation or not context.rag or not context.rag.chunks:

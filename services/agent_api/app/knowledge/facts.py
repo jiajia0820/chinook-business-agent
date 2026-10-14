@@ -31,6 +31,20 @@ FACTS = {
     "monthly_bundle": ("D06", "月度分解 7月金额 8月金额 9月金额 全部音频 销售额差额 销售额达成率"),
 }
 
+# Retrieval hints for evidence a document role still owes.  Each entry reuses the
+# role's own match vocabulary so a repair pass searches for the missing passage
+# instead of repeating the user's question, which keeps ranking on the summary.
+ROLE_REPAIR_HINTS = {
+    ("target_review_activity", "D06"): "附件1 季度目标明细 销售额目标 销量目标 Rock Genre:1",
+    ("target_review_activity", "D08"): "目标达成情况 实际 差额 达成率 Rock 复盘",
+    ("target_review_activity", "D10"): "页面与商品安排 Rock主页面 Metal延伸 延伸选择 相关专辑",
+    ("customer_category_action", "D04"): "活跃客户层级定义 阈值 A层 B层 C层 音频销售额",
+    ("customer_category_action", "D09"): "Rock 品类运营 成交商品 专辑覆盖 专题陈列",
+    ("activity_material_crosscheck", "D10"): "执行排期 拟执行周期 页面稿 上线版本 商品清单",
+    ("activity_material_crosscheck", "D11"): "报名截止 提交材料 商品清单 选品理由 页面文案",
+    ("metric_method_crosscheck", "D01"): "客单价 指标定义 销售额 订单数 分母",
+    ("metric_method_crosscheck", "D02"): "指标口径 汇总口径 销售分析方法 比较 分母",
+}
 
 def answer_obligations(question):
     q = question.replace(" ", "")
@@ -104,7 +118,10 @@ def _document_role_matches(role, doc_id, text):
         return {
             "D06": "Rock" in text and "销售额" in t and ("目标" in t or "季度目标" in t),
             "D08": "Rock" in text and "销售额" in t and any(word in t for word in ("实际", "复盘", "达成")),
-            "D10": "Rock主页面" in t and any(word in t for word in ("Metal延伸", "延伸栏目")),
+            # The page plan and the Metal extension live in different D10 chunks,
+            # so a single chunk only has to carry one of the two page facts.
+            "D10": ("主页面" in t or "延伸" in t)
+            and any(word in t for word in ("页面", "商品", "专辑", "清单")),
         }.get(doc_id, False)
     if role == "customer_category_action":
         return {
@@ -113,8 +130,11 @@ def _document_role_matches(role, doc_id, text):
         }.get(doc_id, False)
     if role == "activity_material_crosscheck":
         return {
-            "D10": "2025年10月20日至2025年11月2日" in t and "版本" in t,
-            "D11": "2025年10月13日" in t and all(word in t for word in ("商品清单", "选品理由", "页面文案")),
+            # D10's schedule table omits the year; D11's poster writes the
+            # deadline as "10月13日18:00" or "10.13 18:00".
+            "D10": bool(re.search(r"(?:2025年)?10月20日\s*至\s*(?:2025年)?11月2日", t)) and "版本" in t,
+            "D11": bool(re.search(r"(?:2025年)?10\s*[.月/-]\s*13日?\s*18[:：]00", t))
+            and all(word in t for word in ("商品清单", "选品理由", "页面文案")),
         }.get(doc_id, False)
     if role == "metric_method_crosscheck":
         return {
@@ -142,3 +162,45 @@ def coverage(task, chunks):
             refs = [c.chunk_id for c in chunks if c.doc_id == FACTS[role][0] and fact_matches(role, c.text)]
             results.append({"role": role, "complete": bool(refs), "source_refs": refs})
     return results
+
+
+def uncovered_role_documents(role, chunks):
+    """Documents that still owe evidence for ``role``, in contract order.
+
+    Mirrors :func:`coverage` so a role reported incomplete always yields at
+    least one document to repair, for both single-document ``FACTS`` roles and
+    multi-document ``DOCUMENT_ROLES`` obligations.
+    """
+    if role in DOCUMENT_ROLES:
+        return [
+            doc for doc in DOCUMENT_ROLES[role]
+            if not any(c.doc_id == doc and _document_role_matches(role, doc, c.text) for c in chunks)
+        ]
+    if role in FACTS:
+        doc = FACTS[role][0]
+        if any(c.doc_id == doc and fact_matches(role, c.text) for c in chunks):
+            return []
+        return [doc]
+    return []
+
+
+def role_repair_target(role, chunks):
+    """Return ``(query_hint, filter_patch)`` for one targeted repair of ``role``.
+
+    ``None`` means the role is unknown or already covered.  Only single-document
+    ``FACTS`` roles may carry ``fact_role``: the index rejects any
+    ``fact_role``/``doc_id`` pair it cannot validate, so multi-document
+    obligations steer retrieval through ``required_sources``/``preferred_doc``
+    and leave the query to the caller (empty ``query_hint``).
+    """
+    uncovered = uncovered_role_documents(role, chunks)
+    if not uncovered:
+        return None
+    if role in FACTS:
+        doc = FACTS[role][0]
+        return FACTS[role][1], {"doc_id": doc, "fact_role": role,
+                                "required_sources": [doc], "preferred_doc": doc}
+    hint = " ".join(dict.fromkeys(
+        term for doc in uncovered for term in ROLE_REPAIR_HINTS.get((role, doc), "").split()
+    ))
+    return hint, {"required_sources": uncovered, "preferred_doc": uncovered[0]}

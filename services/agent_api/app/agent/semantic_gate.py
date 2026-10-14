@@ -59,6 +59,9 @@ def _is_document_rule(ir: QuestionIR, question: str) -> bool:
     if any(term in question for term in (
         "定义", "口径", "规则", "公式", "怎么计算", "如何计算", "手册",
         "方案", "建议", "重点看", "下一步", "目标表", "复盘",
+        # Scope/definition contrasts are answered from the metric handbook; a
+        # transaction period would be an invented requirement, not a real gap.
+        "范围差异", "有什么区别", "什么区别", "分母",
     )):
         return True
     # Method questions may mention a transaction metric while asking for the
@@ -70,11 +73,16 @@ def _is_document_rule(ir: QuestionIR, question: str) -> bool:
 
 
 def _unsupported_reason(question: str, profile: BusinessProfile) -> str | None:
+    # "利润是什么" asks for a definition, not a number; refusing it as a data
+    # gap contradicts the general-knowledge route that parsing.py already grants.
+    from .task_policy import looks_general_knowledge
+    if looks_general_knowledge(question):
+        return None
     folded = question.casefold()
     for metric, terms in profile.question_rules.unsupported_terms.items():
         if any(term.casefold() in folded for term in terms):
-            from .task_policy import unsupported_metric_label
-            return f"当前数据不支持{unsupported_metric_label(metric)}，不能用其他指标替代。"
+            from .task_policy import unsupported_metric_reason
+            return unsupported_metric_reason(metric)
     return None
 
 

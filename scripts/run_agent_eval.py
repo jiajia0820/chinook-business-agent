@@ -29,6 +29,10 @@ if str(ROOT) not in sys.path:
 
 EVAL_DIR = ROOT / "eval" / "agent"
 
+# 连续外部失败达到该次数才判定 API 不可用并暂缓后续尝试。
+# 单题最多重试 2 次，6 次约等于连续 3 题彻底失败；偶发抖动由成功调用清零。
+EXTERNAL_API_FAILURE_BUDGET = 6
+
 
 def load_environment():
     """uv run 会自动读取 .env；直接用解释器跑评测机时在这里补上，避免静默退回离线配置。"""
@@ -468,10 +472,12 @@ async def recorded_main():
         if (out/name).exists():
             raise SystemExit('证据目录已被使用；请使用新的独立目录')
     meta = audit.metadata('live', argv)
-    meta['external_api_failure_budget'] = 1
+    meta['external_api_failure_budget'] = EXTERNAL_API_FAILURE_BUDGET
+    meta['external_api_failure_budget_kind'] = 'consecutive'
     audit.write(out/'run-meta.json', meta)
     try:
-        return await audit.live(out, argv, failure_budget=1, report_path=report_path, strict_external=True)
+        return await audit.live(out, argv, failure_budget=EXTERNAL_API_FAILURE_BUDGET,
+            report_path=report_path, strict_external=True)
     finally:
         final = audit.metadata('live', argv)
         from datetime import datetime, timezone

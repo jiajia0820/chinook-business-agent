@@ -4,6 +4,10 @@ from .state import ParsedTurn
 
 PUBLIC_SLOTS = {"classification_dimension": "entity_dimension", "genre_boundary": "genre_scope"}
 
+# A vague request leaves the measure and its observation scope equally undefined.
+# Asking only the primary slot would force a second round-trip and invite a guess.
+JOINT_SLOT_GROUPS = ({"metric", "scope"},)
+
 
 def build_clarification(task, missing, specs, *, reused=False, note=None):
     blockers = list(dict.fromkeys(missing))
@@ -12,8 +16,12 @@ def build_clarification(task, missing, specs, *, reused=False, note=None):
     # Resolve a choice that defines the meaning of the remaining task first.
     # A hidden period/entity blocker remains in the plan and is rechecked later.
     priorities = ("condition_conflict", "classification_dimension", "genre_boundary", "metric", "intent")
-    primary = next((s for s in priorities if s in blockers), None)
-    asked = [primary] if primary else blockers[:3]
+    joint = next((group for group in JOINT_SLOT_GROUPS if group <= set(blockers)), None)
+    if joint:
+        asked = [name for name in blockers if name in joint]
+    else:
+        primary = next((s for s in priorities if s in blockers), None)
+        asked = [primary] if primary else blockers[:3]
     descriptions = []
     options = []
     for name in asked:
