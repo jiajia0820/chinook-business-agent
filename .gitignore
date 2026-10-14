@@ -60,3 +60,5 @@ coverage/
 
 # Office temp lock files
 ~$*
+
+.superpowers/
