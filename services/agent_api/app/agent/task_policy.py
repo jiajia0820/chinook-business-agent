@@ -14,14 +14,14 @@ POLICY_VERSION = "c-clarification-v3-20261011"
 # Internal metric keys are useful for routing and capability checks, but they
 # must not leak into user-facing unsupported answers.
 UNSUPPORTED_METRIC_LABELS = {
-    "profit": "利润（缺少成本或结算金额）",
+    "profit": "利润",
     "cost": "成本",
     "inventory": "库存",
     "refund": "退款",
     "ad_impressions": "广告曝光",
     "play_count": "播放量",
-    "ad_conversion": "广告点击/转化（缺少曝光、点击或转化事件日志）",
-    "employee_sales_ranking": "SupportRep 员工销售排名（客户维护责任，不代表个人销售贡献）",
+    "ad_conversion": "广告点击/转化",
+    "employee_sales_ranking": "SupportRep 员工销售排名",
 }
 
 
@@ -33,7 +33,6 @@ SLOT_SPECS = {
     "year": ("目标/查询年度，请回复四位年份（例如2025年），不会自动补年度", ["2025年", "2024年"]),
     "quarter": ("完整季度或明确起止时间", ["第一季度", "第二季度", "第三季度", "第四季度"]),
     "metric": ("要查询的指标或回答目标", ["销售额", "销量", "订单数", "购买客户数", "目标达成情况"]),
-    "target_metric": ("要核验的目标指标", ["销售额", "销量", "销售额和销量"]),
     "comparison_period": ("本期及基期，例如2025Q3对比2025Q2", []),
     "data_scope": ("比较范围，例如全部音频或指定品类", ["全部音频", "仅Rock"]),
     "media_scope": ("媒体范围：音频、视频，还是分别/合并统计", ["音频", "视频", "分别统计", "合并音视频"]),
@@ -212,7 +211,7 @@ def semantic_task(question, profile):
         )
     metric_explicit = bool(metrics) or ("销售" in question and "增长" in question)
     q = question
-    doc_terms = ("口径", "定义", "怎么计算", "如何计算", "规则", "手册", "方案", "海报", "复盘", "建议", "解读", "选品", "分层", "维护", "对应", "归类", "分类表", "Genre", "MediaType", "报名", "阈值", "一个分类", "分开", "并入", "范围差异", "范围怎么写", "核心结果", "包括哪些", "包含哪些", "按哪个分类", "媒体格式", "活动什么时候", "提交材料", "截止", "分母", "客单价", "成交均价", "指标说明", "销售分析方法")
+    doc_terms = ("口径", "定义", "怎么计算", "如何计算", "规则", "手册", "方案", "海报", "复盘", "建议", "解读", "选品", "分层", "维护", "对应", "归类", "分类表", "Genre", "MediaType", "报名", "阈值", "一个分类", "分开", "并入", "范围差异", "范围怎么写", "核心结果", "包括哪些", "包含哪些", "按哪个分类", "媒体格式", "活动什么时候", "提交材料", "截止")
     document = _contains(q, (*doc_terms, "运营", "主题活动")) or bool(re.search(r"(?<![A-Za-z0-9])D(?:0[1-9]|1[0-2])(?![A-Za-z0-9])", q, re.I))
     target = _contains(q, ("目标", "达标", "达成", "完成了多少"))
     compare = _contains(q, ("差多少", "差额", "距离", "达标", "未达目标", "达到目标", "和目标比", "是否都", "完成了多少", "完成了吗"))
@@ -450,13 +449,6 @@ def finalize_task(task, profile):
     if (task.route != "rag" and "数据库中" in task.original_question and not task.time_range
             and "mixed_order_count" not in task.business_metric_ids):
         return ParsedTurn(decision="unsupported", task=task, reason="该全库交易任务需要无时间范围的指标契约；当前注册交易指标要求周期，未伪造日期执行。", rules=["full_database_capability_gap"])
-    if task.intent == "target_attainment" and not any(
-        marker in task.original_question for marker in ("销售额目标", "销量目标", "销售额和销量", "只看销售额", "只看销量")
-    ):
-        task.business_metric_ids = []
-        task.slots.pop("target_metric", None)
-        task.slot_provenance["metric"] = {"source": "unconfirmed", "confirmed": False}
-        return policy_clarify(task, ["period", "scope", "target_metric"])
     missing = missing_conditions(task, profile)
     if missing:
         return policy_clarify(task, missing)

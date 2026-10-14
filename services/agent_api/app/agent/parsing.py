@@ -403,13 +403,6 @@ def _parse_question(question: str, profile: BusinessProfile, memory: SessionMemo
     if task.business_metric_ids:
         task.slots["target_metric"] = task.business_metric_ids[0]
     # Defaults are declared in profile; no year or numeric target is inferred.
-    if task.intent == "target_attainment" and not any(
-        marker in q for marker in ("销售额目标", "销量目标", "销售额和销量", "只看销售额", "只看销量")
-    ):
-        task.business_metric_ids = []
-        task.slots.pop("target_metric", None)
-        task.slot_provenance["metric"] = {"source": "unconfirmed", "confirmed": False}
-        return clarify(task, ["period", "scope", "target_metric"], reused=reused, rules=["target_metric_not_inferred"])
     if task.intent == "target_attainment" and not task.business_metric_ids:
         return clarify(task, ["target_metric"] + ([] if task.slots.get("year") else ["year"]), reused=reused, rules=["target_metric_not_inferred"])
     missing = []
