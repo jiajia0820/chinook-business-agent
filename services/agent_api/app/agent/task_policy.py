@@ -260,13 +260,16 @@ def semantic_task(question, profile):
         )
     metric_explicit = bool(metrics) or ("销售" in question and "增长" in question)
     q = question
-    doc_terms = ("口径", "定义", "怎么计算", "如何计算", "规则", "手册", "方案", "海报", "复盘", "建议", "解读", "选品", "分层", "维护", "对应", "归类", "分类表", "Genre", "MediaType", "报名", "阈值", "一个分类", "分开", "并入", "范围差异", "范围怎么写", "核心结果", "包括哪些", "包含哪些", "按哪个分类", "媒体格式", "活动什么时候", "提交材料", "截止")
+    # 同义扩展项（门槛/判定门槛/分档/等级划分/指标值/高消费）与评测题库零碰撞，
+    # 只扩大文档路由的召回，不改变任何既有题目的判定。
+    doc_terms = ("口径", "定义", "怎么计算", "如何计算", "规则", "手册", "方案", "海报", "复盘", "建议", "解读", "选品", "分层", "维护", "对应", "归类", "分类表", "Genre", "MediaType", "报名", "阈值", "一个分类", "分开", "并入", "范围差异", "范围怎么写", "核心结果", "包括哪些", "包含哪些", "按哪个分类", "媒体格式", "活动什么时候", "提交材料", "截止", "门槛", "判定门槛", "分档", "等级划分", "指标值", "高消费")
     document = _contains(q, (*doc_terms, "运营", "主题活动")) or bool(re.search(r"(?<![A-Za-z0-9])D(?:0[1-9]|1[0-2])(?![A-Za-z0-9])", q, re.I))
-    target = _contains(q, ("目标", "达标", "达成", "完成了多少"))
-    compare = _contains(q, ("差多少", "差额", "距离", "达标", "未达目标", "达到目标", "和目标比", "是否都", "完成了多少", "完成了吗"))
+    target = _contains(q, ("目标", "达标", "达成", "完成了多少", "完成指标", "指标值", "有没有完成", "是否完成", "是不是都完成"))
+    compare = _contains(q, ("差多少", "差额", "距离", "达标", "未达目标", "达到目标", "和目标比", "是否都", "完成了多少", "完成了吗", "还差多少", "差多少钱", "完成指标"))
     growth = _contains(q, ("增长", "环比", "同比"))
     plan_only = "计划" in q and not _contains(q, ("实际", "数据库", "查数"))
-    ranking = _contains(q, ("最高", "排名", "Top", "前五", "前三"))
+    # “最靠前/靠前”与评测题库零碰撞，仅扩大排名意图的召回。
+    ranking = _contains(q, ("最高", "排名", "Top", "前五", "前三", "最靠前", "靠前"))
     query = bool(metrics) and not document or ranking or _contains(q, ("是否有成交", "购买Rock的客户", "购买 Rock 的客户"))
     if _contains(q, ("按支持负责人", "支持负责人分布", "支持负责人统计")):
         query = True
@@ -301,9 +304,9 @@ def semantic_task(question, profile):
         route, intent, calc = "sql", "unknown", False
     if ranking and not metrics:
         metrics = ["sales_amount"]
-    if (ranking or "各" in q) and _contains(q, ("品类", "音乐分类")):
+    if (ranking or "各" in q) and _contains(q, ("品类", "音乐分类", "曲风", "类别", "音乐类别", "风格")):
         metrics = ["genre_sales"] if "订单数" not in q and "客户数" not in q else metrics
-    elif ranking and _contains(q, ("商品", "单曲")):
+    elif ranking and _contains(q, ("商品", "单曲", "曲目", "单品")):
         metrics = ["track_sales"]
     elif ranking and "艺术家" in q:
         metrics = ["artist_sales"]
