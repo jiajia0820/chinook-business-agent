@@ -60,6 +60,10 @@ describe('C1 UI shell', () => {
 describe('C1 evidence dock navigation', () => {
   it('marks the selected evidence group and keeps all returned evidence mounted', async () => {
     const response = actualResponse('客户数量是多少？');
+    response.documents = [{
+      doc_id: 'D12', chunk_id: 'D12@test', title: '测试来源', doc_type: 'md',
+      text: '测试来源片段', source_uri: 'knowledge/D12', section: '测试章节',
+    }];
     const wrapper = mount(EvidencePanel, { props: { response, showTraceRequested: true } });
     expect(wrapper.get('[data-testid="evidence-tab-sql"]').attributes('aria-selected')).toBe('true');
     await wrapper.get('[data-testid="evidence-tab-sources"]').trigger('click');
@@ -67,6 +71,7 @@ describe('C1 evidence dock navigation', () => {
     expect(wrapper.get('[data-testid="evidence-tab-sql"]').attributes('aria-selected')).toBe('false');
     expect(wrapper.find('[data-testid="sql-evidence"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="document-evidence"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="metric-definitions"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="trace-evidence"]').exists()).toBe(true);
   });
 });
@@ -144,12 +149,12 @@ Create one root element with `data-testid="workspace-shell"` and three direct re
     <!-- existing composer, notices, last request, AskResult, retry area -->
   </section>
   <aside class="workspace-evidence" data-testid="workspace-evidence" aria-label="常驻证据">
-    <!-- EvidencePanel participates in the shell grid through the AskResult wrapper -->
+    <!-- one keyed EvidencePanel receives the same business response -->
   </aside>
 </main>
 ```
 
-To keep the evidence dock populated without duplicating responses, keep exactly one `AskResult` and one `EvidencePanel`, but make the `workspace-main` and `AskResult` layout wrappers `display: contents` on wide screens. The `result-card` and nested `evidence-panel` then become grid items of the shell: the answer occupies the center column and the evidence panel occupies the right column. At responsive breakpoints, restore normal block flow so the same DOM stacks cleanly. Do not clone response data or add a second evidence renderer. Keep all existing `data-testid` selectors for composer, response, retry, history, and controls.
+To keep the evidence dock populated without duplicating responses, render `AskResult` once in the central region with `showEvidence=false`, then render one keyed `EvidencePanel` in the right region from the same computed business response. `AskResult` emits the referenced evidence ID when an inline citation is clicked; `App.vue` tells the dock to select the matching tab, opens the drawer on narrow screens, and preserves the existing expand/highlight behavior. Do not clone response data or add a second evidence renderer. Keep all existing `data-testid` selectors for composer, response, retry, history, and controls.
 
 Use a local `data-layout`/class structure rather than adding a router, store, or new feature module. Keep the current example buttons, request option controls, loading message, notice, last request block, empty state, and session history content.
 

@@ -6,8 +6,8 @@ import CopyButton from './CopyButton.vue';
 import EvidencePanel from './evidence/EvidencePanel.vue';
 import { answerSegments, citationTargets, splitAnswer } from './evidence/format';
 
-const props = withDefaults(defineProps<{ result: AskClientResult; choicesDisabled?: boolean; requestOptions?: AskOptions | null }>(), { choicesDisabled: false, requestOptions: null });
-defineEmits<{ clarification: [text: string] }>();
+const props = withDefaults(defineProps<{ result: AskClientResult; choicesDisabled?: boolean; requestOptions?: AskOptions | null; showEvidence?: boolean }>(), { choicesDisabled: false, requestOptions: null, showEvidence: true });
+const emit = defineEmits<{ clarification: [text: string]; 'evidence-focus': [refId: string] }>();
 const business = computed(() => props.result.kind === 'business' ? props.result.response : null);
 const apiError = computed(() => props.result.kind === 'api_error' ? props.result : null);
 const requestError = computed(() => props.result.kind === 'request_error' ? props.result : null);
@@ -35,6 +35,7 @@ const highlightTimers = new Set<number>();
 onUnmounted(() => highlightTimers.forEach((timer) => window.clearTimeout(timer)));
 // Citation click: expand, scroll to and briefly highlight the referenced evidence card.
 function focusEvidence(refId: string) {
+  emit('evidence-focus', refId);
   const element = document.getElementById(refId);
   if (!element) return;
   let parent = element.parentElement;
@@ -89,7 +90,7 @@ function focusEvidence(refId: string) {
         </div>
         <p class="helper">点击候选项会带当前会话发送补充请求；也可以在输入框手动补充。不会默认补年份。</p>
       </section>
-      <EvidencePanel :key="business.request_id" :response="business" :show-trace-requested="requestOptions?.show_trace ?? null" @focus-ref="focusEvidence" />
+      <EvidencePanel v-if="showEvidence" :key="business.request_id" :response="business" :show-trace-requested="requestOptions?.show_trace ?? null" @focus-ref="focusEvidence" />
     </template>
     <template v-else-if="apiError">
       <h2 id="result-heading">API 请求出错</h2>
