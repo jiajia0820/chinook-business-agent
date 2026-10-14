@@ -518,4 +518,9 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
             ir.route = parsed.task.route
             if parsed.task.route == "rag":
                 ir.task_type = "document_rule"
+        if "mixed_order_count" in parsed.task.business_metric_ids:
+            parsed.task.semantic_status = "answerable"
+            parsed.task.semantic_blockers = []
+            if parsed.task.question_ir is not None:
+                parsed.task.question_ir.clarification_blockers = []
     return parsed

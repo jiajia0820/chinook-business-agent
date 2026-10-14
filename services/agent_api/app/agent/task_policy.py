@@ -219,6 +219,8 @@ def semantic_task(question, profile):
     plan_only = "计划" in q and not _contains(q, ("实际", "数据库", "查数"))
     ranking = _contains(q, ("最高", "排名", "Top", "前五", "前三"))
     query = bool(metrics) and not document or ranking or _contains(q, ("是否有成交", "购买Rock的客户", "购买 Rock 的客户"))
+    if _contains(q, ("按支持负责人", "支持负责人分布", "支持负责人统计")):
+        query = True
     if metrics and _contains(q, ("销售额是多少", "销量是多少", "订单数是多少", "客户数是多少", "实际销售额", "实际销量")) and not plan_only:
         query = True
     if document and (_contains(q, ("实际", "查数", "数据库", "最高", "哪些属于", "购买Rock的客户", "是否有成交", "增长了多少", "未达目标", "距离目标"))):
@@ -380,6 +382,16 @@ def semantic_task(question, profile):
             or (task.question_ir.route == "sql" and task.question_ir.task_type == "database_fact" and not task.needs_calculation)):
         task.route = task.question_ir.route
         task.required_outputs = list(dict.fromkeys([*task.required_outputs, *task.question_ir.requested_outputs]))
+    if _contains(q, ("按支持负责人", "支持负责人分布", "支持负责人统计")):
+        task.intent, task.route, task.needs_calculation = "fact_query", "sql", False
+        task.information_needs = ["sql"]
+        task.required_outputs = ["actual", "support_distribution"]
+        task.source_roles = ["database_actual"]
+    if "mixed_order_count" in task.business_metric_ids:
+        task.semantic_status = "answerable"
+        task.semantic_blockers = []
+        if task.question_ir is not None:
+            task.question_ir.clarification_blockers = []
     from .clarification_reply import augment_task
     return augment_task(task, q)
 
@@ -434,7 +446,8 @@ def finalize_task(task, profile):
             return ParsedTurn(decision="unsupported", task=task, reason=f"查询周期不在已核验数据覆盖{profile.data_start}至{profile.data_end}内。", rules=["data_coverage_gate"])
         if start < available_start or end > available_end:
             coverage.append("partial_data_coverage")
-    if task.route != "rag" and "数据库中" in task.original_question and not task.time_range:
+    if (task.route != "rag" and "数据库中" in task.original_question and not task.time_range
+            and "mixed_order_count" not in task.business_metric_ids):
         return ParsedTurn(decision="unsupported", task=task, reason="该全库交易任务需要无时间范围的指标契约；当前注册交易指标要求周期，未伪造日期执行。", rules=["full_database_capability_gap"])
     missing = missing_conditions(task, profile)
     if missing:

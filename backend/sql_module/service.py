@@ -508,6 +508,21 @@ def _registered_query(question, context, max_rows):
         text = mask_identifiers(text)
         text = _consume_terms(text, ('商品属性', '目录属性', '标价', '单价', '媒体类型', '商品名称', '名称', '分类', '叫什么'))
     else:
+        if intent.get('operation') == 'mixed_media_orders':
+            if metrics != ['mixed_order_count'] or set(slots) - {'media_ids', 'query_intent', 'scope', 'data_scope', 'genre_boundary_resolved'}:
+                return None
+            if not all(word in text for word in ('同时', '音频', '视频', '订单')):
+                return None
+            return _controlled_query(context, metrics, max_rows=max_rows)
+        support_rep_distribution = intent.get('dimension') == 'support_rep'
+        if support_rep_distribution:
+            if metrics != ['purchasing_customers'] or set(intent) - {'dimension', 'measures', 'order_by', 'order_desc'}:
+                return None
+            if '支持负责人' not in text and 'SupportRep' not in text:
+                return None
+            if set(slots) - {'start_date', 'end_date', 'media_ids', 'query_intent'} or entities:
+                return None
+            return _controlled_query(context, metrics, max_rows=max_rows)
         if set(metrics) - set(REGISTERED_METRIC_TERMS) or set(intent) - {'measures'}:
             return None
         if 'measures' in intent and set(intent['measures']) != set(metrics):

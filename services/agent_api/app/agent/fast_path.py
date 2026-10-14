@@ -4,7 +4,7 @@ import os
 import re
 
 
-FAST_SQL_METRICS = {"customer_count", "sales_amount", "units_sold", "order_count", "purchasing_customers", "track_attributes"}
+FAST_SQL_METRICS = {"customer_count", "sales_amount", "units_sold", "order_count", "purchasing_customers", "mixed_order_count", "track_attributes"}
 SQL_METADATA_SLOTS = {"year", "quarter", "month", "period_grain", "scope", "data_scope", "genre_boundary_resolved", "year_assumed"}
 
 
@@ -28,7 +28,7 @@ def fast_sql_eligible(task, profile):
     ir = getattr(task, "question_ir", None)
     if ir is not None and (ir.exclusions or ir.clarification_blockers):
         return False
-    if set(getattr(task, "required_outputs", [])) - {"actual"}:
+    if set(getattr(task, "required_outputs", [])) - {"actual", "support_distribution"}:
         return False
     metrics = getattr(task, "business_metric_ids", None)
     if metrics is None:
@@ -45,7 +45,14 @@ def fast_sql_eligible(task, profile):
     if set(slots) & {"comparison_period", "result_grain", "playlist_id", "track_ids"}:
         return False
     intent = slots.get("query_intent", {})
-    allowed = {"operation", "track_ids"} if metrics == ["track_attributes"] else {"measures"}
+    if metrics == ["track_attributes"]:
+        allowed = {"operation", "track_ids"}
+    elif metrics == ["mixed_order_count"] and intent.get("operation") == "mixed_media_orders":
+        allowed = {"operation"}
+    elif intent.get("dimension") == "support_rep" and metrics == ["purchasing_customers"]:
+        allowed = {"dimension", "measures", "order_by", "order_desc"}
+    else:
+        allowed = {"measures"}
     return isinstance(intent, dict) and not set(intent) - allowed
 
 
