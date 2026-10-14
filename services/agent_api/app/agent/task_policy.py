@@ -94,6 +94,8 @@ def missing_conditions(task, profile):
         # A general layering-rule explanation does not select a customer cohort.
         # Keep the period gate for a high-value-customer request, not a synonym
         # of an already approved rule question.
+        if "客户怎么分层" in q or "客户如何分层" in q:
+            return ["observation_period"] if not (slots.get("year") and slots.get("quarter")) else []
         if "高价值客户" in q:
             return ["observation_period"] if not (slots.get("year") and slots.get("quarter")) else []
         return []
