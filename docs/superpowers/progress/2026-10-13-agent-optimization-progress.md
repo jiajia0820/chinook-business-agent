@@ -26,7 +26,7 @@
 | Task 1 | e46a313 | 14 passed, 12 subtests; knowledge snapshot verified |
 | Task 2 | 172f50c + 848aef9 + 7993cd3 | 19 passed, 6 subtests；证据角色覆盖和多轮 Rock 运营追问补充完成；6 个集成失败为本地 live 模型配置缺失 |
 | Task 3 | 25c0bc1 | 18 passed；客户分层首轮澄清、Rock 运营追问上下文验证通过 |
-| Task 4 | — | — |
+| Task 4 | c8c122e | 3 个多表契约测试通过；离线集成验证支持负责人 8/6/5、混合订单 17 |
 | Task 5 | — | — |
 | Task 6 | — | — |
 
