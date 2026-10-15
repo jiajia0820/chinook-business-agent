@@ -30,6 +30,21 @@ describe('C1 UI shell', () => {
     expect(wrapper.get('[data-testid="database-option-ohr-bench"]').attributes('disabled')).toBeDefined();
   });
 
+  it('offers categorized evaluation questions without auto-submitting', async () => {
+    const ask = vi.fn<AskClient['ask']>();
+    const wrapper = app(ask);
+    expect(wrapper.find('[data-testid="more-questions-picker"]').exists()).toBe(true);
+    expect(wrapper.findAll('[data-testid^="more-question-category-"]')).toHaveLength(12);
+    await wrapper.get('[data-testid="more-questions-summary"]').trigger('click');
+    expect(wrapper.find('[data-testid="more-questions-menu"]').exists()).toBe(true);
+    await wrapper.get('[data-testid="more-question-category-0"]').trigger('click');
+    const firstQuestion = wrapper.find('[data-testid="more-question-0-0"]');
+    expect(firstQuestion.exists()).toBe(true);
+    await firstQuestion.trigger('click');
+    expect((wrapper.get('[data-testid="question-input"]').element as HTMLTextAreaElement).value).toContain('音频销售额');
+    expect(ask).not.toHaveBeenCalled();
+  });
+
   it('keeps the response and evidence in the same shell after an answer', async () => {
     const response = actualResponse('客户数量是多少？');
     const ask = vi.fn<AskClient['ask']>().mockResolvedValue({ kind: 'business', httpStatus: 200, requestId: response.request_id, response });

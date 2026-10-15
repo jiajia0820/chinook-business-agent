@@ -139,6 +139,21 @@ p, li, dd, h1, h2, h3, h4, h5 { overflow-wrap: anywhere; }
 .example-list button:hover, .clarification-example:hover { border-color: var(--primary); color: #eaf1ff; background: var(--primary-soft); }
 .example-list button span { color: var(--primary); }
 .clarification-example { margin-top: 8px; border-style: dashed; }
+.more-questions-picker { margin-top: 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel-soft); }
+.more-questions-picker > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 12px; color: var(--muted-strong); font-size: 12px; font-weight: 700; cursor: pointer; list-style: none; }
+.more-questions-picker > summary::-webkit-details-marker, .more-question-category > summary::-webkit-details-marker { display: none; }
+.more-questions-picker > summary::before, .more-question-category > summary::before { content: '▸'; color: var(--primary); font-size: 12px; transition: transform .18s ease; }
+.more-questions-picker[open] > summary::before, .more-question-category[open] > summary::before { transform: rotate(90deg); }
+.more-questions-picker > summary > span:last-child { color: var(--muted); font-size: 10px; font-weight: 400; }
+.more-questions-menu { max-height: 390px; overflow: auto; padding: 0 8px 8px; border-top: 1px solid var(--line); }
+.more-question-category { border-bottom: 1px solid rgba(38, 58, 89, .65); }
+.more-question-category:last-child { border-bottom: 0; }
+.more-question-category > summary { display: flex; align-items: center; gap: 8px; padding: 9px 5px; color: var(--muted-strong); font-size: 11px; cursor: pointer; list-style: none; }
+.more-question-category > summary > span:first-of-type { flex: 1; }
+.more-question-category > summary > span:last-of-type { color: var(--muted); font: 10px Consolas, monospace; }
+.more-question-list { display: grid; gap: 5px; padding: 0 0 8px 18px; }
+.more-question-list button { width: 100%; padding: 8px 9px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted-strong); background: var(--panel); text-align: left; font-size: 11px; line-height: 1.45; }
+.more-question-list button:hover:not(:disabled) { border-color: var(--primary); color: #eaf1ff; background: var(--primary-soft); }
 .helper { color: var(--muted); font-size: 11px; }
 .validation-message { margin: 8px 0 0; color: var(--danger); font-size: 11px; }
 .empty-state { display: grid; justify-items: center; gap: 7px; margin-top: 16px; padding: 54px 20px; border: 1px dashed var(--line-strong); border-radius: 12px; color: var(--muted); text-align: center; background: rgba(17, 27, 45, .5); }

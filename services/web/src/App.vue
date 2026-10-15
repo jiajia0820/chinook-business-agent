@@ -4,6 +4,7 @@ import type { AskClient } from './api/client';
 import AskResult from './components/AskResult.vue';
 import EvidencePanel from './components/evidence/EvidencePanel.vue';
 import { CLARIFICATION_EXAMPLE, EXAMPLES, PROFILE_ID, useAskWorkspace } from './features/ask/use-ask-workspace';
+import { EVALUATION_QUESTION_GROUPS } from './features/ask/evaluation-questions';
 
 // Explicit test dependency injection; main.ts always uses the real default client.
 const props = defineProps<{ client?: AskClient }>();
@@ -104,6 +105,17 @@ function focusEvidence(refId: string) {
           <summary>试试这些问题 <span>点击填入，按需发送</span></summary>
           <div class="example-list" aria-label="已验证的示例问题"><button v-for="(example, index) in EXAMPLES" :key="example" type="button" :disabled="busy" :data-testid="`example-${index}`" @click="fillExample(example)">{{ example }}<span aria-hidden="true">↗</span></button></div>
           <button type="button" class="clarification-example" data-testid="clarification-example" :disabled="busy" @click="fillExample(CLARIFICATION_EXAMPLE)">澄清示例：{{ CLARIFICATION_EXAMPLE }}</button>
+        </details>
+        <details class="more-questions-picker" data-testid="more-questions-picker">
+          <summary data-testid="more-questions-summary"><span>更多问题</span><span>按能力分类选择测评题</span></summary>
+          <div class="more-questions-menu" data-testid="more-questions-menu">
+            <details v-for="(group, groupIndex) in EVALUATION_QUESTION_GROUPS" :key="group.label" class="more-question-category">
+              <summary :data-testid="`more-question-category-${groupIndex}`"><span>{{ group.label }}</span><span>{{ group.questions.length }} 题</span></summary>
+              <div class="more-question-list">
+                <button v-for="(questionText, questionIndex) in group.questions" :key="`${group.label}-${questionIndex}`" type="button" :disabled="busy" :data-testid="`more-question-${groupIndex}-${questionIndex}`" @click="fillExample(questionText)">{{ questionText }}</button>
+              </div>
+            </details>
+          </div>
         </details>
       </div>
       <section class="composer" aria-labelledby="question-label">
