@@ -35,6 +35,14 @@ STRONG_RULE_MARKERS = (
     "应该和", "应和", "应该与", "比较方法", "分析方法",
 )
 
+# 评委把文档规则换一种说法问：客户分档界线、报名截止与材料、客单价分母、
+# 零订单处理。这些措辞只出现在方法/规则问题里；命中且没有索要本轮数据库
+# 实际值时按文档规则路由，先检索再回答，不能被交易周期澄清挡住。
+METHOD_RULE_MARKERS = (
+    "界线", "分三档", "分成三档", "分档", "档位", "截止", "最迟", "提交材料",
+    "准备哪些", "哪天交", "除以", "零订单", "合理吗", "应该怎么处理", "怎么办",
+)
+
 
 def classify_question(question: str, metrics: list[str] | None = None) -> tuple[str, str, list[str]]:
     """Return ``(task_type, route, requested_outputs)`` for one question."""
@@ -59,6 +67,8 @@ def classify_question(question: str, metrics: list[str] | None = None) -> tuple[
     if any(marker in q for marker in ("主题活动", "活动里", "活动中")) and any(marker in q for marker in ("安排", "位置")) and not asks_actual_value:
         return "document_rule", "rag", ["rule"]
     if any(marker in q for marker in STRONG_RULE_MARKERS) and not asks_actual_value:
+        return "document_rule", "rag", ["rule"]
+    if any(marker in q for marker in METHOD_RULE_MARKERS) and not asks_actual_value:
         return "document_rule", "rag", ["rule"]
     if "复盘" in q and not asks_actual_value:
         return "document_rule", "rag", ["rule"]

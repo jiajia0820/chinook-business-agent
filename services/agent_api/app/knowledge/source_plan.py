@@ -38,27 +38,34 @@ ROLE_TERMS: dict[str, tuple[str, ...]] = {
     "mixed_order_media_rule": ("同一张订单", "同一订单", "同时有音频和视频", "音频和视频时", "音乐销售额应该怎么处理"),
     "media_scope": ("mediatype", "媒体格式", "音频范围", "音乐范围", "默认音乐", "范围差异", "包括哪些"),
     "classification_boundary": ("分类", "归类", "genre", "重金属", "heavy metal", "摇滚", "rock and roll", "拉丁"),
-    "selection_rule": ("选品", "候选", "商品推荐", "推荐商品", "trackid"),
-    "activity_plan": ("活动方案", "活动安排", "活动什么时候", "海报", "报名", "分别怎么安排", "主页面", "延伸栏目"),
+    "selection_rule": ("选品", "候选", "商品推荐", "推荐商品", "trackid", "门槛", "挑出来", "怎么选"),
+    # 评委常把“活动方案/海报”换成“征集、最迟哪天交、准备哪些东西”，
+    # 这些措辞同样归 D10/D11，不能因为少了“活动”二字就落空。
+    "activity_plan": ("活动方案", "活动安排", "活动什么时候", "海报", "报名", "分别怎么安排", "主页面", "延伸栏目",
+                      "征集", "最迟", "截止", "提交材料", "准备哪些", "哪天交"),
     "target_value": ("目标", "达标", "达成率", "差多少", "差额", "计划"),
     "quarter_review": ("复盘", "经营复盘", "核心结果", "比较", "对比", "变化"),
     "operation_rule": ("运营", "运营手册", "手册", "建议", "重点看", "下一步", "怎么运营"),
-    "metric_definition": ("指标定义", "指标口径", "销售额口径", "定义", "口径", "公式", "怎么计算", "如何计算", "客单价", "成交均价", "日期范围", "时间区间"),
-    "customer_segmentation": ("客户分层", "高价值客户", "a层", "b层", "c层"),
+    # “平均一笔交易卖多少钱”“除以件数还是成交笔数”是客单价口径的换词问法。
+    "metric_definition": ("指标定义", "指标口径", "销售额口径", "定义", "口径", "公式", "怎么计算", "如何计算", "客单价", "成交均价",
+                          "日期范围", "时间区间", "除以", "平均一笔", "成交笔数", "件数"),
+    # “给顾客分三档，各档金额界线”是客户分层阈值的换词问法，权威来源仍是 D04。
+    "customer_segmentation": ("客户分层", "高价值客户", "a层", "b层", "c层",
+                              "分三档", "分成三档", "分档", "档位", "界线", "金额阈值"),
 }
 
 ROLE_QUERY_TERMS: dict[str, tuple[str, ...]] = {
     "analysis_method": ("比较基准", "完整月", "上月", "同比", "环比"),
-    "metric_definition": ("指标定义", "口径", "公式"),
+    "metric_definition": ("指标定义", "口径", "公式", "客单价", "成交均价", "订单数为零"),
     "media_scope": ("媒体格式", "音频范围", "音乐商品", "默认音乐范围"),
     "classification_boundary": ("分类边界", "Genre", "别名", "单独统计"),
-    "selection_rule": ("选品规则", "候选筛选", "商品推荐"),
-    "activity_plan": ("活动方案", "活动安排", "报名", "海报"),
+    "selection_rule": ("选品规则", "候选筛选", "商品推荐", "候选等级"),
+    "activity_plan": ("活动方案", "活动安排", "报名", "海报", "报名截止", "提交材料"),
     "mixed_order_media_rule": ("同一订单", "音频", "视频", "音乐销售额"),
     "target_value": ("目标值", "目标表", "达成率"),
     "quarter_review": ("经营复盘", "季度核心结果", "销售额", "订单数", "购买客户数"),
     "operation_rule": ("品类运营", "运营动作", "重点观察", "建议"),
-    "customer_segmentation": ("客户分层", "层级阈值"),
+    "customer_segmentation": ("客户分层", "层级阈值", "金额界线", "当季音频销售额"),
 }
 
 
@@ -152,10 +159,10 @@ def rag_source_plan(question: str, *, explicit_docs: Iterable[str] | None = None
             if role == "quarter_review":
                 selected = [doc for doc, words in (("D07", ("二季度", "第二季度", "Q2")), ("D08", ("三季度", "第三季度", "Q3"))) if _contains(q, words)]
                 primary.extend(selected or role_docs)
-            elif role == "activity_plan" and _contains(q, ("报名", "海报", "材料", "截止")):
+            elif role == "activity_plan" and _contains(q, ("报名", "海报", "材料", "截止", "最迟", "征集", "准备哪些", "哪天交")):
                 primary.append("D11")
                 secondary.append("D10")
-            elif role == "metric_definition" and _contains(q, ("客单价", "成交均价", "分母")):
+            elif role == "metric_definition" and _contains(q, ("客单价", "成交均价", "分母", "除以", "平均一笔", "成交笔数", "件数")):
                 primary.append("D02")
                 secondary.append("D01")
             else:
