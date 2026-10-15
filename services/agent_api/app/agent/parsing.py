@@ -499,6 +499,18 @@ def parse_question(question: str, profile: BusinessProfile, memory: SessionMemor
             # 自定义 profile 可能尚未提供实体目录；旧解析结果仍必须可用。
             parsed.task.question_ir = None
     if parsed.task is not None:
+        # 工具执行前固定"用户这一轮要求了什么"（过滤/粒度/排名/输出结构），
+        # 供 backend 覆盖检查判断模型候选或受控降级是否丢条件。纯文本解析，
+        # 不触达模型/SQL/检索；解析失败时保持空字典，不阻断本轮。
+        try:
+            from .query_obligations import extract_query_obligations
+
+            parsed.task.query_obligations = extract_query_obligations(
+                parsed.task.original_question,
+                profile_id=profile.profile_id,
+            ).to_dict()
+        except (KeyError, ValueError):
+            parsed.task.query_obligations = {}
         from .route_policy import route_question
 
         try:

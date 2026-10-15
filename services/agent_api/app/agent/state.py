@@ -33,6 +33,9 @@ class BusinessTask(InternalModel):
     assumptions: list[str] = Field(default_factory=list)
     evidence_coverage: list[dict[str, JsonValue]] = Field(default_factory=list)
     time_issues: list[str] = Field(default_factory=list)
+    # 本轮问题的不可丢失义务（过滤/粒度/排名/输出结构）。工具执行前写入，
+    # 供 backend 覆盖检查判断模型候选或受控降级是否丢条件。旧 checkpoint 缺失时为空字典。
+    query_obligations: dict[str, JsonValue] = Field(default_factory=dict)
     # New semantic IR is optional so old checkpoints and callers remain valid.
     question_ir: QuestionIR | None = None
     semantic_status: Literal["answerable", "clarification_required", "unsupported"] | None = None
