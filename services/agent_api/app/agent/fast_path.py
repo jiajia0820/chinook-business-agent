@@ -101,6 +101,10 @@ def controlled_sql_eligible(task, profile):
     if intent.get("operation") in {"track_attributes", "mixed_media_orders"}:
         return True
     dimension = intent.get("dimension")
+    if obligations.get("requires_month_grouping") and dimension != "month":
+        return False
+    if dimension == "month" and not obligations.get("requires_month_grouping"):
+        return False
     if dimension not in CONTROLLED_SQL_DIMENSIONS:
         return set(intent) <= {"measures"} and set(metrics) <= FAST_SQL_METRICS
     return True

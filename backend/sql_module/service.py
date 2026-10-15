@@ -772,7 +772,11 @@ class NLQueryService:
             result['columns'] = [mapping.get(name, name) for name in result['columns']]
             result['rows'] = [{mapping.get(name, name): value for name, value in row.items()} for row in result['rows']]
             response['status'] = 'answered'
-            response['limitations'] = [*snapshot['limitations'], '本轮使用已注册指标的受控 SQL 快路径；未调用模型，不是模型失败降级。']
+            response['limitations'] = [*snapshot['limitations']]
+            if use_controlled_plan:
+                response['limitations'].append('本轮使用已解析 query_intent 的受控查询计划；未重新扫描原始问句，也未调用模型。')
+            else:
+                response['limitations'].append('本轮使用已注册指标的受控 SQL 快路径；未调用模型，不是模型失败降级。')
             # 快路径本身就是受控已登记查询；这里只标注执行路径，不代表模型失败降级。
             response['execution_path'] = 'controlled_registered_query'
             response['query_obligations_covered'] = covers_query_obligations(generated, context.get('query_obligations'))
