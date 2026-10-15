@@ -75,7 +75,7 @@ p, li, dd, h1, h2, h3, h4, h5 { overflow-wrap: anywhere; }
 .profile-note { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; }
 .session-id { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted) !important; font-size: 10px !important; }
 
-.page-heading { display: flex; align-items: center; gap: 14px; min-height: 84px; padding: 18px 30px; border-bottom: 1px solid var(--line); background: rgba(17, 27, 45, .88); }
+.page-heading { position: sticky; top: 0; z-index: 12; display: flex; align-items: center; gap: 14px; min-height: 84px; padding: 18px 30px; border-bottom: 1px solid var(--line); background: rgba(17, 27, 45, .97); backdrop-filter: blur(12px); }
 .heading-copy { min-width: 0; flex: 1; }
 .page-label { color: var(--primary); font-size: 11px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
 .page-heading h1 { margin: 5px 0 0; color: #f0f5ff; font-size: clamp(18px, 2vw, 24px); line-height: 1.25; letter-spacing: -.025em; }
