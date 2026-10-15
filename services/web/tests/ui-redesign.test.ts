@@ -19,6 +19,15 @@ describe('C1 UI shell', () => {
     expect(wrapper.find('[data-testid="workspace-evidence"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="question-input"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="new-session"]').exists()).toBe(true);
+    expect(wrapper.find('.example-library > .helper').exists()).toBe(false);
+  });
+
+  it('shows the default database configuration and disabled alternatives', () => {
+    const wrapper = app(vi.fn());
+    expect(wrapper.get('[data-testid="database-config-trigger"]').text()).toContain('Chinook + 非结构化');
+    expect(wrapper.find('[data-testid="database-config-trigger"] .database-config-chevron').exists()).toBe(true);
+    expect(wrapper.get('[data-testid="database-option-adventureworks"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('[data-testid="database-option-ohr-bench"]').attributes('disabled')).toBeDefined();
   });
 
   it('keeps the response and evidence in the same shell after an answer', async () => {
@@ -29,7 +38,11 @@ describe('C1 UI shell', () => {
     await wrapper.get('[data-testid="ask-form"]').trigger('submit');
     await flushPromises();
     expect(wrapper.get('[data-testid="answer"]').text()).toContain('59');
-    expect(wrapper.find('[data-testid="workspace-evidence"] [data-testid="evidence-panel"]').exists()).toBe(true);
+    const evidence = wrapper.find('[data-testid="workspace-evidence"] [data-testid="evidence-panel"]');
+    expect(evidence.exists()).toBe(true);
+    expect(evidence.attributes('aria-label')).toBe('Evidence');
+    expect(wrapper.get('[data-testid="workspace-evidence"]').text()).not.toContain('回答依据与口径');
+    expect(evidence.find('[data-testid="evidence-disclosure"]').exists()).toBe(false);
   });
 });
 

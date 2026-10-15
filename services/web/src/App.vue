@@ -48,7 +48,25 @@ function focusEvidence(refId: string) {
 <template>
   <main class="workspace-shell" :class="{ 'sidebar-open': sidebarOpen, 'evidence-open': evidenceOpen }" data-testid="workspace-shell" @keydown.esc="sidebarOpen = false; evidenceOpen = false">
     <aside id="workspace-sidebar" class="workspace-sidebar" data-testid="workspace-sidebar" aria-label="会话导航">
-      <div class="brand"><span class="brand-mark" aria-hidden="true"></span><div><strong>Chinook</strong><span>Business Agent</span></div></div>
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <div class="brand-copy">
+          <div class="brand-title-row">
+            <strong>Chinook</strong>
+            <details class="database-config">
+              <summary data-testid="database-config-trigger" aria-label="选择数据库配置">
+                <span>Chinook + 非结构化</span><span class="database-config-chevron" aria-hidden="true">▾</span>
+              </summary>
+              <div class="database-config-menu" role="menu" aria-label="数据库配置选项">
+                <div class="database-config-current" role="menuitem" aria-current="true">Chinook + 非结构化<span>当前</span></div>
+                <button type="button" disabled data-testid="database-option-adventureworks" role="menuitem" title="暂未提供该能力">AdventureWorks<span>暂未开放</span></button>
+                <button type="button" disabled data-testid="database-option-ohr-bench" role="menuitem" title="暂未提供该能力">OHR-Bench<span>暂未开放</span></button>
+              </div>
+            </details>
+          </div>
+          <span>Business Agent</span>
+        </div>
+      </div>
       <button type="button" class="new-session" data-testid="new-session" @click="newSession(); sidebarOpen = false"><span aria-hidden="true">＋</span> 新会话</button>
       <div class="workspace-link" aria-current="page"><span class="workspace-symbol" aria-hidden="true"></span>分析工作台<span class="active-dot" aria-hidden="true"></span></div>
       <section v-if="history.length" class="session-history" aria-label="本次会话问答记录" data-testid="session-history">
@@ -86,7 +104,6 @@ function focusEvidence(refId: string) {
           <summary>试试这些问题 <span>点击填入，按需发送</span></summary>
           <div class="example-list" aria-label="已验证的示例问题"><button v-for="(example, index) in EXAMPLES" :key="example" type="button" :disabled="busy" :data-testid="`example-${index}`" @click="fillExample(example)">{{ example }}<span aria-hidden="true">↗</span></button></div>
           <button type="button" class="clarification-example" data-testid="clarification-example" :disabled="busy" @click="fillExample(CLARIFICATION_EXAMPLE)">澄清示例：{{ CLARIFICATION_EXAMPLE }}</button>
-          <p class="helper">示例只填入问题，不自动发送。澄清示例补齐年份后仍可能 unsupported。</p>
         </details>
       </div>
       <section class="composer" aria-labelledby="question-label">
@@ -114,9 +131,16 @@ function focusEvidence(refId: string) {
       </section>
     </section>
     <aside id="workspace-evidence" class="workspace-evidence" data-testid="workspace-evidence" aria-label="常驻证据">
-      <header class="evidence-heading"><div><h2>Evidence</h2><p>回答依据与口径</p></div><button type="button" class="evidence-close" aria-label="收起证据区" @click="evidenceOpen = false">关闭</button></header>
-      <EvidencePanel v-if="business" :key="business.request_id" ref="evidencePanel" :response="business" :show-trace-requested="lastRequest?.options?.show_trace ?? null" @focus-ref="focusEvidence" />
-      <div v-else class="evidence-placeholder"><div class="empty-evidence-tabs" aria-hidden="true"><span>SQL</span><span>Sources</span><span>Metrics</span><span>Trace</span></div><div class="evidence-placeholder-body"><span class="evidence-glyph" aria-hidden="true"></span><h3>{{ busy ? '等待本轮结果' : '每个结论，都有依据' }}</h3><p>提问后，在这里查看 SQL、引用原文、指标口径和执行记录。</p><span>证据随本轮响应更新</span></div></div>
+      <EvidencePanel v-if="business" :key="business.request_id" ref="evidencePanel" :response="business" :show-trace-requested="lastRequest?.options?.show_trace ?? null" @focus-ref="focusEvidence">
+        <template #close><button type="button" class="evidence-close" aria-label="收起证据区" @click="evidenceOpen = false">关闭</button></template>
+      </EvidencePanel>
+      <div v-else class="evidence-placeholder">
+        <header class="evidence-toolbar">
+          <div class="evidence-toolbar-heading"><h3>Evidence</h3><button type="button" class="evidence-close" aria-label="收起证据区" @click="evidenceOpen = false">关闭</button></div>
+          <div class="empty-evidence-tabs" aria-hidden="true"><span>SQL</span><span>Sources</span><span>Metrics</span><span>Trace</span></div>
+        </header>
+        <div class="evidence-placeholder-body"><span class="evidence-glyph" aria-hidden="true"></span><h3>{{ busy ? '等待本轮结果' : '每个结论，都有依据' }}</h3><p>提问后，在这里查看 SQL、引用原文、指标口径和执行记录。</p><span>证据随本轮响应更新</span></div>
+      </div>
     </aside>
     <button v-if="sidebarOpen || evidenceOpen" class="drawer-backdrop" type="button" aria-label="关闭展开区域" @click="sidebarOpen = false; evidenceOpen = false"></button>
   </main>

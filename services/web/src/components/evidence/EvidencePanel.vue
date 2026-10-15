@@ -39,14 +39,15 @@ defineExpose({ reveal });
 </script>
 
 <template>
-  <section class="evidence-panel" aria-label="本轮证据与口径" data-testid="evidence-panel" :data-request-id="response.request_id">
-    <details class="evidence-disclosure" data-testid="evidence-disclosure" open>
-    <summary>查看回答依据与原文 <span class="evidence-count">{{ response.documents?.length ?? 0 }} 段文档 · {{ response.sql_results?.length ?? 0 }} 个查询</span></summary>
-    <h3>本轮证据与口径</h3>
-    <p class="helper">可展开查看引用原文、数据和计算记录，核对回答依据。</p>
-    <nav ref="tablist" class="evidence-tabs" role="tablist" aria-label="证据分组" @keydown="moveTab">
-      <button v-for="tab in tabs" :id="`evidence-tab-${tab.id}`" :key="tab.id" type="button" role="tab" :data-testid="`evidence-tab-${tab.id}`" :aria-controls="`evidence-section-${tab.id}`" :aria-selected="activeEvidence === tab.id" :tabindex="activeEvidence === tab.id ? 0 : -1" :class="{ active: activeEvidence === tab.id }" @click="selectEvidence(tab.id)">{{ tab.label }}</button>
-    </nav>
+  <section class="evidence-panel" aria-label="Evidence" data-testid="evidence-panel" :data-request-id="response.request_id">
+    <div class="evidence-disclosure">
+    <header class="evidence-toolbar">
+      <div class="evidence-toolbar-heading"><h3>Evidence</h3><slot name="close" /></div>
+      <p class="helper">查看引用原文、数据和计算记录，核对回答依据。</p>
+      <nav ref="tablist" class="evidence-tabs" role="tablist" aria-label="证据分组" @keydown="moveTab">
+        <button v-for="tab in tabs" :id="`evidence-tab-${tab.id}`" :key="tab.id" type="button" role="tab" :data-testid="`evidence-tab-${tab.id}`" :aria-controls="`evidence-section-${tab.id}`" :aria-selected="activeEvidence === tab.id" :tabindex="activeEvidence === tab.id ? 0 : -1" :class="{ active: activeEvidence === tab.id }" @click="selectEvidence(tab.id)">{{ tab.label }}</button>
+      </nav>
+    </header>
     <p v-if="fixtureSources" class="evidence-warning" role="note" data-testid="fixture-warning">检测到人工测试来源标记：仅用于验证展示/计算流程，不代表 A/C 真实资料或生产经营结论。</p>
     <details class="conditions" data-testid="parsed-conditions">
       <summary>查看本轮解析条件</summary>
@@ -85,6 +86,6 @@ defineExpose({ reveal });
     <section v-show="activeEvidence === 'trace'" id="evidence-section-trace" class="evidence-group" role="tabpanel" aria-labelledby="evidence-tab-trace" tabindex="0">
       <TraceEvidence :steps="response.trace ?? []" :show-trace-requested="showTraceRequested" />
     </section>
-    </details>
+    </div>
   </section>
 </template>

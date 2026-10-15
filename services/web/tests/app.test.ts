@@ -37,12 +37,11 @@ describe('4B page interactions in simulated DOM (not live browser E2E)', () => {
     expect((wrapper.get(selector('question-input')).element as HTMLTextAreaElement).value).toBe(text);
     expect(ask).not.toHaveBeenCalled();
   });
-  it('clarification example fills only and explains the unsupported boundary', async () => {
+  it('clarification example fills only without sending a request', async () => {
     const ask = vi.fn<AskClient['ask']>();
     const wrapper = makeApp(ask);
     await wrapper.get(selector('clarification-example')).trigger('click');
     expect((wrapper.get(selector('question-input')).element as HTMLTextAreaElement).value).toBe(CLARIFICATION_EXAMPLE);
-    expect(wrapper.text()).toContain('补齐年份后仍可能 unsupported');
     expect(ask).not.toHaveBeenCalled();
   });
   it('sends form options and renders answer/returned session; follow-up uses it', async () => {
