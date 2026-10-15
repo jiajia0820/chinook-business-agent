@@ -192,3 +192,32 @@ export const EVALUATION_QUESTION_GROUPS: EvaluationQuestionGroup[] = [
   }
 ];
 
+export const ADVENTUREWORKS_QUESTION_GROUPS: EvaluationQuestionGroup[] = [
+  {
+    label: '基础 NL2SQL',
+    questions: [
+      '客户数量是多少？',
+      '订单数是多少？',
+      '销量是多少？',
+      '2013年销售额是多少？',
+      '2013年每月订单数是多少？',
+      '销量最高的五个产品是什么？',
+      '产品销售额最高的五个产品是什么？',
+    ],
+  },
+  {
+    label: '专项：范围与限制',
+    questions: [
+      'AdventureWorks 的销售额按什么公式计算？',
+      'TotalDue 可以直接作为销售额吗？',
+      '利润是多少？',
+      '库存是多少？',
+      '退款金额是多少？',
+    ],
+  },
+];
+
+export function questionGroupsForProfile(profileId: string): EvaluationQuestionGroup[] {
+  return profileId === 'adventureworks' ? ADVENTUREWORKS_QUESTION_GROUPS : EVALUATION_QUESTION_GROUPS;
+}
+

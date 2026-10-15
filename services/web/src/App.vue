@@ -3,8 +3,9 @@ import { computed, ref } from 'vue';
 import type { AskClient } from './api/client';
 import AskResult from './components/AskResult.vue';
 import EvidencePanel from './components/evidence/EvidencePanel.vue';
-import { CLARIFICATION_EXAMPLE, EXAMPLES, useAskWorkspace } from './features/ask/use-ask-workspace';
-import { EVALUATION_QUESTION_GROUPS } from './features/ask/evaluation-questions';
+import { useAskWorkspace } from './features/ask/use-ask-workspace';
+import { questionGroupsForProfile } from './features/ask/evaluation-questions';
+import { PROFILE_EXAMPLES } from './features/ask/profiles';
 
 // Explicit test dependency injection; main.ts always uses the real default client.
 const props = defineProps<{ client?: AskClient }>();
@@ -19,6 +20,8 @@ const evidencePanel = ref<InstanceType<typeof EvidencePanel> | null>(null);
 const sidebarOpen = ref(false);
 const evidenceOpen = ref(false);
 const business = computed(() => result.value?.kind === 'business' ? result.value.response : null);
+const profileExamples = computed(() => PROFILE_EXAMPLES[selectedProfileId.value] ?? PROFILE_EXAMPLES['chinook-music']!);
+const evaluationQuestionGroups = computed(() => questionGroupsForProfile(selectedProfileId.value));
 const statusLabels: Record<string, string> = {
   answered: '已回答', clarification_required: '需要补充条件', insufficient_evidence: '证据不足',
   unsupported: '当前能力不支持', error: '业务处理出错', api_error: '接口错误',
@@ -117,13 +120,13 @@ function focusEvidence(refId: string) {
         </section>
         <details class="example-library" :open="!lastRequest">
           <summary>试试这些问题 <span>点击填入，按需发送</span></summary>
-          <div class="example-list" aria-label="已验证的示例问题"><button v-for="(example, index) in EXAMPLES" :key="example" type="button" :disabled="busy" :data-testid="`example-${index}`" @click="fillExample(example)">{{ example }}<span aria-hidden="true">↗</span></button></div>
-          <button type="button" class="clarification-example" data-testid="clarification-example" :disabled="busy" @click="fillExample(CLARIFICATION_EXAMPLE)">澄清示例：{{ CLARIFICATION_EXAMPLE }}</button>
+          <div class="example-list" aria-label="已验证的示例问题"><button v-for="(example, index) in profileExamples.examples" :key="example" type="button" :disabled="busy" :data-testid="`example-${index}`" @click="fillExample(example)">{{ example }}<span aria-hidden="true">↗</span></button></div>
+          <button type="button" class="clarification-example" data-testid="clarification-example" :disabled="busy" @click="fillExample(profileExamples.clarification)">澄清示例：{{ profileExamples.clarification }}</button>
         </details>
         <details class="more-questions-picker" data-testid="more-questions-picker">
           <summary data-testid="more-questions-summary"><span>更多问题</span><span>按能力分类选择测评题</span></summary>
           <div class="more-questions-menu" data-testid="more-questions-menu">
-            <details v-for="(group, groupIndex) in EVALUATION_QUESTION_GROUPS" :key="group.label" class="more-question-category">
+            <details v-for="(group, groupIndex) in evaluationQuestionGroups" :key="group.label" class="more-question-category">
               <summary :data-testid="`more-question-category-${groupIndex}`"><span>{{ group.label }}</span><span>{{ group.questions.length }} 题</span></summary>
               <div class="more-question-list">
                 <button v-for="(questionText, questionIndex) in group.questions" :key="`${group.label}-${questionIndex}`" type="button" :disabled="busy" :data-testid="`more-question-${groupIndex}-${questionIndex}`" @click="fillExample(questionText)">{{ questionText }}</button>
@@ -157,7 +160,7 @@ function focusEvidence(refId: string) {
       </section>
     </section>
     <aside id="workspace-evidence" class="workspace-evidence" data-testid="workspace-evidence" aria-label="常驻证据">
-      <EvidencePanel v-if="business" :key="business.request_id" ref="evidencePanel" :response="business" :show-trace-requested="lastRequest?.options?.show_trace ?? null" @focus-ref="focusEvidence">
+      <EvidencePanel v-if="business" :key="business.request_id" ref="evidencePanel" :response="business" :show-trace-requested="lastRequest?.options?.show_trace ?? null" :show-documents="selectedProfile?.capabilities.includes('rag') ?? false" @focus-ref="focusEvidence">
         <template #close><button type="button" class="evidence-close" aria-label="收起证据区" @click="evidenceOpen = false">关闭</button></template>
       </EvidencePanel>
       <div v-else class="evidence-placeholder">

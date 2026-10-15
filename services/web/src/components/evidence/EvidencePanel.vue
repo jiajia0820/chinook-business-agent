@@ -7,28 +7,29 @@ import MetricDefinitions from './MetricDefinitions.vue';
 import CalculationEvidence from './CalculationEvidence.vue';
 import TraceEvidence from './TraceEvidence.vue';
 import { hasFixtureSources, jsonText } from './format';
-const props = defineProps<{ response: AskResponse; showTraceRequested: boolean | null }>();
+const props = withDefaults(defineProps<{ response: AskResponse; showTraceRequested: boolean | null; showDocuments?: boolean }>(), { showDocuments: true });
 const emit = defineEmits<{ 'focus-ref': [refId: string] }>();
 const fixtureSources = computed(() => hasFixtureSources(props.response));
 const docIds = computed(() => (props.response.documents ?? []).map((document) => document.chunk_id));
 type EvidenceGroup = 'sql' | 'sources' | 'metrics' | 'trace';
-const activeEvidence = ref<EvidenceGroup>(props.response.sql_results?.length ? 'sql' : props.response.documents?.length ? 'sources' : props.response.metric_definitions?.length || props.response.calculations?.length ? 'metrics' : 'trace');
-const tabs = [
+const activeEvidence = ref<EvidenceGroup>(props.response.sql_results?.length ? 'sql' : props.showDocuments && props.response.documents?.length ? 'sources' : props.response.metric_definitions?.length || props.response.calculations?.length ? 'metrics' : 'trace');
+const allTabs = [
   { id: 'sql' as const, label: 'SQL' }, { id: 'sources' as const, label: 'Sources' },
   { id: 'metrics' as const, label: 'Metrics' }, { id: 'trace' as const, label: 'Trace' },
 ];
+const tabs = computed(() => props.showDocuments ? allTabs : allTabs.filter((tab) => tab.id !== 'sources'));
 const tablist = ref<HTMLElement | null>(null);
 function selectEvidence(group: EvidenceGroup) {
   activeEvidence.value = group;
 }
 async function moveTab(event: KeyboardEvent) {
-  const current = tabs.findIndex((tab) => tab.id === activeEvidence.value);
-  const next = event.key === 'ArrowRight' ? (current + 1) % tabs.length
-    : event.key === 'ArrowLeft' ? (current + tabs.length - 1) % tabs.length
-      : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : null;
+  const current = tabs.value.findIndex((tab) => tab.id === activeEvidence.value);
+  const next = event.key === 'ArrowRight' ? (current + 1) % tabs.value.length
+    : event.key === 'ArrowLeft' ? (current + tabs.value.length - 1) % tabs.value.length
+      : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.value.length - 1 : null;
   if (next === null) return;
   event.preventDefault();
-  selectEvidence(tabs[next]!.id);
+  selectEvidence(tabs.value[next]!.id);
   await nextTick();
   tablist.value?.querySelector<HTMLButtonElement>('[aria-selected="true"]')?.focus();
 }
@@ -70,7 +71,7 @@ defineExpose({ reveal });
       </section>
       <p v-else class="evidence-empty" data-testid="sql-none" title="本轮未返回 SQL 结果，不代表业务数值为 0。">SQL 与查询结果：本轮无</p>
     </section>
-    <section v-show="activeEvidence === 'sources'" id="evidence-section-sources" class="evidence-group" role="tabpanel" aria-labelledby="evidence-tab-sources" tabindex="0">
+    <section v-if="showDocuments" v-show="activeEvidence === 'sources'" id="evidence-section-sources" class="evidence-group" role="tabpanel" aria-labelledby="evidence-tab-sources" tabindex="0">
       <section v-if="response.documents?.length" class="evidence-section">
         <h4>文档片段</h4>
         <details data-testid="documents-disclosure"><summary>查看 {{ response.documents.length }} 段引用原文</summary>

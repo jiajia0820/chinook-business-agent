@@ -52,6 +52,21 @@ describe('C1 UI shell', () => {
     expect(ask.mock.calls[1]?.[0].profile_id).toBe('adventureworks');
   });
 
+  it('shows AdventureWorks questions and hides document evidence for SQL-only answers', async () => {
+    const response = actualResponse('客户数量是多少？');
+    response.documents = [];
+    const ask = vi.fn<AskClient['ask']>().mockResolvedValue({ kind: 'business', httpStatus: 200, requestId: response.request_id, response });
+    const wrapper = app(ask);
+    await flushPromises();
+    await wrapper.get('[data-testid="database-config-trigger"]').trigger('click');
+    await wrapper.get('[data-testid="database-option-adventureworks"]').trigger('click');
+    expect(wrapper.get('[data-testid="example-0"]').text()).toContain('订单');
+    await wrapper.get('[data-testid="question-input"]').setValue('订单数是多少？');
+    await wrapper.get('[data-testid="ask-form"]').trigger('submit');
+    await flushPromises();
+    expect(wrapper.find('[data-testid="evidence-tab-sources"]').exists()).toBe(false);
+  });
+
   it('offers categorized evaluation questions without auto-submitting', async () => {
     const ask = vi.fn<AskClient['ask']>();
     const wrapper = app(ask);
