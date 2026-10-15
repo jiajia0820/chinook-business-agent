@@ -189,6 +189,9 @@ class RetrievalResponse(ContractModel):
     status: RetrievalStatus
     chunks: list[DocumentChunk] = Field(default_factory=list)
     error: ApiError | None = None
+    # Internal retrieval telemetry (mode, confidence, fallback reason).  It is
+    # additive and never consumed by answer generation.
+    diagnostics: dict[str, JsonValue] = Field(default_factory=dict, repr=False)
 
     @model_validator(mode="after")
     def validate_error_state(self) -> RetrievalResponse:

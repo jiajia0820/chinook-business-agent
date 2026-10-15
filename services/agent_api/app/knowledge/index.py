@@ -95,6 +95,7 @@ class KnowledgeIndex:
         self._dense_vectors: dict[str, tuple[float, ...]] | None = None
         self._dense_model = None
         self._dense_failed = False
+        self._chunk_doc_map: dict[str, str] | None = None
         self._document_chunks = {
             doc_id: tuple(item for item in self.chunks if item.record.doc_id == doc_id)
             for doc_id in self.documents
@@ -202,6 +203,10 @@ class KnowledgeIndex:
         dense_requested = filters.get("dense_retrieval", os.getenv("RAG_ENABLE_DENSE", "0") == "1")
         if not isinstance(dense_requested, bool):
             return self._failure(request, "INVALID_REQUEST", "语义检索开关必须是布尔值。")
+        from .retrieval_confidence import resolve_fusion_mode
+        fusion_mode, fusion_mode_reason = resolve_fusion_mode(os.getenv("RAG_FUSION_MODE"))
+        # Guarded fusion needs the semantic channel even when the legacy flag is off.
+        dense_requested = dense_requested or fusion_mode != "lexical"
         query_terms = set(lexical_terms(request.query))
         if "D11" in required_sources or preferred_doc == "D11" or "海报" in request.query:
             if any(word in request.query for word in ("材料", "提交", "一致")):
@@ -319,7 +324,10 @@ class KnowledgeIndex:
                 continue
             # 词频取对数，避免长段落靠重复高频词压过真正讲该主题的段落。
             score = sum(self._weight(term) * (1 + math.log(item.normalized_text.count(term))) for term in matched)
-            score += dense_scores.get(item.record.chunk_id, 0.0) * 10.0
+            if fusion_mode == "lexical":
+                # Legacy additive blend.  Guarded fusion keeps the two channels in
+                # separate score spaces and only reorders the lexical result.
+                score += dense_scores.get(item.record.chunk_id, 0.0) * 10.0
             if role_hit:
                 score += 2_000_000
             if item.record.doc_id in hinted_docs:
@@ -384,6 +392,8 @@ class KnowledgeIndex:
                 source_hits = [pair for pair in ranked if pair[1].record.doc_id == source]
                 if source_hits:
                     selected_ranked.append(source_hits[0])
+        # Required-source representatives are pinned and never reordered.
+        pinned_count = len(selected_ranked)
         selected_ids = {item.record.chunk_id for _, item in selected_ranked}
         for document in sorted(hinted_docs):
             match = next((pair for pair in ranked if pair[1].record.doc_id == document and pair[1].record.chunk_id not in selected_ids), None)
@@ -408,7 +418,11 @@ class KnowledgeIndex:
                 selected_ranked.append(hit)
                 selected_ids.add(hit[1].record.chunk_id)
         selected_ranked.extend(pair for pair in ranked if pair[1].record.chunk_id not in selected_ids)
-        ranked = selected_ranked
+        ranked, fusion_diagnostics = self._guarded_fusion(
+            selected_ranked, dense_scores=dense_scores, fusion_mode=fusion_mode,
+            fusion_mode_reason=fusion_mode_reason, query=request.query, top_k=request.top_k,
+            required_sources=required_sources, pinned_count=pinned_count,
+        )
         if role == "monthly_bundle":
             preferred = []
             for need in ("monthly_plan", "target_formula"):
@@ -435,7 +449,74 @@ class KnowledgeIndex:
         return RetrievalResponse(
             retrieval_id=request.retrieval_id, profile_id=self.profile_id,
             status="success", chunks=chunks,
+            diagnostics=fusion_diagnostics,
         )
+
+    def _chunk_doc_ids(self) -> dict[str, str]:
+        if self._chunk_doc_map is None:
+            self._chunk_doc_map = {item.record.chunk_id: item.record.doc_id for item in self.chunks}
+        return self._chunk_doc_map
+
+    def _guarded_fusion(self, ranked, *, dense_scores, fusion_mode, fusion_mode_reason,
+                        query, top_k, required_sources, pinned_count):
+        """Reorder evidence with the semantic channel only when both agree.
+
+        The candidate set is always the lexical one: every chunk below already
+        passed the coverage, required-source and fact-role gates.  Semantic recall
+        may change the order, never smuggle in ungated text.
+        """
+        from .retrieval_confidence import (DEFAULT_FUSION_MODE, doc_sequence, guarded_fusion,
+                                          infer_query_flags)
+        diagnostics: dict = {
+            "retrieval_mode": DEFAULT_FUSION_MODE,
+            "requested_fusion_mode": fusion_mode,
+            "retrieval_confidence": None,
+            "fallback_reason": fusion_mode_reason,
+            "requires_model": None,
+            "channel_agreement": None,
+            "dense_margin": None,
+            "score_space": None,
+            "dense_top1_supported": None,
+            "semantic_recall": "additive_blend" if dense_scores else "disabled",
+        }
+        if fusion_mode == "lexical":
+            return ranked, diagnostics
+        diagnostics["semantic_recall"] = "reorder_only"
+        doc_of = self._chunk_doc_ids()
+        depth = max(top_k * 2, 6)
+        dense_top = sorted(dense_scores.items(), key=lambda pair: (-pair[1], pair[0]))[:depth]
+        dense_docs = doc_sequence(doc_of.get(chunk_id, "") for chunk_id, _ in dense_top)
+        dense_values = [float(score) for _, score in dense_top]
+        # Both channels are compared at the same depth; the long lexical tail is
+        # not evidence of disagreement.
+        lexical_top = doc_sequence(pair[1].record.doc_id for pair in ranked)[:depth]
+        has_formula, has_comparison, is_cross_source = infer_query_flags(query)
+        query_kind = ("cross_source" if is_cross_source else "calculation" if has_formula
+                      else "comparison" if has_comparison else "fact")
+        outcome = guarded_fusion(
+            lexical_docs=lexical_top, dense_docs=dense_docs,
+            dense_scores=dense_values, required_docs=list(required_sources),
+            query_kind=query_kind, has_formula=has_formula, has_comparison=has_comparison,
+        )
+        assessment = outcome.assessment
+        diagnostics.update({
+            "retrieval_confidence": assessment.level if assessment else None,
+            "fallback_reason": outcome.reason,
+            "requires_model": assessment.requires_model if assessment else None,
+            "channel_agreement": assessment.channel_agreement if assessment else None,
+            "dense_margin": assessment.margin if assessment else None,
+            "score_space": "dense_cosine" if dense_values else None,
+            "dense_top1_supported": assessment.top1_supported if assessment else None,
+        })
+        if outcome.mode != "hybrid":
+            diagnostics["retrieval_mode"] = "lexical_fallback"
+            return ranked, diagnostics
+        order = {doc: position for position, doc in enumerate(outcome.docs)}
+        diagnostics["retrieval_mode"] = "hybrid"
+        tail = list(ranked[pinned_count:])
+        # Stable sort keeps the lexical score as the tie-breaker inside a document.
+        tail.sort(key=lambda pair: order.get(pair[1].record.doc_id, len(order)))
+        return [*ranked[:pinned_count], *tail], diagnostics
 
     @staticmethod
     def _failure(request: RetrievalRequest, code: str, message: str) -> RetrievalResponse:
