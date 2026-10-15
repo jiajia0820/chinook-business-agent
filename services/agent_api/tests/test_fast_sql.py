@@ -15,6 +15,7 @@ from backend.sql_module.schema import reflect
 from backend.sql_module.validation import validate_sql
 from backend.sql_module.service import NLQueryService, _controlled_query
 from services.agent_api.app.integrations.sql_d12 import create_canonical_knowledge_integration
+from services.agent_api.app.contracts import AskRequest
 from services.agent_api.app.agent.state import BusinessTask
 from services.agent_api.app.profiles import ProfileRegistry
 from services.agent_api.app.runtime import ToolContext
@@ -306,6 +307,18 @@ class RegisteredMetadataCacheTests(unittest.TestCase):
 
 
 class FastSqlIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_controlled_plan_keeps_entities_in_canonical_offline_mode(self):
+        integration = await create_canonical_knowledge_integration(model_mode="offline")
+        try:
+            answer = await integration.create_formal_graph_service().ask(
+                AskRequest(profile_id="chinook-music", question="2025年第三季度 Metal 卖了多少件？"),
+                request_id="controlled-metal",
+            )
+            self.assertEqual(answer.status, "answered")
+            self.assertEqual(answer.sql_results[0].rows, [{"units_sold": 22}])
+        finally:
+            await integration.aclose(grace_seconds=3)
+
     async def test_adapter_default_on_and_explicit_off_keep_distinct_sql_sources(self):
         model = CountingModel()
         with patch("backend.sql_module.generation.HTTPJSONModel.from_env", return_value=model):

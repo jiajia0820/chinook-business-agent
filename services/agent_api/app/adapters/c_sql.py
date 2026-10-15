@@ -205,7 +205,12 @@ def build_c_request(task: SqlTaskRequest, *, request_id: str, profile: BusinessP
         context=CContext(
             resolved_slots=task.resolved_slots,
             metric_ids=task.metric_ids,
-            entities=task.entities if backend.model_mode == "live" else [],
+            # The canonical backend can execute the parsed controlled plan in
+            # offline mode too; preserve entities there so Metal/Rock/country
+            # filters are not widened to the default all-audio scope. Legacy
+            # vendor snapshots still receive no entities unless they advertise
+            # the query-obligation contract.
+            entities=task.entities if (backend.model_mode == "live" or supports_query_obligations) else [],
             business_context=task.business_context,
             reference_time=task.reference_time,
             # 只向认识该契约键的 C 实现转发义务；旧快照收到未知键会整轮拒绝。
