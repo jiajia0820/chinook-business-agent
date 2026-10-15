@@ -136,3 +136,87 @@ class GenreCatalogTests(unittest.TestCase):
         self.assertIn("Rock未达目标时", answer)
         self.assertNotIn("展示层", answer)
         self.assertIn("[D05]", answer)
+
+
+# D04 层级定义表与 D02 指标口径表的真实逐单元格形态。
+TIER_TABLE = """层级 | 名称 | 当季音频销售额 美元 | 辅助观察 | 第三季度人数
+A | 重点维护 | 大于等于 12.00 | 订单数、件数、品类集中度 | 3
+B | 常规维护 | 5.00 至 12.00 以下 | 订单数、复购间隔 | 6
+C | 基础服务 | 0 以上至 5.00 以下 | 是否首次购买 | 10"""
+
+METRIC_TABLE = """指标 | 计算口径 | 单位 | 应同时说明的条件
+销售额 | SUM(InvoiceLine.UnitPrice * InvoiceLine.Quantity) | 美元 | 订单日期、媒体类型和品类范围
+订单数 | COUNT(DISTINCT Invoice.InvoiceId) | 张 | 筛选范围内去重
+客单价 | 同范围销售额 ÷ 同范围订单数 | 美元每单 | 无订单时记为不可计算
+成交均价 | 同范围销售额 ÷ 同范围销量 | 美元每件 | 与客单价区分，不平均商品标价"""
+
+
+class FocusedRendererTests(unittest.TestCase):
+    """三类换词问题的聚焦渲染器：谓词只看问题，取值只看证据。"""
+
+    def test_tier_predicate_needs_a_role_word_and_an_ask_word(self):
+        from services.agent_api.app.response.document_answer import asks_tier_thresholds
+        for question in ("给顾客分三档时，各档的消费金额界线分别是多少？",
+                         "客户分层的A、B、C层金额阈值分别是什么？",
+                         "客户分三档的金额标准分别是什么？"):
+            with self.subTest(question=question):
+                self.assertTrue(asks_tier_thresholds(question))
+        for question in ("平均一笔交易卖多少钱，除以件数还是成交笔数？",
+                         "客户分层流程由哪个岗位负责？",
+                         "销售额指标定义是什么？"):
+            with self.subTest(question=question):
+                self.assertFalse(asks_tier_thresholds(question))
+
+    def test_customer_tiers_keeps_only_the_boundary_cells(self):
+        from services.agent_api.app.response.document_answer import customer_tiers
+        answer = customer_tiers("客户分层的A、B、C层金额阈值分别是什么？", [chunk("D04", TIER_TABLE)])
+        self.assertIn("大于等于 12.00", answer)
+        self.assertIn("5.00 至 12.00 以下", answer)
+        self.assertIn("0 以上至 5.00 以下", answer)
+        self.assertIn("当季音频销售额", answer)
+        self.assertIn("[D04]", answer)
+        self.assertNotIn("辅助观察", answer)
+        self.assertNotIn("第三季度人数", answer)
+
+    def test_customer_tiers_needs_a_boundary_table_not_a_result_table(self):
+        from services.agent_api.app.response.document_answer import customer_tiers
+        result_table = ("层级 | 客户编号 | 当季音频销售额 美元 | 支持负责人\n"
+                        "A 重点维护 | 10、31、48 | 15.84、13.86、15.84 | Margaret Park")
+        self.assertIsNone(customer_tiers("客户分层的A、B、C层金额阈值分别是什么？", [chunk("D04", result_table)]))
+        self.assertIsNone(customer_tiers("销售额指标定义是什么？", [chunk("D04", TIER_TABLE)]))
+
+    def test_metric_denominator_predicate_needs_both_sides(self):
+        from services.agent_api.app.response.document_answer import asks_metric_denominator
+        self.assertTrue(asks_metric_denominator("平均一笔交易卖多少钱，除以件数还是成交笔数？没有成交怎么办？"))
+        self.assertTrue(asks_metric_denominator("客单价是按销售额除以销量，还是除以订单数？"))
+        self.assertFalse(asks_metric_denominator("销售额除以订单数得到什么指标？"))
+        self.assertFalse(asks_metric_denominator("给顾客分三档时，各档的消费金额界线分别是多少？"))
+
+    def test_metric_definition_separates_orders_from_units(self):
+        from services.agent_api.app.response.document_answer import metric_definition
+        answer = metric_definition("客单价是按销售额除以销量，还是除以订单数？订单数为零时怎么处理？",
+                                   [chunk("D02", METRIC_TABLE)])
+        self.assertIn("同范围销售额 ÷ 同范围订单数", answer)
+        self.assertIn("美元每单", answer)
+        self.assertIn("成交均价", answer)
+        self.assertIn("零订单", answer)
+        self.assertIn("[D02]", answer)
+        self.assertNotIn("SUM(InvoiceLine.UnitPrice", answer)
+
+    def test_metric_definition_falls_back_without_the_metric_table(self):
+        from services.agent_api.app.response.document_answer import metric_definition
+        self.assertIsNone(metric_definition("客单价是按销售额除以销量，还是除以订单数？",
+                                            [chunk("D02", "客单价用于观察单张订单金额。")]))
+
+    def test_activity_plan_predicate_covers_paraphrased_wording(self):
+        from services.agent_api.app.response.document_answer import asks_activity_plan
+        self.assertTrue(asks_activity_plan("参加音乐专题征集最迟哪天交，得准备哪些东西？"))
+        self.assertTrue(asks_activity_plan("海报上的报名截止是什么时候？"))
+        self.assertFalse(asks_activity_plan("给顾客分三档时，各档的消费金额界线分别是多少？"))
+
+    def test_poster_reads_deadline_and_materials_from_ocr_fragments(self):
+        from services.agent_api.app.response.document_answer import poster
+        docs = [chunk("D11", "报名截止\n10月13日18:00", "b30"),
+                chunk("D11", "报名很简单\n商品清单+选品理由+一段页面文案\n提交至商品内容组/品类运营组", "b29")]
+        answer = poster("参加音乐专题征集最迟哪天交，得准备哪些东西？", docs)
+        self.assertEqual(answer, "报名截止：10月13日18:00。\n提交材料：商品清单、选品理由和一段页面文案。\n依据：[D11]。")

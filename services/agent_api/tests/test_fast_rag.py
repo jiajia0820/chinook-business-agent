@@ -78,6 +78,19 @@ class FastRagIntegrationTests(unittest.IsolatedAsyncioTestCase):
             network.assert_not_called()
         self.assertEqual(self.model.calls, 0)
 
+    async def test_paraphrased_threshold_question_repairs_evidence_and_answers(self):
+        question = '给顾客分三档时，各档的消费金额界线分别是多少？'
+        with patch('urllib.request.OpenerDirector.open', side_effect=AssertionError('network forbidden')) as network:
+            response = await self.service.ask(AskRequest(profile_id='chinook-music', question=question), request_id='paraphrase-tier')
+            self.assertEqual(response.route, 'rag', response.model_dump_json())
+            self.assertEqual(response.status, 'answered', response.model_dump_json())
+            self.assertIn('12.00', response.answer)
+            self.assertIn('D04', {chunk.doc_id for chunk in response.documents})
+            retrievals = [event for event in response.trace if event.tool == 'rag.retrieve']
+            self.assertLessEqual(len(retrievals), 2)
+            network.assert_not_called()
+        self.assertEqual(self.model.calls, 0)
+
 
 class FastSourcePlanTests(unittest.TestCase):
     def test_fact_grouping_does_not_inherit_document_gate(self):
@@ -154,3 +167,190 @@ class FastSourcePlanTests(unittest.TestCase):
         chunk = DocumentChunk(doc_id='D01', chunk_id='wrong', title='指标', doc_type='pdf',
                               text='年度指标清单需要负责人审核。', source_uri='knowledge/wrong')
         self.assertIsNone(local_answer('销售额、销量、订单数和购买客户数分别怎么计算？', [chunk]))
+
+
+# 真实快照形态：PDF 表格逐单元格换行，海报是整图 OCR 文本（含重复块）。
+D04_TIER_TABLE = """层级 | 名称 | 当季音频销售额 美元 | 辅助观察 | 第三季度人数
+A | 重点维护 | 大于等于 12.00 | 订单数、件数、品类集中度 | 3
+B | 常规维护 | 5.00 至 12.00 以下 | 订单数、复购间隔 | 6
+C | 基础服务 | 0 以上至 5.00 以下 | 是否首次购买 | 10"""
+
+# 同文档里的「分层结果示例」表：只有客户名单，没有金额界线。
+D04_TIER_RESULT_TABLE = """层级 | 客户编号 | 当季音频销售额 美元 | 支持负责人
+A 重点维护 | 10、31、48 | 15.84、13.86、15.84 | Margaret Park、Steve Johnson、Steve Johnson
+B 常规维护 | 1、22、39、16、33、54 | 8.91、8.91、8.91、5.94、5.94、5.94 | Jane Peacock、Margaret Park、"""
+
+D02_METRIC_TABLE = """指标 | 计算口径 | 单位 | 应同时说明的条件
+销售额 | SUM(InvoiceLine.UnitPrice * InvoiceLine.Quantity) | 美元 | 订单日期、媒体类型和品类范围
+销量 | SUM(InvoiceLine.Quantity) | 件 | 明细数量，不是订单张数
+订单数 | COUNT(DISTINCT Invoice.InvoiceId) | 张 | 筛选范围内去重
+购买客户数 | COUNT(DISTINCT Invoice.CustomerId) | 人 | 筛选范围内去重
+客单价 | 同范围销售额 ÷ 同范围订单数 | 美元每单 | 无订单时记为不可计算
+成交均价 | 同范围销售额 ÷ 同范围销量 | 美元每件 | 与客单价区分，不平均商品标价"""
+
+D11_POSTER_OCR = """CHINOOKDIGITALMUSIC
+第四季度
+摇滚与经典专辑主题活动
+报名与选品条件
+把你手里的好商品，放进下一期主题页
+2025.10.20 -11.02
+商品报名截止10.1318:00
+ROCK
+GENRE1
+METAL
+谁可以报名
+报什么
+什么时候交
+商品内容/品类运营
+音频商品与专辑
+10月13日18:00
+把你的好商品，放进下一期主题页
+音频商品／专辑／组合推荐丨Rock主页面丨Metal延伸栏目
+YOUR PICKS
+提交一份商品清单
+ROCK
+METAL
+加上一段推荐文案
+GENRE1 /MAIN
+CLASSIC
+GENRE3/EXT
+让它进入主题页候选
+ALBUM PICKS
+报名很简单
+报名截止
+商品清单+选品理由+一段页面文案
+10月13日18:00
+提交至商品内容组/品类运营组
+活动周期：10月20日－11月2日
+商品内容组/品类运营组欢迎报名
+第四季度
+摇滚与经典专辑主题活动
+报名与选品条件
+摇滚与经典专辑主题活动
+报名与选品条件
+把你手里的好商品，放进下一期主题页
+报名与选品条件
+把你手里的好商品，放进下一期主题页
+把你手里的好商品，放进下一期主题页
+2025.10.20 -11.02
+2025.10.20 -11.02
+商品报名截止10.1318:00
+谁可以报名
+商品内容/品类运营
+报什么
+音频商品与专辑
+什么时候交
+10月13日18:00
+把你的好商品，放进下一期主题页
+音频商品／专辑／组合推荐丨Rock主页面丨Metal延伸栏目
+YOUR PICKS
+提交一份商品清单
+加上一段推荐文案
+提交一份商品清单
+让它进入主题页候选
+加上一段推荐文案
+让它进入主题页候选
+报名很简单
+商品清单+选品理由+一段页面文案
+提交至商品内容组/品类运营组
+报名截止
+10月13日18:00
+商品清单+选品理由+一段页面文案
+提交至商品内容组/品类运营组
+活动周期：10月20日－11月2日
+商品内容组/品类运营组欢迎报名"""
+
+
+def snapshot(doc_id, marker, section, text):
+    return DocumentChunk(doc_id=doc_id, chunk_id=f'{doc_id}@snap:{marker}', title=doc_id,
+                         doc_type='pdf', section=section, text=text,
+                         source_uri=f'knowledge/{doc_id}#{marker}')
+
+
+def d04_threshold_chunk():
+    return snapshot('D04', '#P15-table', '三 活跃客户层级定义 / 表格', D04_TIER_TABLE)
+
+
+def d04_result_chunk():
+    return snapshot('D04', '#P87-table', '七 第三季度分层结果示例 / 表格', D04_TIER_RESULT_TABLE)
+
+
+def d02_metric_chunk():
+    return snapshot('D02', '#P12-table', '二 指标粒度和汇总口径 / 表格', D02_METRIC_TABLE)
+
+
+def d11_poster_chunk():
+    return snapshot('D11', '#B1-B51', 'OCR / 全图上下文', D11_POSTER_OCR)
+
+
+TIER_QUESTION = '给顾客分三档时，各档的消费金额界线分别是多少？'
+POSTER_QUESTION = '参加音乐专题征集最迟哪天交，得准备哪些东西？'
+AOV_QUESTION = '平均一笔交易卖多少钱，除以件数还是成交笔数？没有成交怎么办？'
+
+
+class ParaphraseAnswerContractTests(unittest.TestCase):
+    """换词问题的答案契约：先结论、只留必要列、写依据，不倾倒原文。"""
+
+    def test_customer_threshold_answer_is_short_and_cited(self):
+        from services.agent_api.app.response.fast_renderer import local_answer
+        answer = local_answer(TIER_QUESTION, [d04_threshold_chunk()])
+        self.assertIsNotNone(answer)
+        self.assertIn('A', answer)
+        self.assertIn('12.00', answer)
+        self.assertLess(len(answer), 900)
+        self.assertIn('D04', answer)
+
+    def test_poster_answer_contains_deadline_and_materials(self):
+        from services.agent_api.app.response.fast_renderer import local_answer
+        answer = local_answer(POSTER_QUESTION, [d11_poster_chunk()])
+        self.assertIsNotNone(answer)
+        self.assertIn('10月13日18:00', answer)
+        self.assertIn('商品清单', answer)
+        self.assertIn('页面文案', answer)
+        self.assertLess(len(answer), 900)
+
+    def test_aov_answer_distinguishes_orders_and_units(self):
+        from services.agent_api.app.response.fast_renderer import local_answer
+        answer = local_answer(AOV_QUESTION, [d02_metric_chunk()])
+        self.assertIsNotNone(answer)
+        self.assertIn('订单数', answer)
+        self.assertIn('零订单', answer)
+        self.assertNotIn('需要补充年份', answer)
+
+    def test_answer_role_comes_from_question_semantics_only(self):
+        from services.agent_api.app.response.fast_renderer import answer_role_from_question
+        self.assertEqual(answer_role_from_question(TIER_QUESTION), 'customer_segmentation')
+        self.assertEqual(answer_role_from_question(POSTER_QUESTION), 'activity_plan')
+        self.assertEqual(answer_role_from_question(AOV_QUESTION), 'metric_definition')
+        self.assertEqual(answer_role_from_question('销售额指标定义是什么？'), 'generic_excerpt')
+
+    def test_threshold_gate_drives_repair_until_boundaries_arrive(self):
+        from services.agent_api.app.response.fast_renderer import core_content_missing, local_answer
+        self.assertEqual(core_content_missing(TIER_QUESTION, [d04_result_chunk()]), ['分层阈值'])
+        self.assertIsNone(local_answer(TIER_QUESTION, [d04_result_chunk()]))
+        repaired = [d04_result_chunk(), d04_threshold_chunk()]
+        self.assertEqual(core_content_missing(TIER_QUESTION, repaired), [])
+        self.assertIsNotNone(local_answer(TIER_QUESTION, repaired))
+
+    def test_threshold_answer_keeps_only_the_boundary_column(self):
+        from services.agent_api.app.response.fast_renderer import local_answer
+        answer = local_answer(TIER_QUESTION, [d04_threshold_chunk()])
+        self.assertIn('5.00', answer)
+        self.assertIn('当季音频销售额', answer)
+        for dropped in ('辅助观察', '第三季度人数', '层级 | 名称', '品类集中度'):
+            self.assertNotIn(dropped, answer)
+
+    def test_poster_answer_is_not_the_whole_ocr_block(self):
+        from services.agent_api.app.response.fast_renderer import local_answer
+        answer = local_answer(POSTER_QUESTION, [d11_poster_chunk()])
+        self.assertIn('[D11]', answer)
+        for dropped in ('CHINOOKDIGITALMUSIC', 'YOUR PICKS', 'ALBUM PICKS', 'GENRE3/EXT'):
+            self.assertNotIn(dropped, answer)
+
+    def test_metric_answer_names_both_denominators(self):
+        from services.agent_api.app.response.fast_renderer import local_answer
+        answer = local_answer(AOV_QUESTION, [d02_metric_chunk()])
+        self.assertIn('成交均价', answer)
+        self.assertIn('销量', answer)
+        self.assertIn('[D02]', answer)
+        self.assertNotIn('SUM(InvoiceLine.UnitPrice', answer)

@@ -7,10 +7,16 @@ import re
 from ..contracts import DocumentChunk
 from ..knowledge.index import lexical_terms
 from .document_answer import (
+    asks_activity_plan,
+    asks_metric_denominator,
+    asks_tier_thresholds,
     cited,
     comparison,
     classification,
+    customer_tiers,
+    metric_definition,
     poster,
+    tier_boundary_evidence,
     _multidoc_target_review,
     _multidoc_customer_operation,
     _multidoc_activity_crosscheck,
@@ -20,6 +26,32 @@ from .document_answer import (
 
 def fast_rag_enabled() -> bool:
     return os.getenv('AGENT_FAST_RAG', '1').strip().casefold() not in {'0', 'false', 'off', 'no'}
+
+
+# 换词问题的答案角色：只由问题语义决定，不读评测期望，也不看检索到了哪些 doc_id。
+ROLE_CUSTOMER_SEGMENTATION = 'customer_segmentation'
+ROLE_ACTIVITY_PLAN = 'activity_plan'
+ROLE_METRIC_DEFINITION = 'metric_definition'
+ROLE_GENERIC_EXCERPT = 'generic_excerpt'
+
+# 角色对应的聚焦渲染器。命中角色但渲染器取不到证据时，仍按原有链路兜底，
+# 让内容闸把证据不足的情况推回 insufficient_evidence。
+_ROLE_RENDERERS = {
+    ROLE_CUSTOMER_SEGMENTATION: customer_tiers,
+    ROLE_ACTIVITY_PLAN: poster,
+    ROLE_METRIC_DEFINITION: metric_definition,
+}
+
+
+def answer_role_from_question(question: str) -> str:
+    """Which focused renderer owns this question, or the generic excerpt path."""
+    if asks_tier_thresholds(question):
+        return ROLE_CUSTOMER_SEGMENTATION
+    if asks_metric_denominator(question):
+        return ROLE_METRIC_DEFINITION
+    if asks_activity_plan(question):
+        return ROLE_ACTIVITY_PLAN
+    return ROLE_GENERIC_EXCERPT
 
 
 def core_content_missing(question: str, documents: list[DocumentChunk]) -> list[str]:
@@ -48,6 +80,10 @@ def _content_missing(question: str, text: str) -> list[str]:
                 missing.append(field + '混合订单规则')
     if any(word in question for word in ('应该和', '应该与', '比较方法')) and not ('月' in text and any(word in text for word in ('上月', '同比', '环比'))):
         missing.append('比较基准')
+    # 阈值问题必须拿到界线本身：只有分层结果示例（客户名单+金额）时判为缺内容，
+    # 让图内补检索再跑一次，而不是用名单冒充界线。
+    if answer_role_from_question(question) == ROLE_CUSTOMER_SEGMENTATION and not tier_boundary_evidence(text):
+        missing.append('分层阈值')
     return missing
 
 
@@ -149,11 +185,18 @@ def local_answer(question: str, documents: list[DocumentChunk]) -> str | None:
         or _multidoc_customer_operation(question, documents)
         or _multidoc_activity_crosscheck(question, documents)
         or _multidoc_next_step(question, documents)
-        or classification(question, documents)
-        or poster(question, documents)
-        or _excerpt(question, documents)
     )
+    if answer is None:
+        focused = _ROLE_RENDERERS.get(answer_role_from_question(question))
+        if focused is not None:
+            answer = focused(question, documents)
+    if answer is None:
+        answer = (
+            classification(question, documents)
+            or poster(question, documents)
+            or _excerpt(question, documents)
+        )
     return answer if answer and not _content_missing(question, answer) else None
 
 
-__all__ = ['fast_rag_enabled', 'core_content_missing', 'local_answer']
+__all__ = ['fast_rag_enabled', 'core_content_missing', 'local_answer', 'answer_role_from_question']

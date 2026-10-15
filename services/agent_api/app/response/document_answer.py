@@ -175,9 +175,96 @@ def _disambiguation_prose(question, documents):
     return None
 
 
+# 换词问题的角色谓词：只读问题措辞，不读评测期望，也不从 doc_id 反推事实。
+# 阈值角色必须同时命中「层级语义词」和「索取语义词」，否则“分层由谁负责”这类
+# 流程问题会被误判成要金额界线。裸“档”不能进词表，它会撞上“文档”。
+_TIER_ROLE_WORDS = ("分层", "层级", "阈值", "界线", "分三档", "三档", "档位", "分档", "各档",
+                    "A层", "B层", "C层", "A、B、C")
+_TIER_ASK_WORDS = ("阈值", "界线", "金额", "多少钱", "标准", "是多少", "多少", "分三档", "各档")
+_METRIC_DENOMINATOR_WORDS = ("除以", "分母", "件数还是", "成交笔数", "平均一笔")
+_METRIC_AOV_WORDS = ("客单价", "成交均价", "均价", "一笔交易")
+_ACTIVITY_PLAN_WORDS = ("海报", "报名", "提交", "活动", "征集", "最迟", "哪天交",
+                        "什么时候交", "得准备", "准备哪些", "哪些东西")
+
+
+def asks_tier_thresholds(question) -> bool:
+    return any(word in question for word in _TIER_ROLE_WORDS) and any(word in question for word in _TIER_ASK_WORDS)
+
+
+def asks_metric_denominator(question) -> bool:
+    return any(word in question for word in _METRIC_DENOMINATOR_WORDS) and any(word in question for word in _METRIC_AOV_WORDS)
+
+
+def asks_activity_plan(question) -> bool:
+    return any(word in question for word in _ACTIVITY_PLAN_WORDS)
+
+
+_TIER_LOWER_BOUND = re.compile(r"大于等于\s*\d+\.\d{2}")
+_TIER_UPPER_BOUND = re.compile(r"\d+\.\d{2}\s*(?:美元)?\s*以下")
+
+
+def tier_boundary_evidence(text: str) -> bool:
+    """True only when the text states boundaries as “大于等于 12.00” / “12.00 以下”.
+
+    分层结果示例表只有客户名单和金额，没有界线，不能拿来回答阈值问题。
+    """
+    return bool(_TIER_LOWER_BOUND.search(text) and _TIER_UPPER_BOUND.search(text))
+
+
+# 表格逐单元格换行存储，行首可能带前导竖线；名称列与界线列之间只允许空白。
+_TIER_HEADER = re.compile(r"^\|?\s*层级\s*\|\s*名称\s*\|\s*([^|\n]*?)\s*\|", re.M)
+_TIER_ROW = re.compile(r"^\|?\s*([ABC])\s*\|\s*([^|\n]*?)\s*\|\s*([^|\n]*?)\s*\|", re.M)
+_METRIC_ROW = re.compile(r"^\|?\s*(客单价|成交均价)\s*\|\s*([^|\n]*?)\s*\|\s*([^|\n]*?)\s*\|", re.M)
+
+
+def _tier_basis(header_cell: str) -> str:
+    match = re.match(r"^(.*?)[\s　]*(美元|USD|元)$", header_cell.strip())
+    return f"{match[1]}（{match[2]}）" if match and match[1] else header_cell.strip()
+
+
+def customer_tiers(question, documents):
+    """三档金额界线，只取界线列，不复制辅助观察和人数列。"""
+    if not asks_tier_thresholds(question):
+        return None
+    for item in documents:
+        if not tier_boundary_evidence(item.text):
+            continue
+        rows = {tier: (name, bound) for tier, name, bound in _TIER_ROW.findall(item.text)}
+        if not all(tier in rows and rows[tier][1] for tier in "ABC"):
+            continue
+        header = _TIER_HEADER.search(item.text)
+        basis = _tier_basis(header[1]) if header else "当季音频销售额"
+        lines = [f"{tier}（{rows[tier][0]}）：{rows[tier][1]}" for tier in "ABC"]
+        return cited(f"客户分三档，界线按{basis}判定：\n" + "\n".join(lines), [item])
+    return None
+
+
+def metric_definition(question, documents):
+    """分母问题只回答两个均价口径，不整张指标表倾倒。"""
+    if not asks_metric_denominator(question):
+        return None
+    for item in documents:
+        rows = {name: (formula, unit) for name, formula, unit in _METRIC_ROW.findall(item.text)}
+        if not all(name in rows for name in ("客单价", "成交均价")):
+            continue
+        # 口径必须真的按订单数/销量分开，否则说明拿到的不是那张定义表。
+        if "订单数" not in rows["客单价"][0] or "销量" not in rows["成交均价"][0]:
+            continue
+        if "不可计算" not in item.text:
+            continue
+        aov_formula, aov_unit = rows["客单价"]
+        unit_formula, unit_unit = rows["成交均价"]
+        return cited("\n".join((
+            f"客单价＝{aov_formula}，单位{aov_unit}，分母是订单数不是件数。",
+            f"成交均价＝{unit_formula}，单位{unit_unit}，才是按件数平均的口径。",
+            "零订单（没有成交）时客单价记为不可计算。",
+        )), [item])
+    return None
+
+
 def poster(question, documents):
     docs = [item for item in documents if item.doc_id == "D11"]
-    if not docs or not any(word in question for word in ("海报", "报名", "提交", "活动")):
+    if not docs or not asks_activity_plan(question):
         return None
     rows = []
     used = []
@@ -195,7 +282,7 @@ def poster(question, documents):
             rows.append("活动周期：2025年10月20日至11月2日。")
         else:
             missing.append("活动周期")
-    if any(word in question for word in ("截止", "报名", "一致", "什么时候")):
+    if any(word in question for word in ("截止", "报名", "一致", "什么时候", "最迟", "哪天交", "征集")):
         match = take(r"10(?:月|\.)(13)(?:日)?(18):00")
         if match:
             rows.append("报名截止：10月13日18:00。")
@@ -207,7 +294,7 @@ def poster(question, documents):
             rows.append("报名对象：商品内容、品类运营。")
         else:
             missing.append("报名对象")
-    if any(word in question for word in ("材料", "提交", "一致")):
+    if any(word in question for word in ("材料", "提交", "一致", "得准备", "准备哪些", "哪些东西", "要交什么", "交什么")):
         match = take(r"商品清单\+选品理由\+一段页面文案")
         if match:
             rows.append("提交材料：商品清单、选品理由和一段页面文案。")
