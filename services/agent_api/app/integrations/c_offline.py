@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 import hashlib
+import inspect
 from pathlib import Path
 from typing import Annotated
 
@@ -177,19 +178,25 @@ class OfflineCSqlAdapter:
             raise ToolFailure(ApiError(code="UNSUPPORTED_CAPABILITY", message="当前 profile 没有已确认的 SQL 后端。", retryable=False))
         request = build_c_request(task, request_id=context.request_id, profile=profile,
                                   supports_query_obligations=self._supports_query_obligations)
-        from ..agent.fast_path import fast_sql_enabled, fast_sql_eligible, fast_sql_question
+        from ..agent.fast_path import controlled_sql_eligible, fast_sql_enabled, fast_sql_eligible, fast_sql_question
 
         def answer():
             registered = getattr(self._service, "answer_registered", None)
-            if callable(registered) and fast_sql_enabled() and fast_sql_eligible(task, profile):
+            if callable(registered) and fast_sql_enabled():
                 # Keep unknown words from the original question visible to
                 # C's closed scope check; model input remains the validated
                 # normalized request used by the existing live chain.
                 fast_request = request.payload()
                 fast_request["question"] = fast_sql_question(task.question, profile)
-                raw = registered(fast_request, self._access)
-                if raw is not None:
-                    return raw, True
+                supports_controlled = "use_controlled_plan" in inspect.signature(registered).parameters
+                if supports_controlled and controlled_sql_eligible(task, profile):
+                    raw = registered(fast_request, self._access, use_controlled_plan=True)
+                    if raw is not None:
+                        return raw, True
+                if fast_sql_eligible(task, profile):
+                    raw = registered(fast_request, self._access)
+                    if raw is not None:
+                        return raw, True
             return self._service.answer_sql(request.payload(), self._access), False
 
         raw, registered_used = await self.executor.run(answer, deadline=context.deadline)

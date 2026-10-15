@@ -50,6 +50,34 @@ class RegisteredSqlTests(unittest.TestCase):
         self.assertTrue(hasattr(self.service, "answer_registered"), "missing registered-query entry point")
         return self.service.answer_registered(value, access or self.access)
 
+    def test_controlled_entrypoint_uses_plan_without_reparsing_question(self):
+        value = request(
+            "2025年第三季度销售额最高的五个账单国家是什么？",
+            ["billing_country_sales", "sales_amount"],
+            {**self.slots, "query_intent": {
+                "dimension": "billing_country", "top_n": 5,
+                "order_by": "sales_amount", "order_desc": True,
+                "measures": ["sales_amount"],
+            }},
+        )
+        result = self.service.answer_registered(value, self.access, use_controlled_plan=True)
+        self.assertEqual(result["status"], "answered")
+        self.assertEqual(len(result["sql_results"][0]["rows"]), 5)
+        self.assertEqual(result["execution_path"], "controlled_registered_query")
+        self.assertEqual(self.model.calls, 0)
+
+    def test_controlled_entrypoint_handles_natural_metric_wording(self):
+        value = request(
+            "2025年第三季度 Metal 卖了多少件？",
+            ["units_sold"],
+            {**self.slots, "query_intent": {"measures": ["units_sold"]}},
+            [{"type": "genre", "id": "Genre:3", "label": "Metal"}],
+        )
+        result = self.service.answer_registered(value, self.access, use_controlled_plan=True)
+        self.assertEqual(result["status"], "answered")
+        self.assertEqual(result["sql_results"][0]["rows"], [{"units_sold": 22}])
+        self.assertEqual(self.model.calls, 0)
+
     def test_registered_scalar_is_exact_existing_plan_without_model_calls(self):
         value = request("2025年第三季度 Rock 音频销售额和销量是多少？", ["sales_amount", "units_sold"], self.slots,
                         [{"type": "genre", "id": "Genre:1", "label": "Rock"}])

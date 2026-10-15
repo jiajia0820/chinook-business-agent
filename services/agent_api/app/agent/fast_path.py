@@ -5,6 +5,7 @@ import re
 
 
 FAST_SQL_METRICS = {"customer_count", "sales_amount", "units_sold", "order_count", "purchasing_customers", "mixed_order_count", "track_attributes"}
+CONTROLLED_SQL_DIMENSIONS = {"genre", "track", "album", "artist", "media_type", "billing_country", "customer", "support_rep", "playlist", "month"}
 SQL_METADATA_SLOTS = {"year", "quarter", "month", "period_grain", "scope", "data_scope", "genre_boundary_resolved", "year_assumed"}
 
 
@@ -64,3 +65,42 @@ def fast_sql_question(question, profile):
     pattern = "|".join(re.escape(alias) for alias in sorted(aliases, key=len, reverse=True))
     folded = {alias.casefold(): label for alias, label in aliases.items()}
     return re.sub(pattern, lambda match: folded[match[0].casefold()], question, flags=re.I)
+
+
+def controlled_sql_eligible(task, profile):
+    """Allow the canonical registered plan before the model chain.
+
+    This is deliberately broader than ``fast_sql_eligible``: the latter keeps
+    the historical text-closed fast path, while this gate trusts only the
+    already parsed query intent and C's registered controlled-query builder.
+    The adapter still treats a ``None`` plan as a model fallback.
+    """
+    backend = profile.sql_backend
+    if not backend or backend.profile_id != "chinook" or not profile.supports("sql"):
+        return False
+    if getattr(task, "route", "sql") != "sql" or getattr(task, "needs_calculation", False):
+        return False
+    if any(getattr(task, field, None) for field in ("excluded_entities", "time_issues", "semantic_blockers")):
+        return False
+    obligations = getattr(task, "query_obligations", {}) or {}
+    if obligations.get("unresolved_terms") or obligations.get("requires_running_total"):
+        return False
+    metrics = list(getattr(task, "business_metric_ids", None) or getattr(task, "metric_ids", []))
+    if not metrics or not set(metrics) <= set(backend.registered_metric_ids):
+        return False
+    slots = getattr(task, "slots", None)
+    if slots is None:
+        slots = task.resolved_slots
+    if set(slots) & {"comparison_period", "playlist_id", "track_ids"}:
+        return False
+    intent = slots.get("query_intent", {})
+    if not isinstance(intent, dict):
+        return False
+    if "query_intent" not in slots:
+        return False
+    if intent.get("operation") in {"track_attributes", "mixed_media_orders"}:
+        return True
+    dimension = intent.get("dimension")
+    if dimension not in CONTROLLED_SQL_DIMENSIONS:
+        return set(intent) <= {"measures"} and set(metrics) <= FAST_SQL_METRICS
+    return True

@@ -714,7 +714,7 @@ class NLQueryService:
                 self._catalog_cache.pop(profile.id, None)
             return catalog
 
-    def answer_registered(self, request, access):
+    def answer_registered(self, request, access, *, use_controlled_plan=False):
         """Return a validated registered draft, or None to keep the live chain.
 
         This entry point never initializes or calls a model.  It shares the
@@ -746,7 +746,10 @@ class NLQueryService:
             required |= {name for name, rule in profile.data.get('slots', {}).items() if rule.get('required_by_default')}
             if not required <= set(context.get('resolved_slots', {})):
                 raise ModuleError('MISSING_REQUIRED_SLOT', '缺少已注册指标必要槽位')
-            generated = _registered_query(data['question'], context, options.get('max_rows', 50))
+            if use_controlled_plan:
+                generated = _controlled_query(context, metric_ids, max_rows=options.get('max_rows', 50))
+            else:
+                generated = _registered_query(data['question'], context, options.get('max_rows', 50))
             if generated is None:
                 return None
             query_id = 'sql-' + str(uuid.uuid4())
@@ -759,7 +762,10 @@ class NLQueryService:
             if result['status'] != 'success':
                 response['error'] = result['error']
                 return response
-            contract = CATALOG_COLUMNS if metric_ids == ['track_attributes'] else metric_ids
+            if use_controlled_plan:
+                contract = _output_contract(metric_ids, context)
+            else:
+                contract = CATALOG_COLUMNS if metric_ids == ['track_attributes'] else metric_ids
             mapping = _contract_column_mapping(result, contract)
             if mapping is None:
                 raise ModuleError('SQL_EXECUTION_FAILED', '已注册查询输出契约不完整', 'SEMANTIC_SCOPE_MISMATCH')
