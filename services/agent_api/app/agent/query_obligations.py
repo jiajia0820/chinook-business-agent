@@ -31,8 +31,14 @@ ACTUAL_VALUE_MARKERS = (
 
 MONTH_GROUPING = re.compile(r"每月|每个月|按月|按月份|月度|逐月|各月|分月|月累计")
 RUNNING_TOTAL = re.compile(r"累计|滚动|累加|截至当月|到当月")
-GENRE_GROUPING = re.compile(r"各品类|各分类|各类型|品类|分类|按品类|每个品类")
-MULTI_ROW = re.compile(r"分别|各|每|逐|列出|清单|明细|排名|排行|前五|前三|前\s*\d")
+# 分组要求必须是"分配性"的：各品类、按分类、每个类型才算要按品类分行。
+# 裸词"品类/分类"会把"属于哪个音乐分类"这种属性提问误判成分组查询。
+GENRE_GROUPING = re.compile(
+    r"(?:各|各个|每个|每|按|逐|所有|全部|不同)\s*(?:品类|分类|类型|风格|音乐分类|音乐类型)"
+    r"|(?:品类|分类|类型|风格)\s*(?:分别|各自)")
+# "分别/各/每/逐"单独出现只说明要多个指标或多列，不等于要多行。真正的多行要求来自
+# 月分组、排名条数、已识别的分组维度，或明确的清单/明细/排名/前 N 措辞。
+MULTI_ROW = re.compile(r"列出|清单|明细|排名|排行|前\s*(?:[0-9]+|[一二两三四五六七八九十]+)")
 RANK_MARKERS = re.compile(r"最高|最低|排名|排行|top", re.I)
 LIMIT_PATTERN = re.compile(
     r"(?:top|前|最高的?|最低的?)\s*([0-9]+|[一二两三四五六七八九十]+)\s*(?:个|名|种|类|款)?",
@@ -49,6 +55,37 @@ OBLIGATION_PHRASES = (
     "小计", "没有", "需要", "应该", "可以", "是不是", "怎么办",
 )
 OBLIGATION_CHARS = "月个各每按到当为也要没的了和与或及之除前后名零一二三四五六七八九十百千万0123456789."
+
+# 让 _unparsed_query_text 把已登记词的删除位置标出来，残渣才能按片段分别判断，
+# 而不是拼成一整块无法解读的字符串（例如"商品叫哪哪种媒体标价美元"）。
+_RESIDUE_SEPARATOR = "\u241f"
+_RESIDUE_PUNCTUATION = re.compile(r"[\s，,。;；:：?？!！、()（）\[\]【】\"'“”‘’]+")
+# 只有"取值样"的残渣才是未解析过滤条件：拉丁字母词、地名、带人物角色前缀的姓名。
+# 其余残渣是问句措辞（"列出""升序排列""金额""订单去重"），把它们当过滤器会让正常
+# 问题被误判成丢条件而拒答。
+_VALUE_ASCII = re.compile(r"[A-Za-z]")
+_VALUE_PLACE = re.compile(r"^[\u4e00-\u9fff]{0,5}(?:国|州|省|市|区|县|岛)$")
+_VALUE_PERSON = re.compile(
+    r"^(?:歌手|艺人|艺术家|演奏者|乐队|作曲家|客户|顾客|员工|负责人)(?P<name>[\u4e00-\u9fff]{2,4})$")
+# 角色前缀后面接通用业务词时，那是"客户编号"这类字段说法，不是人名。
+_PERSON_GENERIC = ("编号", "号码", "名称", "姓名", "金额", "总额", "数量", "总数", "消费",
+                   "清单", "明细", "哪些", "哪个", "什么", "多少", "分布", "列表", "订单",
+                   "商品", "专辑", "国家", "地区", "城市", "类型", "品类", "分类")
+
+
+def _value_token(chunk: str) -> str:
+    """从一段未登记文本里取出真正的过滤取值；取不出就返回空串。"""
+    token = _RESIDUE_PUNCTUATION.sub("", "".join(char for char in chunk if char not in OBLIGATION_CHARS))
+    if not token:
+        return ""
+    if _VALUE_ASCII.search(token):
+        return token
+    if _VALUE_PLACE.match(token):
+        return token
+    person = _VALUE_PERSON.match(token)
+    if person and not person.group("name").startswith(_PERSON_GENERIC):
+        return token
+    return ""
 
 
 @dataclass(frozen=True)
@@ -118,17 +155,20 @@ def _requested_limit(question: str) -> int | None:
 
 
 def _residue_terms(question: str, profile: "BusinessProfile | None") -> tuple[str, ...]:
-    """已登记词表消不掉的过滤词才是未解析条件；义务措辞不算。"""
+    """已登记词表消不掉、且长得像过滤取值的词才是未解析条件；义务措辞不算。"""
     if profile is None:
         return ()
     from .parsing import _unparsed_query_text
 
-    residue = _unparsed_query_text(question, profile)
-    for phrase in OBLIGATION_PHRASES:
-        residue = residue.replace(phrase, "")
-    residue = "".join(char for char in residue if char not in OBLIGATION_CHARS)
-    residue = re.sub(r"[\s，,。;；:：?？!！、]+", "", residue)
-    return (residue,) if residue else ()
+    residue = _unparsed_query_text(question, profile, separator=_RESIDUE_SEPARATOR)
+    terms = []
+    for chunk in residue.split(_RESIDUE_SEPARATOR):
+        for phrase in OBLIGATION_PHRASES:
+            chunk = chunk.replace(phrase, "")
+        token = _value_token(chunk)
+        if token:
+            terms.append(token)
+    return tuple(dict.fromkeys(terms))
 
 
 def _is_rule_question(question: str, task_type: str, route: str) -> bool:

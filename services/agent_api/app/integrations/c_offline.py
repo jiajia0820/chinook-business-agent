@@ -8,7 +8,7 @@ from typing import Annotated
 from pydantic import Field, StringConstraints, model_validator
 
 from ..adapters.bounded_executor import BoundedExecutor
-from ..adapters.c_sql import build_c_request, create_c_sql_spec, normalize_c_response
+from ..adapters.c_sql import build_c_request, c_supports_query_obligations, create_c_sql_spec, normalize_c_response
 from ..contracts import ApiError
 from ..core.errors import ApplicationError
 from ..profiles import ProfileRegistry
@@ -167,12 +167,16 @@ def _load_backend(root: Path, profiles: ProfileRegistry, tables: frozenset[str] 
 class OfflineCSqlAdapter:
     def __init__(self, profiles, service, access, executor, provenance):
         self.profiles, self._service, self._access, self.executor, self.provenance = profiles, service, access, executor, provenance
+        # 3C-1 走 third_party 封存快照，canonical 走仓库内 backend；只有后者认识
+        # query_obligations。装配时探测一次，避免每轮把未知键发给旧 C 校验器。
+        self._supports_query_obligations = c_supports_query_obligations(service)
 
     async def run(self, task: SqlTaskRequest, context: ToolContext) -> SqlTaskOutcome:
         profile = self.profiles.get(context.profile_id)
         if not profile.sql_backend or profile.sql_backend.model_mode not in {"offline", "live"}:
             raise ToolFailure(ApiError(code="UNSUPPORTED_CAPABILITY", message="当前 profile 没有已确认的 SQL 后端。", retryable=False))
-        request = build_c_request(task, request_id=context.request_id, profile=profile)
+        request = build_c_request(task, request_id=context.request_id, profile=profile,
+                                  supports_query_obligations=self._supports_query_obligations)
         from ..agent.fast_path import fast_sql_enabled, fast_sql_eligible, fast_sql_question
 
         def answer():

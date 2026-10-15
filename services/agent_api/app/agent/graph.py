@@ -20,7 +20,7 @@ from ..evidence.business_workflows import WORKFLOWS, WorkflowGap, resolve_source
 from ..profiles import ProfileRegistry
 from ..runtime import ToolContext, ToolEvent, ToolRuntime, events_to_trace
 from ..response.models import ComposeContext, ResponseComposer
-from ..tools.models import BusinessContextItem, CalculationRequest, SqlTaskOutcome, SqlTaskRequest
+from ..tools.models import SQL_OBLIGATION_KEYS, BusinessContextItem, CalculationRequest, SqlTaskOutcome, SqlTaskRequest
 from ..tools.references import sql_cell_ref
 from .parsing import parse_question
 from .semantic_router import parse_route_proposal, semantic_route_messages, task_from_proposal
@@ -125,6 +125,15 @@ def _rag_plan(question: str, intent: str) -> dict:
 def _snapshot(outcome):
     data = outcome.data.model_dump(mode="json", exclude={"diagnostics"}) if outcome.data is not None else None
     return {"status": outcome.status, "data": data, "error": outcome.error.model_dump(mode="json") if outcome.error else None}
+
+
+def _sql_snapshot(outcome):
+    """_snapshot 丢掉 diagnostics；执行路径和义务覆盖结论必须留在状态里供 compose 兜底。"""
+    snapshot = _snapshot(outcome)
+    diagnostics = outcome.data.diagnostics if outcome.data is not None else None
+    snapshot["execution_path"] = (diagnostics or {}).get("execution_path", "none")
+    snapshot["query_obligations_covered"] = (diagnostics or {}).get("query_obligations_covered")
+    return snapshot
 
 
 def _models(state):
@@ -349,6 +358,8 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
             metric_ids=[metric for metric in task.business_metric_ids if metric in profile.sql_backend.registered_metric_ids],
             business_context=[BusinessContextItem(ref_id=ref, text=text) for ref, text in business_context.items()][:20],
             max_rows=request.options.max_rows, show_trace=request.options.show_trace,
+            # 只把 C 覆盖检查需要的义务键交给 C；consumed_entities 等 B 侧字段不外传。
+            query_obligations={key: value for key, value in task.query_obligations.items() if key in SQL_OBLIGATION_KEYS},
         )
         if task.intent == "growth_rate":
             slots = dict(payload.resolved_slots)
@@ -384,7 +395,11 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
             update.update(tool_update(current, "sql_previous", previous, "sql_outcome", prior_refs))
             if previous.succeeded:
                 combined = outcome.data.model_copy(update={"sql_results": [*outcome.data.sql_results, *previous.data.sql_results], "source_refs": [*outcome.data.source_refs, *previous.data.source_refs], "limitations": [*outcome.data.limitations, *previous.data.limitations]})
-                update["sql_outcome"] = {"status": "success", "data": combined.model_dump(mode="json"), "error": None}
+                # 合并两期结果时保留安全字段：compose 的兜底判断依赖执行路径与义务覆盖结论。
+                prior_snapshot = update.get("sql_outcome") or {}
+                update["sql_outcome"] = {"status": "success", "data": combined.model_dump(mode="json"), "error": None,
+                    "execution_path": prior_snapshot.get("execution_path", "none"),
+                    "query_obligations_covered": prior_snapshot.get("query_obligations_covered")}
         return update
 
     async def call_rag(state: AgentState):
@@ -647,8 +662,9 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
                 status, route = "unsupported", "unsupported"
             else:
                 status, error = "error", outcome.error.model_dump(mode="json")
+        snapshot = _sql_snapshot(outcome) if channel == "sql_outcome" else _snapshot(outcome)
         return mark(state, node, **{
-            channel: _snapshot(outcome), "status": status, "route": route, "error": error,
+            channel: snapshot, "status": status, "route": route, "error": error,
             "events": [*state["events"], *(event.model_dump(mode="json") for event in outcome.events)],
             "evidence_refs": list(dict.fromkeys([*state["evidence_refs"], *refs])) if outcome.succeeded else state["evidence_refs"],
         })
@@ -871,6 +887,14 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
         memory = SessionMemory.model_validate(state["memory"])
         sql, rag = _models(state)
         status = state["status"]
+        sql_outcome = state.get("sql_outcome") or {}
+        if (status == "answered" and sql_outcome.get("execution_path") == "controlled_fallback"
+                and sql_outcome.get("query_obligations_covered") is not True):
+            # C 已经会拒绝未覆盖义务的降级；这里是最后一道防线，绝不允许它变成 answered。
+            status = "unsupported"
+            state = {**state, "status": status, "route": "unsupported",
+                "limitations": [*state["limitations"], "模型失败后的受控查询未保留本轮的过滤、粒度或输出要求；未用更粗口径代替回答。"]}
+            parsed.reason = parsed.reason or "模型失败后的受控查询未保留本轮记录的过滤、粒度或输出要求，未给出结论。"
         clarification = parsed.clarification
         answer = None
         if parsed.decision == "cancelled":

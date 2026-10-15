@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import re
+import sys
 from typing import Literal
 from collections.abc import Awaitable, Callable
 
@@ -42,6 +43,8 @@ class CContext(InternalModel):
     entities: list[dict[str, JsonValue]] = Field(default_factory=list, max_length=20)
     business_context: list[BusinessContextItem] = Field(default_factory=list, max_length=20)
     reference_time: str | None = None
+    # 只转发 C 覆盖检查需要的义务键；旧 C 快照忽略它，新 C 用它拒绝丢条件的降级。
+    query_obligations: dict[str, JsonValue] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_time(self) -> CContext:
@@ -61,6 +64,8 @@ class CRequest(InternalModel):
         payload = self.model_dump(mode="json", exclude_none=True)
         if not self.context.entities:
             payload["context"].pop("entities", None)
+        if not self.context.query_obligations:
+            payload["context"].pop("query_obligations", None)
         return payload
 
 
@@ -138,6 +143,9 @@ class CDraftResponse(InternalModel):
     limitations: list[str] = Field(default_factory=list)
     clarification: None = None  # Current C does not own dialogue clarification.
     trace: list[CTrace] = Field(default_factory=list)
+    # 本轮 SQL 的来源路径：模型候选 / 已登记受控查询 / 模型失败后的受控降级 / 未执行。
+    execution_path: Literal["model_candidate", "controlled_registered_query", "controlled_fallback", "none"] | None = None
+    query_obligations_covered: bool | None = None
     error: CError | None = None
 
     @model_validator(mode="after")
@@ -160,7 +168,19 @@ class CDraftResponse(InternalModel):
         return self
 
 
-def build_c_request(task: SqlTaskRequest, *, request_id: str, profile: BusinessProfile) -> CRequest:
+def c_supports_query_obligations(service) -> bool:
+    """C 服务实现是否认识 query_obligations 这个契约键。
+
+    third_party/chinook_c 是按 SHA 封存的旧快照，它的 validate_request 白名单里没有
+    这个键，把义务传过去只会拿到 INVALID_REQUEST。这里按服务类所在模块探测，探测不到
+    一律当作不支持：宁可少传一个可选字段，也不改 vendor 副本、不放宽它的校验。
+    """
+    module = sys.modules.get(getattr(type(service), "__module__", ""))
+    return hasattr(module, "QUERY_OBLIGATION_KEYS")
+
+
+def build_c_request(task: SqlTaskRequest, *, request_id: str, profile: BusinessProfile,
+                    supports_query_obligations: bool = False) -> CRequest:
     """Whitelist, not model_dump of the whole B task. No SQL generation here."""
     task = SqlTaskRequest.model_validate(task.model_dump(mode="python"))
     if task.profile_id != profile.profile_id:
@@ -188,6 +208,8 @@ def build_c_request(task: SqlTaskRequest, *, request_id: str, profile: BusinessP
             entities=task.entities if backend.model_mode == "live" else [],
             business_context=task.business_context,
             reference_time=task.reference_time,
+            # 只向认识该契约键的 C 实现转发义务；旧快照收到未知键会整轮拒绝。
+            query_obligations=task.query_obligations if supports_query_obligations else {},
         ),
         options=COptions(max_rows=task.max_rows, show_trace=task.show_trace),
     )
@@ -333,6 +355,9 @@ def normalize_c_response(
                 "backend_profile_id": backend.profile_id,
                 "profile_config_version": profile.config_version,
                 "model_mode": backend.model_mode,
+                # 旧 C 快照不返回执行路径时按 none 处理，不猜测它走了哪条路。
+                "execution_path": draft.execution_path or "none",
+                "query_obligations_covered": draft.query_obligations_covered,
                 "c_draft": draft.model_dump(mode="json"),
             },
         )

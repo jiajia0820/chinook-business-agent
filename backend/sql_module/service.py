@@ -12,6 +12,8 @@ import re
 import threading
 import time
 import uuid
+import sqlglot
+from sqlglot import exp
 from .catalog import load_catalog
 from .errors import ModuleError
 from .execution import SQLExecutor
@@ -258,6 +260,106 @@ def _candidate_covers_context(generated, context):
     return True
 
 
+# 本轮「问题义务」白名单：只接受这些键，未知键一律拒绝，避免调用方把整份任务塞进来。
+QUERY_OBLIGATION_KEYS = ('unresolved_terms', 'required_grouping', 'requires_month_grouping',
+    'requires_running_total', 'requires_rank', 'requested_limit', 'requires_multiple_rows')
+OBLIGATION_FLAGS = ('requires_month_grouping', 'requires_running_total', 'requires_rank', 'requires_multiple_rows')
+OBLIGATION_GAP_MESSAGE = '模型失败后的受控查询未保留本轮记录的过滤、粒度或输出要求；未用更粗口径代替回答'
+# 月分组的三种常见写法：strftime 取月、substr 取 YYYY-MM、以 month 命名的分组键。
+MONTH_GROUP_TEXT = re.compile(r"strftime\([^)]*%m|substr\([^)]*,\s*1\s*,\s*7\s*\)|\bmonth\b", re.I)
+
+
+def validate_query_obligations(obligations):
+    """义务对象是白名单快照：缺省允许，出现未知键或错误类型立即拒绝。"""
+    if obligations is None:
+        return
+    obj(obligations, QUERY_OBLIGATION_KEYS, label='query_obligations')
+    for key in ('unresolved_terms', 'required_grouping'):
+        if key in obligations:
+            strings(obligations[key], 'query_obligations.' + key, nonempty=False)
+    for key in OBLIGATION_FLAGS:
+        if key in obligations and type(obligations[key]) is not bool:
+            raise request_error('query_obligations.%s 必须为 boolean' % key)
+    if obligations.get('requested_limit') is not None:
+        integer(obligations['requested_limit'], 1, 200, 'query_obligations.requested_limit')
+
+
+def _month_group_texts(select):
+    """GROUP BY 键文本，含别名或序号指向的投影表达式。"""
+    group = select.args.get('group')
+    if not group:
+        return []
+    by_alias, by_position = {}, {}
+    for position, projection in enumerate(select.expressions, 1):
+        by_position[str(position)] = projection
+        alias = projection.alias_or_name
+        if alias:
+            by_alias[alias.casefold()] = projection
+    texts = []
+    for expression in group.expressions:
+        raw = expression.sql(dialect='sqlite')
+        texts.append(raw)
+        referenced = by_alias.get(raw.strip().strip('"\'`[]').casefold()) or by_position.get(raw.strip())
+        if referenced is not None:
+            texts.append(referenced.sql(dialect='sqlite'))
+    return texts
+
+
+def _obligation_structure(parsed):
+    """从已解析 SQL 读出义务检查需要的结构事实；读不到就当作不存在。"""
+    selects = list(parsed.find_all(exp.Select))
+    limit_node = parsed.args.get('limit') or parsed.find(exp.Limit)
+    limit_expression = getattr(limit_node, 'expression', None)
+    limit = int(limit_expression.this) if isinstance(limit_expression, exp.Literal) and limit_expression.is_int else None
+    return {
+        'group': any(node.args.get('group') for node in selects),
+        'order': any(node.args.get('order') for node in selects),
+        'month': any(MONTH_GROUP_TEXT.search(text) for node in selects for text in _month_group_texts(node)),
+        'limit': limit,
+        'window': parsed.find(exp.Window) is not None,
+        'union': isinstance(parsed, exp.SetOperation) or parsed.find(exp.SetOperation) is not None,
+    }
+
+
+def covers_query_obligations(candidate, obligations):
+    """候选 SQL 是否保留本轮记录的过滤、粒度与输出要求。
+
+    没有记录义务时视为已覆盖，旧调用方与未走义务解析的路径行为不变；一旦记录了
+    未消费词、月分组、累计、排名条数或多行要求，就用 SQLGlot 检查结构是否真的存在。
+    解析失败或结构缺失一律判未覆盖：不确定时拒绝，而不是放宽校验。
+    """
+    obligations = obligations if isinstance(obligations, dict) else {}
+    if set(obligations) - set(QUERY_OBLIGATION_KEYS):
+        return False
+    if obligations.get('unresolved_terms'):
+        return False
+    requested_limit = obligations.get('requested_limit')
+    if requested_limit is None and not any(obligations.get(key) for key in OBLIGATION_FLAGS):
+        return True
+    sql = candidate.get('sql') if isinstance(candidate, dict) else None
+    if not isinstance(sql, str) or not sql.strip():
+        return False
+    try:
+        parsed = sqlglot.parse_one(sql, read='sqlite')
+        if parsed is None:
+            return False
+        structure = _obligation_structure(parsed)
+    except Exception:
+        return False
+    if obligations.get('requires_month_grouping') and not structure['month']:
+        return False
+    if obligations.get('requires_running_total') and not structure['window']:
+        return False
+    if obligations.get('requires_rank') and not (structure['order'] and structure['limit'] is not None):
+        return False
+    if requested_limit is not None and structure['limit'] != requested_limit:
+        return False
+    if obligations.get('requires_multiple_rows') and not (structure['group'] or structure['union']
+            or structure['window'] or (structure['limit'] is not None and structure['limit'] > 1)):
+        return False
+    return True
+
+
 def _controlled_query(context, metric_ids, candidate_sql=None, max_rows=50, top_n=None):
     """按已登记口径生成确定性只读查询；无法覆盖时返回 None，不猜测业务语义。"""
     slots=context.get('resolved_slots',{})
@@ -390,7 +492,7 @@ def validate_request(request, profile):
     if type(options.get('show_trace',True)) is not bool:
         raise request_error('show_trace 必须为 boolean')
     context=request.get('context',{})
-    obj(context,['resolved_slots','metric_ids','entities','business_context','reference_time'],label='NL context')
+    obj(context,['resolved_slots','metric_ids','entities','business_context','reference_time','query_obligations'],label='NL context')
     slots=context.get('resolved_slots',{})
     if not isinstance(slots,dict) or set(slots)-set(profile.data.get('slots',{})):
         raise request_error('resolved_slots 类型错误或包含未声明槽位')
@@ -430,6 +532,7 @@ def validate_request(request, profile):
             if parsed.tzinfo is None: raise ValueError()
         except ValueError:
             raise request_error('reference_time 必须为含时区的 ISO 8601 时间') from None
+    validate_query_obligations(context.get('query_obligations'))
     return context,options
 
 
@@ -619,7 +722,8 @@ class NLQueryService:
         """
         data = request if isinstance(request, dict) else {}
         response = dict(request_id=data.get('request_id'), profile_id=data.get('profile_id'), status='error',
-            sql_results=[], query_artifacts=[], metric_definitions=[], limitations=[], clarification=None, trace=[], error=None)
+            sql_results=[], query_artifacts=[], metric_definitions=[], limitations=[], clarification=None, trace=[],
+            execution_path='none', query_obligations_covered=None, error=None)
         try:
             obj(request, ['request_id', 'profile_id', 'question', 'context', 'options'], ['request_id', 'profile_id', 'question'], 'NL 请求')
             profile, _ = self.registry.resolve(data['profile_id'], access)
@@ -663,6 +767,9 @@ class NLQueryService:
             result['rows'] = [{mapping.get(name, name): value for name, value in row.items()} for row in result['rows']]
             response['status'] = 'answered'
             response['limitations'] = [*snapshot['limitations'], '本轮使用已注册指标的受控 SQL 快路径；未调用模型，不是模型失败降级。']
+            # 快路径本身就是受控已登记查询；这里只标注执行路径，不代表模型失败降级。
+            response['execution_path'] = 'controlled_registered_query'
+            response['query_obligations_covered'] = covers_query_obligations(generated, context.get('query_obligations'))
             response['metric_definitions'] = [{key: metric.get(key) for key in ('metric_id', 'name', 'definition', 'unit', 'source_refs')} for metric in selected]
             response['query_artifacts'] = [dict(query_id=query_id, sql=generated['sql'], params=generated['params'],
                 selected_tables=result['source']['tables'], schema_version=snapshot['schema_version'],
@@ -684,12 +791,14 @@ class NLQueryService:
         data=request if isinstance(request,dict) else {}
         response=dict(request_id=data.get('request_id'),profile_id=data.get('profile_id'),status='error',
                       sql_results=[],query_artifacts=[],metric_definitions=[],limitations=[],
-                      clarification=None,trace=[],error=None)
+                      clarification=None,trace=[],execution_path='none',query_obligations_covered=None,error=None)
         deadline=time.monotonic()+ANSWER_BUDGET_SECONDS
         try:
             obj(request,['request_id','profile_id','question','context','options'],['request_id','profile_id','question'],'NL 请求')
             profile,_=self.registry.resolve(data['profile_id'],access)
             context,options=validate_request(request,profile)
+            # 本轮记录的问题义务（过滤/粒度/排名/输出结构）；旧调用方缺失时为空字典。
+            obligations=context.get('query_obligations') or {}
             if 'query_intent' in profile.data.get('slots', {}) and 'query_intent' not in context.get('resolved_slots', {}):
                 context = {**context, 'resolved_slots': {**context.get('resolved_slots', {}),
                     'query_intent': parse_query_intent(data['question'], context.get('metric_ids', []))}}
@@ -731,6 +840,8 @@ class NLQueryService:
                     return response
                 response["status"] = "answered"
                 response["limitations"].append("文档依赖业务步骤使用服务端受控业务查询；本步骤没有调用大模型，不是模型失败降级。")
+                response["execution_path"] = "controlled_registered_query"
+                response["query_obligations_covered"] = covers_query_obligations(generated, obligations)
                 response["metric_definitions"] = [{k: m.get(k) for k in ("metric_id", "name", "definition", "unit", "source_refs")} for m in selected]
                 response["query_artifacts"] = [dict(query_id=query_id, sql=generated["sql"], params=generated["params"], selected_tables=result["source"]["tables"], schema_version=snapshot["schema_version"], metric_refs=[m["metric_id"] + "@" + catalog["version"] for m in selected], attempt_count=1)]
                 if options.get("show_trace", True):
@@ -820,6 +931,13 @@ class NLQueryService:
                 repaired=True
                 response['limitations'].append('模型候选遗漏已确认筛选条件；已使用受控查询计划补齐后执行。')
 
+            # 义务覆盖检查放在全部受控替换之后、执行之前：模型失败后的降级一旦丢掉
+            # 过滤、粒度或输出结构就明确拒答，不用更粗口径静默代替本轮问题。
+            response['execution_path']='controlled_fallback' if model_failure is not None else 'model_candidate'
+            response['query_obligations_covered']=covers_query_obligations(generated,obligations)
+            if model_failure is not None and not response['query_obligations_covered']:
+                raise ModuleError('UNSUPPORTED_CAPABILITY',OBLIGATION_GAP_MESSAGE)
+
             def run_candidate(candidate):
                 candidate_id='sql-'+str(uuid.uuid4())
                 return candidate_id, self.executor.execute_sql(dict(query_id=candidate_id,profile_id=profile.id,
@@ -842,6 +960,10 @@ class NLQueryService:
                     result['columns']=[mapping.get(name,name) for name in result['columns']]
                     result['rows']=[{mapping.get(key,key):value for key,value in row.items()} for row in result['rows']]
                     response['limitations'].append('结果列名已按已登记指标的输出契约归一化。')
+            # 契约修复可能又替换了一次受控计划；按最终执行的候选重算覆盖结论。
+            response['query_obligations_covered']=covers_query_obligations(generated,obligations)
+            if model_failure is not None and not response['query_obligations_covered']:
+                raise ModuleError('UNSUPPORTED_CAPABILITY',OBLIGATION_GAP_MESSAGE)
             response['sql_results']=[result]
             if options.get('show_trace',True):
                 response['trace']=[dict(step=1,tool='sql.generate',status='success',source_refs=[],

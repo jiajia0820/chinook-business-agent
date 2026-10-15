@@ -42,6 +42,21 @@ class BusinessContextItem(InternalModel):
     text: Question
 
 
+# 传给 C 的「问题义务」白名单。BusinessTask 里的义务对象还包含 consumed_entities 等
+# 仅供 B 侧使用的字段，这里只放 C 覆盖检查需要的键，不把整份任务序列化给 C。
+SQL_OBLIGATION_KEYS = frozenset({
+    "unresolved_terms",
+    "required_grouping",
+    "requires_month_grouping",
+    "requires_running_total",
+    "requires_rank",
+    "requested_limit",
+    "requires_multiple_rows",
+})
+SQL_OBLIGATION_LISTS = ("unresolved_terms", "required_grouping")
+SQL_OBLIGATION_FLAGS = ("requires_month_grouping", "requires_running_total", "requires_rank", "requires_multiple_rows")
+
+
 class SqlTaskRequest(InternalModel):
     query_id: NonEmptyString  # Logical B task ID; C generates its own SQL query IDs.
     profile_id: NonEmptyString
@@ -55,6 +70,8 @@ class SqlTaskRequest(InternalModel):
     reference_time: str | None = None
     max_rows: int = Field(default=50, ge=1, le=200)
     show_trace: bool = True
+    # 本轮不可丢失的过滤/粒度/排名/输出要求；C 用它判断模型候选或受控降级是否丢条件。
+    query_obligations: dict[str, JsonValue] = Field(default_factory=dict)
     # 上限必须覆盖 C 的整轮预算（模型重试 + 受控降级），否则请求会在 C 降级前被切断，
     # 慢模型只能返回超时错误，而不是退回确定性查询计划。
     timeout_ms: int = Field(default=180000, ge=1, le=180000)
@@ -67,6 +84,19 @@ class SqlTaskRequest(InternalModel):
         refs = [item.ref_id for item in self.business_context]
         if len(refs) != len(set(refs)):
             raise ValueError("business_context references must be unique")
+        if not set(self.query_obligations) <= SQL_OBLIGATION_KEYS:
+            raise ValueError("query_obligations contains keys outside the C contract")
+        for key in SQL_OBLIGATION_LISTS:
+            value = self.query_obligations.get(key)
+            if value is not None and (not isinstance(value, list) or any(type(item) is not str or not item.strip() for item in value)):
+                raise ValueError(f"query_obligations.{key} must be a list of non-empty strings")
+        for key in SQL_OBLIGATION_FLAGS:
+            value = self.query_obligations.get(key)
+            if value is not None and type(value) is not bool:
+                raise ValueError(f"query_obligations.{key} must be a boolean")
+        limit = self.query_obligations.get("requested_limit")
+        if limit is not None and (type(limit) is not int or not 1 <= limit <= 200):
+            raise ValueError("query_obligations.requested_limit must be an integer between 1 and 200")
         return self
 
 

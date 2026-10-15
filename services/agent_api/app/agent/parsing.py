@@ -171,15 +171,20 @@ def _time_range(slots):
     return TimeRange(start=start.isoformat(), end=end.isoformat(), end_inclusive=False, label=label)
 
 
-def _unparsed_query_text(question, profile):
-    """Conservative finite grammar: never silently drop an unknown SQL filter."""
+def _unparsed_query_text(question, profile, *, separator=""):
+    """Conservative finite grammar: never silently drop an unknown SQL filter.
+
+    separator 记录已登记词原本的位置：删除处留下分隔符，调用方就能把残渣切成
+    一段段"未登记文本"分别判断，而不是拿到一整块拼接后无法解读的字符串。
+    默认空串保持既有行为（只用于判断有没有残渣）。
+    """
     residue = question
     terms = [term for terms in profile.question_rules.metric_terms.values() for term in terms]
     terms += [term for terms in profile.question_rules.intent_terms.values() for term in terms]
     terms += [term for alias in profile.aliases for term in (alias.alias, alias.label)]
     terms += profile.question_rules.ambiguous_scope_terms + profile.question_rules.query_fillers
     for term in sorted(set(terms), key=len, reverse=True):
-        residue = re.sub(re.escape(term), "", residue, flags=re.I)
+        residue = re.sub(re.escape(term), lambda _match: separator, residue, flags=re.I)
     residue = re.sub(r"(?<!\d)\d{4}\s*年?|第?[一二三四1-4]季度|Q[1-4]|(?<!\d)(1[0-2]|[1-9])\s*月|[\s，,。:：?？!！、]+", "", residue, flags=re.I)
     return residue
 
