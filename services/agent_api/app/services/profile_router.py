@@ -9,6 +9,18 @@ from ..profiles import ProfileRegistry
 from .ask_service import AskService
 
 
+def build_profile_catalog(profiles: ProfileRegistry, *, status: str) -> list[dict[str, object]]:
+    return [
+        {
+            "profile_id": profile.profile_id,
+            "display_name": profile.sql_backend.display_name if profile.sql_backend else profile.profile_id,
+            "capabilities": list(profile.capabilities),
+            "status": status,
+        }
+        for profile in (profiles.get(profile_id) for profile_id in profiles.ids())
+    ]
+
+
 class ProfileRouterAskService:
     """Route one request to exactly one profile-owned graph service."""
 

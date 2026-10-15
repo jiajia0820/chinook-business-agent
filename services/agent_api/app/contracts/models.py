@@ -7,7 +7,7 @@ of hard-coding Chinook-specific entities, metrics, or document metadata.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -88,6 +88,13 @@ class AskRequest(ContractModel):
     session_id: NonEmptyString | None = None
     user_role: NonEmptyString | None = None
     options: AskOptions = Field(default_factory=AskOptions)
+
+
+class ProfileOption(ContractModel):
+    profile_id: NonEmptyString
+    display_name: NonEmptyString
+    capabilities: list[NonEmptyString] = Field(default_factory=list)
+    status: Literal["ready", "unavailable"]
 
 
 class Intent(ContractModel):

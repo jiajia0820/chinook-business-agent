@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 
 from .api.routes.ask import router as ask_router
 from .api.routes.health import router as health_router
+from .api.routes.profiles import router as profiles_router
 from .contracts import ApiError
 from .core.config import Settings
 from .core.errors import ApplicationError
@@ -115,6 +116,7 @@ def create_app(
     application.state.backend_state = "injected" if ask_service is not None else "cold"
     application.state.backend_owner = None
     application.state.backend_close_complete = None
+    application.state.profile_catalog = []
     application.state.lifespan_active = False
     application.state.settings = resolved_settings
 
@@ -211,6 +213,7 @@ def create_app(
     )
 
     application.include_router(health_router)
+    application.include_router(profiles_router)
     application.include_router(ask_router)
     return application
 

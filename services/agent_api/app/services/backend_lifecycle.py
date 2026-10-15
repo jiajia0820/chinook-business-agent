@@ -10,7 +10,7 @@ from ..core.config import Settings
 from ..core.errors import ApplicationError
 from ..integrations.sql_d12 import create_canonical_knowledge_integration
 from ..integrations.c_offline import create_canonical_sql_integration
-from .profile_router import CompositeBackend
+from .profile_router import CompositeBackend, build_profile_catalog
 from .ask_service import AskService, UnavailableAskService
 
 
@@ -108,6 +108,7 @@ class BackendLifecycle:
             self.service = ManagedAskService(delegate, self.settings.max_inflight_requests)
             self.app.state.ask_service = self.service
             self.app.state.backend_owner = self
+            self.app.state.profile_catalog = build_profile_catalog(self.integration.profiles, status="ready")
             self.app.state.backend_state = "ready"
             logger.info("offline_backend_ready mode=offline_sql_d12")
         except asyncio.CancelledError:
@@ -119,6 +120,12 @@ class BackendLifecycle:
             if isinstance(candidate, str) and candidate in STARTUP_REASONS:
                 reason = candidate
             self.app.state.ask_service = unavailable(reason)
+            try:
+                from ..profiles import ProfileRegistry
+                selected = ProfileRegistry.defaults().select(self.settings.enabled_profiles)
+                self.app.state.profile_catalog = build_profile_catalog(selected, status="unavailable")
+            except Exception:
+                self.app.state.profile_catalog = []
             self.app.state.backend_state = "failed"
             logger.warning("offline_backend_initialization_failed reason=%s", reason)
             await self._close_integration(self.settings.shutdown_grace_seconds)
