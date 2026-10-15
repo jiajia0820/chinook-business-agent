@@ -1,5 +1,6 @@
 import type { ApiError, AskRequest, AskResponse } from '../contracts';
 import { isApiError, isAskRequest, isAskResponse } from '../contracts/validate';
+import type { DatasetProfile } from '../features/ask/profiles';
 
 export type RequestFailure = 'invalid_request' | 'network' | 'timeout' | 'cancelled' | 'invalid_response';
 export type AskClientResult =
@@ -10,6 +11,7 @@ export type AskClientResult =
 export interface AskCallOptions { signal?: AbortSignal; requestId?: string }
 export interface AskClient {
   ask(payload: AskRequest, options?: AskCallOptions): Promise<AskClientResult>;
+  listProfiles?: () => Promise<DatasetProfile[]>;
 }
 export interface AskClientSettings { fetch?: typeof fetch; timeoutMs?: number }
 
@@ -43,6 +45,28 @@ export function createAskClient(settings: AskClientSettings = {}): AskClient {
   }
 
   return {
+    async listProfiles() {
+      const response = await fetcher('/api/v1/profiles', {
+        method: 'GET',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        redirect: 'error',
+      });
+      if (!response.ok) throw new Error('profile catalog unavailable');
+      const body: unknown = await response.json();
+      if (!Array.isArray(body) || body.some((item) => {
+        if (!item || typeof item !== 'object') return true;
+        const value = item as Record<string, unknown>;
+        return typeof value.profile_id !== 'string'
+          || typeof value.display_name !== 'string'
+          || !Array.isArray(value.capabilities)
+          || value.capabilities.some((capability) => typeof capability !== 'string')
+          || (value.status !== 'ready' && value.status !== 'unavailable');
+      })) {
+        throw new Error('invalid profile catalog');
+      }
+      return body as DatasetProfile[];
+    },
     async ask(payload, options = {}) {
       const requestId = options.requestId ?? `req-web-${crypto.randomUUID()}`;
       if (!/^[A-Za-z0-9._:-]{1,128}$/.test(requestId) || !isAskRequest(payload)) {

@@ -3,7 +3,7 @@ import { computed, ref } from 'vue';
 import type { AskClient } from './api/client';
 import AskResult from './components/AskResult.vue';
 import EvidencePanel from './components/evidence/EvidencePanel.vue';
-import { CLARIFICATION_EXAMPLE, EXAMPLES, PROFILE_ID, useAskWorkspace } from './features/ask/use-ask-workspace';
+import { CLARIFICATION_EXAMPLE, EXAMPLES, useAskWorkspace } from './features/ask/use-ask-workspace';
 import { EVALUATION_QUESTION_GROUPS } from './features/ask/evaluation-questions';
 
 // Explicit test dependency injection; main.ts always uses the real default client.
@@ -13,6 +13,7 @@ const {
   validationMessage, charCount, canSubmit, canRetry, canResetTask, canClarify,
   submit, fillExample, submitClarification, retry, resetTask, stopWaiting, newSession,
   history, sessionId,
+  profiles, selectedProfileId, selectedProfile, profileLoading, profileError, selectProfile,
 } = useAskWorkspace(props.client);
 const evidencePanel = ref<InstanceType<typeof EvidencePanel> | null>(null);
 const sidebarOpen = ref(false);
@@ -53,15 +54,28 @@ function focusEvidence(refId: string) {
         <span class="brand-mark" aria-hidden="true"></span>
         <div class="brand-copy">
           <div class="brand-title-row">
-            <strong>Chinook</strong>
+            <strong>{{ selectedProfile?.display_name?.split(' + ')[0] ?? '数据集' }}</strong>
             <details class="database-config">
               <summary data-testid="database-config-trigger" aria-label="选择数据库配置">
-                <span>Chinook + 非结构化</span><span class="database-config-chevron" aria-hidden="true">▾</span>
+                <span>{{ selectedProfile?.display_name ?? '选择数据集' }}</span><span class="database-config-chevron" aria-hidden="true">▾</span>
               </summary>
               <div class="database-config-menu" role="menu" aria-label="数据库配置选项">
-                <div class="database-config-current" role="menuitem" aria-current="true">Chinook + 非结构化<span>当前</span></div>
-                <button type="button" disabled data-testid="database-option-adventureworks" role="menuitem" title="暂未提供该能力">AdventureWorks<span>暂未开放</span></button>
-                <button type="button" disabled data-testid="database-option-ohr-bench" role="menuitem" title="暂未提供该能力">OHR-Bench<span>暂未开放</span></button>
+                <div v-if="profileLoading" class="database-config-current" role="status">正在读取数据集…</div>
+                <template v-else>
+                  <button
+                    v-for="profile in profiles"
+                    :key="profile.profile_id"
+                    type="button"
+                    :data-testid="`database-option-${profile.profile_id}`"
+                    role="menuitem"
+                    :aria-current="profile.profile_id === selectedProfileId ? 'true' : undefined"
+                    :disabled="profile.status !== 'ready' || busy"
+                    :title="profile.status === 'ready' ? `切换到 ${profile.display_name}` : '当前数据集不可用'"
+                    @click="selectProfile(profile.profile_id)"
+                  >
+                    {{ profile.display_name }}<span>{{ profile.profile_id === selectedProfileId ? '当前' : profile.status === 'ready' ? '可用' : '不可用' }}</span>
+                  </button>
+                </template>
               </div>
             </details>
           </div>
@@ -83,7 +97,7 @@ function focusEvidence(refId: string) {
         <p class="helper">仅存于本标签页内存，刷新或新会话即清空；点击问题可重新填入输入框。</p>
       </section>
       <div v-else class="history-placeholder"><span>会话记录</span><p>你的分析问题将在这里保留。</p></div>
-      <section class="session-bar" aria-label="会话信息"><span class="section-caption">当前数据配置</span><p>{{ PROFILE_ID }}</p><span class="profile-note">SQL 数据库 · 业务知识库</span><p v-if="sessionId" class="session-id" :title="sessionId">会话：{{ sessionId }}</p></section>
+      <section class="session-bar" aria-label="会话信息"><span class="section-caption">当前数据配置</span><p>{{ selectedProfile?.profile_id ?? '未选择' }}</p><span class="profile-note">{{ selectedProfile?.capabilities.includes('rag') ? 'SQL 数据库 · 业务知识库' : 'SQL 数据库' }}</span><p v-if="profileError" class="helper">{{ profileError }}</p><p v-if="sessionId" class="session-id" :title="sessionId">会话：{{ sessionId }}</p></section>
     </aside>
     <section class="workspace-main" data-testid="workspace-main">
       <header class="page-heading">

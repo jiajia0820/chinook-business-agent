@@ -2,6 +2,7 @@ import { computed, getCurrentScope, onScopeDispose, reactive, ref, shallowRef } 
 import type { AskOptions, AskRequest } from '../../contracts';
 import { createAskClient, type AskClient, type AskClientResult } from '../../api/client';
 import { createLatestAskRunner } from '../../api/latest-request';
+import { DEFAULT_DATASET_PROFILES, type DatasetProfile } from './profiles';
 
 export const PROFILE_ID = import.meta.env.VITE_PROFILE_ID?.trim() || 'chinook-music';
 export const RESET_QUESTION = '取消当前问题';
@@ -45,6 +46,10 @@ function textError(text: string): string | null {
 
 export function useAskWorkspace(client: AskClient = createAskClient()) {
   const runner = createLatestAskRunner(client);
+  const profiles = ref<DatasetProfile[]>(structuredClone(DEFAULT_DATASET_PROFILES));
+  const selectedProfileId = ref(PROFILE_ID);
+  const profileLoading = ref(false);
+  const profileError = ref<string | null>(null);
   const question = ref('');
   const options = reactive({ show_trace: true, max_rows: 50, top_k: 5 });
   const sessionId = ref<string | null>(null);
@@ -65,7 +70,8 @@ export function useAskWorkspace(client: AskClient = createAskClient()) {
   });
   const validationMessage = computed(() => textError(question.value) ?? optionsError.value);
   const busy = computed(() => phase.value === 'loading');
-  const canSubmit = computed(() => !disposed.value && !busy.value && validationMessage.value === null);
+  const selectedProfile = computed(() => profiles.value.find((profile) => profile.profile_id === selectedProfileId.value) ?? null);
+  const canSubmit = computed(() => !disposed.value && !busy.value && validationMessage.value === null && selectedProfile.value?.status === 'ready');
   const canResetTask = computed(() => !disposed.value && !busy.value && sessionId.value !== null && optionsError.value === null);
   const canClarify = computed(() => canResetTask.value && result.value?.kind === 'business' && result.value.response.status === 'clarification_required');
   const canRetry = computed(() => {
@@ -77,7 +83,7 @@ export function useAskWorkspace(client: AskClient = createAskClient()) {
 
   function payload(text: string, requestOptions: AskOptions = { ...options }): AskRequest {
     return {
-      question: text.trim(), profile_id: PROFILE_ID,
+      question: text.trim(), profile_id: selectedProfileId.value,
       ...(sessionId.value === null ? {} : { session_id: sessionId.value }),
       options: { ...requestOptions },
     };
@@ -156,6 +162,43 @@ export function useAskWorkspace(client: AskClient = createAskClient()) {
     phase.value = 'idle';
     notice.value = '已清空本地会话入口；下次不带旧会话 ID，这不会删除后端历史。';
   }
+  function selectProfile(profileId: string) {
+    if (disposed.value || busy.value) return false;
+    const profile = profiles.value.find((item) => item.profile_id === profileId);
+    if (!profile || profile.status !== 'ready') return false;
+    if (selectedProfileId.value === profileId) return true;
+    ++revision;
+    runner.cancel();
+    selectedProfileId.value = profileId;
+    sessionId.value = null;
+    question.value = '';
+    result.value = null;
+    lastRequest.value = null;
+    history.value = [];
+    phase.value = 'idle';
+    notice.value = `已切换至 ${profile.display_name}；本地会话已清空。`;
+    return true;
+  }
+  async function loadProfiles() {
+    if (!client.listProfiles) return;
+    profileLoading.value = true;
+    profileError.value = null;
+    try {
+      const loaded = await client.listProfiles();
+      if (loaded.length) {
+        profiles.value = loaded;
+        const current = loaded.find((profile) => profile.profile_id === selectedProfileId.value);
+        if (!current || current.status !== 'ready') {
+          selectedProfileId.value = loaded.find((profile) => profile.status === 'ready')?.profile_id ?? loaded[0]!.profile_id;
+        }
+      }
+    } catch {
+      profileError.value = '数据集列表暂时不可用，当前显示本地默认配置。';
+    } finally {
+      profileLoading.value = false;
+    }
+  }
+  void loadProfiles();
   function dispose() {
     if (disposed.value) return;
     disposed.value = true;
@@ -168,6 +211,8 @@ export function useAskWorkspace(client: AskClient = createAskClient()) {
 
   return {
     question, options, optionsError, validationMessage, busy, canSubmit, canRetry, canResetTask, canClarify,
+    profiles: computed(() => profiles.value), selectedProfileId: computed(() => selectedProfileId.value), selectedProfile,
+    profileLoading: computed(() => profileLoading.value), profileError: computed(() => profileError.value), selectProfile,
     charCount: computed(() => Array.from(question.value.trim()).length),
     sessionId: computed(() => sessionId.value), phase: computed(() => phase.value),
     result: computed(() => result.value), notice: computed(() => notice.value),

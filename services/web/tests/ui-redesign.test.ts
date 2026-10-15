@@ -8,7 +8,10 @@ import { actualResponse } from './evidence-fixtures';
 
 enableAutoUnmount(afterEach);
 
-const app = (ask: AskClient['ask']) => mount(App, { props: { client: { ask } } });
+const app = (ask: AskClient['ask'], profiles = [
+  { profile_id: 'chinook-music', display_name: 'Chinook + 非结构化知识库', capabilities: ['sql', 'rag', 'calculate'], status: 'ready' as const },
+  { profile_id: 'adventureworks', display_name: 'AdventureWorks PostgreSQL', capabilities: ['sql'], status: 'ready' as const },
+]) => mount(App, { props: { client: { ask, listProfiles: async () => profiles } } });
 
 describe('C1 UI shell', () => {
   it('renders the three-column shell while keeping the existing composer testids', () => {
@@ -22,12 +25,31 @@ describe('C1 UI shell', () => {
     expect(wrapper.find('.example-library > .helper').exists()).toBe(false);
   });
 
-  it('shows the default database configuration and disabled alternatives', () => {
+  it('shows both configured datasets as selectable options', async () => {
     const wrapper = app(vi.fn());
+    await flushPromises();
     expect(wrapper.get('[data-testid="database-config-trigger"]').text()).toContain('Chinook + 非结构化');
     expect(wrapper.find('[data-testid="database-config-trigger"] .database-config-chevron').exists()).toBe(true);
-    expect(wrapper.get('[data-testid="database-option-adventureworks"]').attributes('disabled')).toBeDefined();
-    expect(wrapper.get('[data-testid="database-option-ohr-bench"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('[data-testid="database-option-adventureworks"]').attributes('disabled')).toBeUndefined();
+    await wrapper.get('[data-testid="database-option-adventureworks"]').trigger('click');
+    expect(wrapper.get('[data-testid="database-config-trigger"]').text()).toContain('AdventureWorks');
+  });
+
+  it('sends the selected profile and resets the local session when switching datasets', async () => {
+    const response = actualResponse('客户数量是多少？');
+    const ask = vi.fn<AskClient['ask']>().mockResolvedValue({ kind: 'business', httpStatus: 200, requestId: response.request_id, response });
+    const wrapper = app(ask);
+    await wrapper.get('[data-testid="question-input"]').setValue('客户数量是多少？');
+    await wrapper.get('[data-testid="ask-form"]').trigger('submit');
+    await flushPromises();
+    expect(ask.mock.calls[0]?.[0].profile_id).toBe('chinook-music');
+    await wrapper.get('[data-testid="database-config-trigger"]').trigger('click');
+    await wrapper.get('[data-testid="database-option-adventureworks"]').trigger('click');
+    expect(wrapper.find('[data-testid="session-history"]').exists()).toBe(false);
+    expect((wrapper.get('[data-testid="question-input"]').element as HTMLTextAreaElement).value).toBe('');
+    await wrapper.get('[data-testid="question-input"]').setValue('订单数是多少？');
+    await wrapper.get('[data-testid="ask-form"]').trigger('submit');
+    expect(ask.mock.calls[1]?.[0].profile_id).toBe('adventureworks');
   });
 
   it('offers categorized evaluation questions without auto-submitting', async () => {

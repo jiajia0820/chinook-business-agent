@@ -17,6 +17,15 @@ function responding(body: unknown, status = 200, headerId?: string) {
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe('typed API client', () => {
+  it('loads the enabled profile catalog with a relative GET', async () => {
+    const fakeFetch = vi.fn<typeof fetch>(async () => jsonResponse([
+      { profile_id: 'chinook-music', display_name: 'Chinook + 非结构化知识库', capabilities: ['sql', 'rag', 'calculate'], status: 'ready' },
+      { profile_id: 'adventureworks', display_name: 'AdventureWorks PostgreSQL', capabilities: ['sql'], status: 'ready' },
+    ]));
+    const profiles = await createAskClient({ fetch: fakeFetch }).listProfiles?.();
+    expect(profiles).toHaveLength(2);
+    expect(fakeFetch).toHaveBeenCalledWith('/api/v1/profiles', expect.objectContaining({ method: 'GET', credentials: 'same-origin' }));
+  });
   it.each(recordedBusiness.map((record, index) => ({ record, index })))('consumes recorded business body $index without reclassifying its status', async ({ record }) => {
     const body = record.body as AskResponse;
     const client = createAskClient({ fetch: responding(body, 200, record.request_id_header) });
