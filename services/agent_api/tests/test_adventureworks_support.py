@@ -20,9 +20,9 @@ class AdventureWorksSupportTests(unittest.TestCase):
         settings = Settings(enabled_profiles=("adventureworks",))
         self.assertEqual(settings.enabled_profiles, ("adventureworks",))
 
-    def test_settings_rejects_multiple_active_database_profiles(self):
-        with self.assertRaises(ValueError):
-            Settings(enabled_profiles=("chinook-music", "adventureworks"))
+    def test_settings_accepts_multiple_active_database_profiles(self):
+        settings = Settings(enabled_profiles=("chinook-music", "adventureworks"))
+        self.assertEqual(settings.enabled_profiles, ("chinook-music", "adventureworks"))
 
     def test_public_adventureworks_profile_is_sql_only_and_maps_to_backend(self):
         profile = ProfileRegistry.defaults().get("adventureworks")

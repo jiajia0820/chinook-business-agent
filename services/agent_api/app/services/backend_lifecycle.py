@@ -8,12 +8,14 @@ import time
 from ..contracts import ApiError
 from ..core.config import Settings
 from ..core.errors import ApplicationError
-from ..integrations.sql_d12 import OfflineKnowledgeIntegration, create_canonical_knowledge_integration
+from ..integrations.sql_d12 import create_canonical_knowledge_integration
+from ..integrations.c_offline import create_canonical_sql_integration
+from .profile_router import CompositeBackend
 from .ask_service import AskService, UnavailableAskService
 
 
 logger = logging.getLogger("agent_api")
-BackendFactory = Callable[[Settings], Awaitable[OfflineKnowledgeIntegration]]
+BackendFactory = Callable[[Settings], Awaitable[CompositeBackend]]
 STARTUP_REASONS = frozenset({"CONFIG_INVALID", "DEPENDENCY_MISSING", "CONFIG_OR_ARTIFACT_INVALID", "BACKEND_CONFIGURATION_INVALID", "BOOTSTRAP_FAILED", "STARTUP_TIMEOUT"})
 
 
@@ -22,14 +24,33 @@ def unavailable(reason: str, *, retryable: bool = False) -> UnavailableAskServic
         retryable=retryable, details={"reason": reason}))
 
 
-async def create_default_backend(settings: Settings) -> OfflineKnowledgeIntegration:
-    if settings.enabled_profiles == ("adventureworks",):
-        from ..integrations.c_offline import create_canonical_sql_integration
-        return await create_canonical_sql_integration(profile_ids=settings.enabled_profiles,
-            max_workers=settings.sql_workers, timeout_ms=settings.sql_timeout_ms, model_mode=settings.model_mode)
-    return await create_canonical_knowledge_integration(profile_ids=settings.enabled_profiles,
-        max_workers=settings.sql_workers, sql_timeout_ms=settings.sql_timeout_ms,
-        rag_timeout_ms=settings.rag_timeout_ms, model_mode=settings.model_mode)
+async def create_default_backend(settings: Settings) -> CompositeBackend:
+    from ..profiles import ProfileRegistry
+
+    profiles = ProfileRegistry.defaults().select(settings.enabled_profiles)
+    integrations = {}
+    for profile_id in settings.enabled_profiles:
+        selected = profiles.select((profile_id,))
+        if profile_id == "chinook-music":
+            integrations[profile_id] = await create_canonical_knowledge_integration(
+                profiles=selected,
+                profile_ids=(profile_id,),
+                max_workers=settings.sql_workers,
+                sql_timeout_ms=settings.sql_timeout_ms,
+                rag_timeout_ms=settings.rag_timeout_ms,
+                model_mode=settings.model_mode,
+            )
+        elif profile_id == "adventureworks":
+            integrations[profile_id] = await create_canonical_sql_integration(
+                profiles=selected,
+                profile_ids=(profile_id,),
+                max_workers=settings.sql_workers,
+                timeout_ms=settings.sql_timeout_ms,
+                model_mode=settings.model_mode,
+            )
+        else:
+            raise ValueError("unsupported enabled profile")
+    return CompositeBackend(profiles, integrations)
 
 
 class ManagedAskService:

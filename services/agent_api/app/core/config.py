@@ -28,7 +28,7 @@ class Settings:
         supported_profiles = {"chinook-music", "adventureworks"}
         if (type(self.backend_mode) is not str or self.backend_mode not in {"offline_sql_d12", "unavailable"}
                 or self.model_mode not in {"offline", "live"}
-                or len(self.enabled_profiles) != 1
+                or not self.enabled_profiles
                 or any(profile not in supported_profiles for profile in self.enabled_profiles)
                 or len(self.enabled_profiles) != len(set(self.enabled_profiles))):
             raise ValueError("unsupported backend/profile configuration")
