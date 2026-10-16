@@ -61,7 +61,7 @@ uv run uvicorn services.agent_api.app.main:app --host 127.0.0.1 --port 8000
 npm run dev
 ```
 
-浏览器打开 <http://localhost:5173>。启动前确认 `.env` 里 `AGENT_MODEL_MODE=live`，否则服务能起、网页能开，但走的是固定问答替身而不是真实模型。要在页面选择 Chinook 和 AdventureWorks 两个数据集，配置 `AGENT_ENABLED_PROFILES=chinook-music,adventureworks` 并填写 `ADVENTUREWORKS_DATABASE_URL`。
+浏览器打开 <http://localhost:5173>。启动前确认 `.env` 里 `AGENT_RUN_MODE=live`。初赛主链路只初始化 Chinook；页面保留 AdventureWorks 配置入口并显示为“暂不可用”，不会建立 PostgreSQL 连接。`AGENT_RUN_MODE=demo` 仅用于本地离线评测和无密钥演示。
 
 `data/knowledge/D01-D12` 与 `third_party/chinook_c/` 受哈希校验保护，直接编辑会导致后端启动失败，改动方式见环境指南第 5、6 节。
 
@@ -74,9 +74,9 @@ npm run dev
 前置：Python 3.11+（`pyproject.toml` 声明 `requires-python = ">=3.11"`，本机 `.venv` 为 3.12.10）与 [uv](https://docs.astral.sh/uv/)；Node 22 / 24 / 26 任一。
 
 1. 克隆仓库后安装依赖：后端在仓库根目录执行 `uv sync`；前端执行 `cd services/web` 后 `npm ci`。
-2. 复制 `.env.example` 为 `.env` 并填写 `LLM_API_KEY`、`LLM_BASE_URL`、`LLM_MODEL`。没有密钥时先保持 `AGENT_MODEL_MODE=offline`、`AGENT_BACKEND_MODE=offline_sql_d12` 跑离线链路。`.env` 已在 `.gitignore`，只留本地。
+2. 复制 `.env.example` 为 `.env` 并填写 `LLM_API_KEY`、`LLM_BASE_URL`、`LLM_MODEL`。没有密钥时可使用 `AGENT_RUN_MODE=demo` 跑离线链路；正式初赛使用 `AGENT_RUN_MODE=live`。`.env` 已在 `.gitignore`，只留本地。
 3. 按上面"本地启动"一节起两个终端（后端 8000、前端 5173），浏览器打开 http://localhost:5173 即可提问。
-4. 自检：访问 http://127.0.0.1:8000/health 应返回 `"model_mode":"live"`；再问一句"2025 年 Rock 音乐销售额是多少？"，应返回 `status=answered`。
+4. 自检：访问 http://127.0.0.1:8000/health 应返回 `"run_mode":"live"`；再问一句"2025 年 Rock 音乐销售额是多少？"，应返回 `status=answered`。
 
 数据与索引都在库内，不需要额外下载或构建：`data/chinook/Chinook.db`、`data/knowledge/` 的 D01-D12 文档及其 `source-manifest.json` 快照清单。索引本身在启动时由 `services/agent_api/app/knowledge/` 的代码从这些原始文件构建，不是库内的产物。
 

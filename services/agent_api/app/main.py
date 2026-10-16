@@ -31,7 +31,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 def load_runtime_environment() -> None:
     """Load .env before Settings.from_env so the API never silently falls back to offline.
 
-    `uv run` does not reliably export .env here, and a missing AGENT_MODEL_MODE used to
+    `uv run` does not reliably export .env here, and a missing AGENT_RUN_MODE used to
     downgrade the whole product to the fixed-question demo model while the UI still
     presented the result as a real database answer.
     """
@@ -74,8 +74,8 @@ def create_app(
     try:
         resolved_settings = settings if settings is not None else Settings.from_env()
         logger.info(
-            "agent_api 配置 model_mode=%s backend_mode=%s sql_timeout_ms=%s",
-            resolved_settings.model_mode, resolved_settings.backend_mode, resolved_settings.sql_timeout_ms,
+            "agent_api 配置 run_mode=%s backend_mode=%s sql_timeout_ms=%s",
+            resolved_settings.run_mode, resolved_settings.backend_mode, resolved_settings.sql_timeout_ms,
         )
     except ValueError:
         # Keep HTTP liveness and structured 503 available; never log raw env.

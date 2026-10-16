@@ -9,8 +9,10 @@ from ..contracts import ApiError
 from ..core.config import Settings
 from ..core.errors import ApplicationError
 from ..integrations.sql_d12 import create_canonical_knowledge_integration
+# Kept as a patchable compatibility symbol for the preserved AdventureWorks
+# integration tests; the preliminary default factory never calls it.
 from ..integrations.c_offline import create_canonical_sql_integration
-from .profile_router import CompositeBackend, build_profile_catalog
+from .profile_router import CompositeBackend, ProfileRouterAskService, build_profile_catalog
 from .ask_service import AskService, UnavailableAskService
 
 
@@ -28,6 +30,7 @@ async def create_default_backend(settings: Settings) -> CompositeBackend:
     from ..profiles import ProfileRegistry
 
     profiles = ProfileRegistry.defaults().select(settings.runtime_profile_ids)
+    backend_model_mode = "live" if settings.run_mode == "live" else "offline"
     integrations = {}
     try:
         for profile_id in settings.runtime_profile_ids:
@@ -39,7 +42,7 @@ async def create_default_backend(settings: Settings) -> CompositeBackend:
                     max_workers=settings.sql_workers,
                     sql_timeout_ms=settings.sql_timeout_ms,
                     rag_timeout_ms=settings.rag_timeout_ms,
-                    model_mode=settings.model_mode,
+                    model_mode=backend_model_mode,
                 )
             else:
                 raise ValueError("unsupported enabled profile")
@@ -104,16 +107,11 @@ class BackendLifecycle:
             from ..profiles import ProfileRegistry
             all_profiles = ProfileRegistry.defaults()
             active_ids = set(self.integration.profiles.ids())
-            try:
-                delegate = self.integration.create_formal_graph_service(
-                    unavailable_profile_ids=set(all_profiles.ids()) - active_ids,
-                )
-            except TypeError as exc:
-                # Small injected lifecycle fakes from compatibility tests may
-                # still expose the pre-catalog method signature.
-                if "unavailable_profile_ids" not in str(exc):
-                    raise
-                delegate = self.integration.create_formal_graph_service()
+            graph_delegate = self.integration.create_formal_graph_service()
+            delegate = ProfileRouterAskService(
+                {profile_id: graph_delegate for profile_id in active_ids},
+                unavailable_profile_ids=set(all_profiles.ids()) - active_ids,
+            )
             self.service = ManagedAskService(delegate, self.settings.max_inflight_requests)
             self.app.state.ask_service = self.service
             self.app.state.backend_owner = self
