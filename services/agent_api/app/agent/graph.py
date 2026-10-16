@@ -567,50 +567,69 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
             required_functions = ['attainment_rate', 'difference'] if function in {'attainment_rate', 'difference'} else [function]
             registry = FormulaRegistry.from_profile('chinook')
             missing_formula = any(_formula_chunk(chunks, item, registry) is None for item in required_functions)
+        enforce_whole_turn_budget = task.route == 'rag' and not task.needs_calculation
         plans = []
         if outcome.succeeded and (missing_docs or missing_content or missing_formula or missing_secondary or missing_fact_roles):
-            repair_filters = dict(filters)
-            covered_roles = set()
-            repair_query = ' '.join(filters['query_terms']) + ' ' + question
-            if missing_docs:
-                repair_filters['required_sources'] = missing_docs
-                repair_filters['preferred_doc'] = missing_docs[0]
-            elif missing_formula and function in {'difference', 'attainment_rate'}:
-                repair_filters.update(doc_id='D06', fact_role='target_formula', required_sources=['D06'])
-                covered_roles.add('target_formula')
-            elif missing_fact_roles:
-                repair = role_repair_target(missing_fact_roles[0], chunks)
-                if repair:
+            # ``top_k`` is a whole-turn evidence budget. Once the initial
+            # retrieval has consumed it, a repair must not silently append
+            # extra chunks and turn an incomplete answer into ``answered``.
+            remaining_budget = request.options.top_k - len(chunks) if enforce_whole_turn_budget else request.options.top_k
+            if remaining_budget > 0:
+                repair_filters = dict(filters)
+                covered_roles = set()
+                repair_query = ' '.join(filters['query_terms']) + ' ' + question
+                if missing_docs:
+                    repair_filters['required_sources'] = missing_docs
+                    repair_filters['preferred_doc'] = missing_docs[0]
+                elif missing_formula and function in {'difference', 'attainment_rate'}:
+                    repair_filters.update(doc_id='D06', fact_role='target_formula', required_sources=['D06'])
+                    covered_roles.add('target_formula')
+                elif missing_fact_roles:
+                    repair = role_repair_target(missing_fact_roles[0], chunks)
+                    if repair:
+                        hint, patch = repair
+                        # Multi-document roles drop the single-doc pin so every
+                        # required source stays reachable.
+                        if 'doc_id' not in patch:
+                            repair_filters.pop('doc_id', None)
+                        repair_filters.update(patch)
+                        covered_roles.add(missing_fact_roles[0])
+                        if hint:
+                            # Lead with the owed evidence terms; the question alone
+                            # keeps re-ranking the same summary chunk.
+                            repair_query = hint + ' ' + repair_query
+                elif missing_secondary and not missing_content and not missing_formula:
+                    repair_filters.update(required_sources=missing_secondary, preferred_doc=missing_secondary[0])
+                plans.append((repair_query, repair_filters))
+                if len(plans) == 1 and len(missing_docs) > 1:
+                    # When the first bounded retrieval is empty, probe the
+                    # remaining required source once as a separate repair so
+                    # every planned source gets an auditable retrieval event.
+                    for doc in missing_docs[1:]:
+                        if len(plans) >= 2:
+                            break
+                        source_filters = dict(filters, doc_id=doc, required_sources=[doc], preferred_doc=doc)
+                        plans.append((f"{doc} {question}", source_filters))
+                # A single repair slot can be consumed by the formula fetch, so give an
+                # uncovered fact obligation one more targeted pass (whole turn capped at 2).
+                for role in missing_fact_roles:
+                    if len(plans) >= 2 or role in covered_roles:
+                        continue
+                    repair = role_repair_target(role, chunks)
+                    if not repair:
+                        continue
                     hint, patch = repair
-                    # Multi-document roles drop the single-doc pin so every
-                    # required source stays reachable.
+                    plan_filters = dict(filters, **patch)
                     if 'doc_id' not in patch:
-                        repair_filters.pop('doc_id', None)
-                    repair_filters.update(patch)
-                    covered_roles.add(missing_fact_roles[0])
-                    if hint:
-                        # Lead with the owed evidence terms: the question alone
-                        # keeps re-ranking the same summary chunk.
-                        repair_query = hint + ' ' + repair_query
-            elif missing_secondary and not missing_content and not missing_formula:
-                repair_filters.update(required_sources=missing_secondary, preferred_doc=missing_secondary[0])
-            plans.append((repair_query, repair_filters))
-            # A single repair slot can be consumed by the formula fetch, so give an
-            # uncovered fact obligation one more targeted pass (whole turn capped at 2).
-            for role in missing_fact_roles:
-                if len(plans) >= 2 or role in covered_roles:
-                    continue
-                repair = role_repair_target(role, chunks)
-                if not repair:
-                    continue
-                hint, patch = repair
-                plan_filters = dict(filters, **patch)
-                if 'doc_id' not in patch:
-                    plan_filters.pop('doc_id', None)
-                plans.append((hint or question, plan_filters))
+                        plan_filters.pop('doc_id', None)
+                    plans.append((hint or question, plan_filters))
         for repair_query, repair_filters in plans:
+            remaining_budget = request.options.top_k - len(chunks) if enforce_whole_turn_budget else request.options.top_k
+            if remaining_budget <= 0:
+                break
             repair = await runtime.run('rag.retrieve', payload.model_copy(update={
-                'retrieval_id':'retrieval-'+str(uuid.uuid4()), 'query':repair_query, 'filters':repair_filters}), context(current))
+                'retrieval_id':'retrieval-'+str(uuid.uuid4()), 'query':repair_query,
+                'filters':repair_filters, 'top_k': remaining_budget}), context(current))
             recorded.append(_snapshot(repair))
             current['events'] = [*current['events'], *(e.model_dump(mode='json') for e in repair.events)]
             if repair.succeeded:
