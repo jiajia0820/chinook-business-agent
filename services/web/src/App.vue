@@ -116,7 +116,7 @@ function focusEvidence(refId: string) {
           <p v-if="notice" class="notice" role="status" data-testid="workspace-notice">{{ notice }}</p>
           <AskResult v-if="result" :result="result" :request-options="lastRequest?.options ?? null" :choices-disabled="!canClarify" :show-evidence="false" @evidence-focus="focusEvidence" @clarification="submitClarification" />
           <div v-if="canRetry" class="retry-area"><button type="button" class="secondary" data-testid="retry-request" @click="retry">手动重试上次请求</button><p class="helper">将发送上次问题/选项并保留当前会话；后端可能已执行，重试不保证无副作用。</p></div>
-          <div v-if="!busy && !result && !notice" class="empty-state"><span class="agent-glyph" aria-hidden="true"></span><h2>从一个问题，开始分析</h2><p>提问、澄清与证据展示 · 实时 NL2SQL</p><span>还没有本轮结果。输入问题或选择示例后发送；不会自动补数据或答案。</span></div>
+          <div v-if="!busy && !result && !notice" class="empty-state"><span class="agent-glyph prompt-terminal-glyph" data-testid="agent-empty-icon" aria-hidden="true"><svg viewBox="0 0 80 80" fill="none"><rect x="13" y="16" width="54" height="44" rx="10" fill="#17243a" stroke="#6e9cff" stroke-width="1.8"/><path d="m27 32 8 6-8 6M41 45h13" stroke="#7ae2b0" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="24" cy="24" r="2" fill="#efbd72"/><circle cx="31" cy="24" r="2" fill="#6e9cff"/></svg></span><h2>从一个问题，开始分析</h2><p>提问、澄清与证据展示 · 实时 NL2SQL</p><span>还没有本轮结果。输入问题或选择示例后发送；不会自动补数据或答案。</span></div>
         </section>
         <details class="example-library" :open="!lastRequest">
           <summary>试试这些问题 <span>点击填入，按需发送</span></summary>
@@ -168,7 +168,7 @@ function focusEvidence(refId: string) {
           <div class="evidence-toolbar-heading"><h3>Evidence</h3><button type="button" class="evidence-close" aria-label="收起证据区" @click="evidenceOpen = false">关闭</button></div>
           <div class="empty-evidence-tabs" aria-hidden="true"><span>SQL</span><span>Sources</span><span>Metrics</span><span>Trace</span></div>
         </header>
-        <div class="evidence-placeholder-body"><span class="evidence-glyph" aria-hidden="true"></span><h3>{{ busy ? '等待本轮结果' : '每个结论，都有依据' }}</h3><p>提问后，在这里查看 SQL、引用原文、指标口径和执行记录。</p><span>证据随本轮响应更新</span></div>
+        <div class="evidence-placeholder-body"><span class="evidence-glyph prompt-terminal-glyph" data-testid="evidence-empty-icon" aria-hidden="true"><svg viewBox="0 0 80 80" fill="none"><rect x="13" y="16" width="54" height="44" rx="10" fill="#17243a" stroke="#6e9cff" stroke-width="1.8"/><path d="m27 32 8 6-8 6M41 45h13" stroke="#7ae2b0" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="24" cy="24" r="2" fill="#efbd72"/><circle cx="31" cy="24" r="2" fill="#6e9cff"/></svg></span><h3>{{ busy ? '等待本轮结果' : '每个结论，都有依据' }}</h3><p>提问后，在这里查看 SQL、引用原文、指标口径和执行记录。</p><span>证据随本轮响应更新</span></div>
       </div>
     </aside>
     <button v-if="sidebarOpen || evidenceOpen" class="drawer-backdrop" type="button" aria-label="关闭展开区域" @click="sidebarOpen = false; evidenceOpen = false"></button>

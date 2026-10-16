@@ -23,6 +23,9 @@ describe('C1 UI shell', () => {
     expect(wrapper.find('[data-testid="question-input"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="new-session"]').exists()).toBe(true);
     expect(wrapper.find('.example-library > .helper').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="agent-empty-icon"]').classes()).toContain('prompt-terminal-glyph');
+    expect(wrapper.find('[data-testid="agent-empty-icon"] svg').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="evidence-empty-icon"] svg').exists()).toBe(true);
   });
 
   it('shows both configured datasets as selectable options', async () => {

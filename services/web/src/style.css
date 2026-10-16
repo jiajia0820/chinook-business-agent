@@ -160,8 +160,11 @@ p, li, dd, h1, h2, h3, h4, h5 { overflow-wrap: anywhere; }
 .empty-state h2 { margin: 3px 0 0; color: #e7efff; font-size: 20px; }
 .empty-state p { margin: 0; color: var(--muted-strong); }
 .empty-state > span:last-child { max-width: 410px; font-size: 12px; }
-.agent-glyph, .evidence-glyph { width: 40px; height: 40px; display: block; border: 1px solid #496eae; border-radius: 12px; background: radial-gradient(circle at 32% 32%, #9abaff 0 8%, transparent 9%), radial-gradient(circle at 68% 32%, #9abaff 0 8%, transparent 9%), linear-gradient(135deg, rgba(110, 156, 255, .33), rgba(110, 156, 255, .04)); box-shadow: 0 0 28px rgba(110, 156, 255, .14); }
-.agent-glyph::after, .evidence-glyph::after { content: ''; display: block; width: 18px; height: 5px; margin: 24px auto 0; border-bottom: 2px solid #9abaff; border-radius: 50%; }
+.agent-glyph, .evidence-glyph { width: 40px; height: 40px; display: block; }
+.agent-glyph svg { width: 64px; height: 64px; display: block; overflow: visible; }
+.prompt-terminal-glyph { width: 64px; height: 64px; }
+.evidence-glyph { border: 1px solid #496eae; border-radius: 12px; background: radial-gradient(circle at 32% 32%, #9abaff 0 8%, transparent 9%), radial-gradient(circle at 68% 32%, #9abaff 0 8%, transparent 9%), linear-gradient(135deg, rgba(110, 156, 255, .33), rgba(110, 156, 255, .04)); box-shadow: 0 0 28px rgba(110, 156, 255, .14); }
+.evidence-glyph::after { content: ''; display: block; width: 18px; height: 5px; margin: 24px auto 0; border-bottom: 2px solid #9abaff; border-radius: 50%; }
 .composer { position: sticky; bottom: 0; z-index: 4; padding: 16px 30px 20px; border-top: 1px solid var(--line); background: rgba(11, 18, 32, .95); backdrop-filter: blur(12px); }
 .composer form { width: min(100%, 980px); margin: 0 auto; }
 .composer label { display: block; margin-bottom: 7px; color: var(--muted-strong); font-size: 12px; font-weight: 700; }
