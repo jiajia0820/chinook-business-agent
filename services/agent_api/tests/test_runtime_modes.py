@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from services.agent_api.app.core.config import Settings
+from services.agent_api.app.contracts import AskRequest
 from services.agent_api.app.services.backend_lifecycle import BackendLifecycle, create_default_backend
 from services.agent_api.app.profiles import ProfileRegistry
 
@@ -85,6 +86,27 @@ class RuntimeModeTests(unittest.TestCase):
         self.assertEqual(ordered_ids, ["chinook-music", "adventureworks"])
         self.assertEqual(catalog["chinook-music"]["status"], "ready")
         self.assertEqual(catalog["adventureworks"]["status"], "unavailable")
+
+    def test_lifecycle_rejects_adventureworks_requests_without_backend_creation(self):
+        defaults = ProfileRegistry.defaults()
+        integration = _FakeIntegration(defaults.select(("chinook-music",)))
+
+        async def factory(_settings):
+            return integration
+
+        async def run():
+            app = SimpleNamespace(state=SimpleNamespace(backend_close_complete=None))
+            owner = BackendLifecycle(app, Settings(), factory)
+            await owner.start()
+            result = await app.state.ask_service.ask(
+                AskRequest(question="订单数是多少？", profile_id="adventureworks"),
+                request_id="req-aw-unavailable",
+            )
+            await owner.close()
+            return result
+
+        result = asyncio.run(run())
+        self.assertEqual(result.error.code, "PROFILE_UNAVAILABLE")
 
 
 if __name__ == "__main__":
