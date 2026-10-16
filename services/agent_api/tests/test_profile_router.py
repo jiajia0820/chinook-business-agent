@@ -71,6 +71,18 @@ class ProfileRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.route, "unsupported")
         self.assertEqual(result.error.code, "PROFILE_NOT_FOUND")
 
+    async def test_catalog_only_profile_returns_unavailable_without_calling_a_backend(self):
+        router = ProfileRouterAskService(
+            {"chinook-music": FakeAskService("chinook-music")},
+            unavailable_profile_ids={"adventureworks"},
+        )
+
+        result = await router.ask(AskRequest(question="订单数是多少？", profile_id="adventureworks"), request_id="req-aw")
+
+        self.assertEqual(result.status, "error")
+        self.assertEqual(result.error.code, "PROFILE_UNAVAILABLE")
+        self.assertEqual(result.profile_id, "adventureworks")
+
     async def test_composite_backend_closes_all_integrations(self):
         profiles = ProfileRegistry.defaults().select(("chinook-music", "adventureworks"))
         chinook = FakeIntegration("chinook-music", FakeAskService("chinook-music"))

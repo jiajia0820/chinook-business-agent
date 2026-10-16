@@ -187,6 +187,8 @@ export interface components {
         HealthResponse: {
             /** Model Mode */
             model_mode?: string | null;
+            /** Run Mode */
+            run_mode?: string | null;
             /** Service */
             service: string;
             /** Status */

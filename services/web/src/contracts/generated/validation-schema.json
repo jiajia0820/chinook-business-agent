@@ -460,6 +460,17 @@
           ],
           "title": "Model Mode"
         },
+        "run_mode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Run Mode"
+        },
         "service": {
           "title": "Service",
           "type": "string"

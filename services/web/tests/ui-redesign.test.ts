@@ -5,15 +5,20 @@ import App from '../src/App.vue';
 import EvidencePanel from '../src/components/evidence/EvidencePanel.vue';
 import type { AskClient } from '../src/api/client';
 import { actualResponse } from './evidence-fixtures';
+import { DEFAULT_DATASET_PROFILES } from '../src/features/ask/profiles';
 
 enableAutoUnmount(afterEach);
 
 const app = (ask: AskClient['ask'], profiles = [
   { profile_id: 'chinook-music', display_name: 'Chinook + 非结构化知识库', capabilities: ['sql', 'rag', 'calculate'], status: 'ready' as const },
-  { profile_id: 'adventureworks', display_name: 'AdventureWorks PostgreSQL', capabilities: ['sql'], status: 'ready' as const },
+  { profile_id: 'adventureworks', display_name: 'AdventureWorks PostgreSQL', capabilities: ['sql'], status: 'unavailable' as const },
 ]) => mount(App, { props: { client: { ask, listProfiles: async () => profiles } } });
 
 describe('C1 UI shell', () => {
+  it('ships AdventureWorks as unavailable in the local fallback catalog', () => {
+    expect(DEFAULT_DATASET_PROFILES.find((profile) => profile.profile_id === 'adventureworks')?.status).toBe('unavailable');
+  });
+
   it('renders the three-column shell while keeping the existing composer testids', () => {
     const wrapper = app(vi.fn());
     expect(wrapper.get('[data-testid="workspace-shell"]').classes()).toContain('workspace-shell');
@@ -28,17 +33,18 @@ describe('C1 UI shell', () => {
     expect(wrapper.find('[data-testid="evidence-empty-icon"] svg').exists()).toBe(true);
   });
 
-  it('shows both configured datasets as selectable options', async () => {
+  it('shows AdventureWorks in the catalog but keeps it unavailable', async () => {
     const wrapper = app(vi.fn());
     await flushPromises();
     expect(wrapper.get('[data-testid="database-config-trigger"]').text()).toContain('Chinook + 非结构化');
     expect(wrapper.find('[data-testid="database-config-trigger"] .database-config-chevron').exists()).toBe(true);
-    expect(wrapper.get('[data-testid="database-option-adventureworks"]').attributes('disabled')).toBeUndefined();
+    expect(wrapper.get('[data-testid="database-option-adventureworks"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.get('[data-testid="database-option-adventureworks"]').text()).toContain('不可用');
     await wrapper.get('[data-testid="database-option-adventureworks"]').trigger('click');
-    expect(wrapper.get('[data-testid="database-config-trigger"]').text()).toContain('AdventureWorks');
+    expect(wrapper.get('[data-testid="database-config-trigger"]').text()).toContain('Chinook');
   });
 
-  it('sends the selected profile and resets the local session when switching datasets', async () => {
+  it('keeps requests on Chinook when AdventureWorks is unavailable', async () => {
     const response = actualResponse('客户数量是多少？');
     const ask = vi.fn<AskClient['ask']>().mockResolvedValue({ kind: 'business', httpStatus: 200, requestId: response.request_id, response });
     const wrapper = app(ask);
@@ -48,26 +54,20 @@ describe('C1 UI shell', () => {
     expect(ask.mock.calls[0]?.[0].profile_id).toBe('chinook-music');
     await wrapper.get('[data-testid="database-config-trigger"]').trigger('click');
     await wrapper.get('[data-testid="database-option-adventureworks"]').trigger('click');
-    expect(wrapper.find('[data-testid="session-history"]').exists()).toBe(false);
-    expect((wrapper.get('[data-testid="question-input"]').element as HTMLTextAreaElement).value).toBe('');
-    await wrapper.get('[data-testid="question-input"]').setValue('订单数是多少？');
-    await wrapper.get('[data-testid="ask-form"]').trigger('submit');
-    expect(ask.mock.calls[1]?.[0].profile_id).toBe('adventureworks');
+    expect(wrapper.find('[data-testid="session-history"]').exists()).toBe(true);
+    expect(wrapper.get('[data-testid="database-config-trigger"]').text()).toContain('Chinook');
+    expect(ask.mock.calls).toHaveLength(1);
   });
 
-  it('shows AdventureWorks questions and hides document evidence for SQL-only answers', async () => {
-    const response = actualResponse('客户数量是多少？');
-    response.documents = [];
-    const ask = vi.fn<AskClient['ask']>().mockResolvedValue({ kind: 'business', httpStatus: 200, requestId: response.request_id, response });
+  it('does not expose AdventureWorks question examples while it is unavailable', async () => {
+    const ask = vi.fn<AskClient['ask']>();
     const wrapper = app(ask);
     await flushPromises();
     await wrapper.get('[data-testid="database-config-trigger"]').trigger('click');
     await wrapper.get('[data-testid="database-option-adventureworks"]').trigger('click');
-    expect(wrapper.get('[data-testid="example-0"]').text()).toContain('订单');
-    await wrapper.get('[data-testid="question-input"]').setValue('订单数是多少？');
-    await wrapper.get('[data-testid="ask-form"]').trigger('submit');
-    await flushPromises();
-    expect(wrapper.find('[data-testid="evidence-tab-sources"]').exists()).toBe(false);
+    expect(wrapper.get('[data-testid="database-config-trigger"]').text()).toContain('Chinook');
+    expect(wrapper.get('[data-testid="example-0"]').text()).toContain('客户');
+    expect(ask).not.toHaveBeenCalled();
   });
 
   it('offers categorized evaluation questions without auto-submitting', async () => {

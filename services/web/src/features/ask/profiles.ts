@@ -18,7 +18,7 @@ export const DEFAULT_DATASET_PROFILES: DatasetProfile[] = [
     profile_id: 'adventureworks',
     display_name: 'AdventureWorks PostgreSQL',
     capabilities: ['sql'],
-    status: 'ready',
+    status: 'unavailable',
   },
 ];
 
