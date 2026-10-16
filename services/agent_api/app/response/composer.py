@@ -359,7 +359,7 @@ class FormalResponseComposer:
                 result.sql == candidate and result.params == params and result.source.tables == tables
                 for result in sql.sql_results
             )
-        if not fixed_shape:
+        if not fixed_shape or task.slots:
             return self._generic_sql_answer(context)
         if task.needs_calculation or task.time_range or task.slots or context.rag:
             raise EvidenceGap()

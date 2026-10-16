@@ -207,6 +207,8 @@ class OfflineCSqlAdapter:
             outcome.limitations.append("C 配置为 offline 模式；本轮执行已注册受控 SQL，未调用离线演示模型。")
         else:
             outcome.limitations.append("3C-1：C 离线固定三问 + 真实 Chinook 样例库；不是联网模型或完整自由问法能力。")
+        if registered_used and "media_type_sales" in task.metric_ids:
+            outcome.limitations.append("媒体类型金额的日期过滤存在可空订单连接风险；改用已登记指标的明细日期受控查询计划。")
         if any(result.source.tables == ["main.Genre"] for result in outcome.sql_results):
             outcome.limitations.append("固定类型查询列出整个 Genre 表，含影视分类；不是仅音频可销售风格清单。")
         if outcome.status == "success":

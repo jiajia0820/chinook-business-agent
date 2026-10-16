@@ -570,10 +570,9 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
         enforce_whole_turn_budget = task.route == 'rag' and not task.needs_calculation
         plans = []
         if outcome.succeeded and (missing_docs or missing_content or missing_formula or missing_secondary or missing_fact_roles):
-            # ``top_k`` is a whole-turn evidence budget. Once the initial
-            # retrieval has consumed it, a repair must not silently append
-            # extra chunks and turn an incomplete answer into ``answered``.
-            remaining_budget = request.options.top_k - len(chunks) if enforce_whole_turn_budget else request.options.top_k
+            # Repairs may replace weak excerpts within top_k. A question
+            # requiring more primary sources than slots remains incomplete.
+            remaining_budget = 0 if enforce_whole_turn_budget and len(primary) > request.options.top_k else request.options.top_k
             if remaining_budget > 0:
                 repair_filters = dict(filters)
                 covered_roles = set()
@@ -624,7 +623,7 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
                         plan_filters.pop('doc_id', None)
                     plans.append((hint or question, plan_filters))
         for repair_query, repair_filters in plans:
-            remaining_budget = request.options.top_k - len(chunks) if enforce_whole_turn_budget else request.options.top_k
+            remaining_budget = request.options.top_k
             if remaining_budget <= 0:
                 break
             repair = await runtime.run('rag.retrieve', payload.model_copy(update={
@@ -633,13 +632,32 @@ def build_agent_graph(profiles: ProfileRegistry, runtime: ToolRuntime, *, binder
             recorded.append(_snapshot(repair))
             current['events'] = [*current['events'], *(e.model_dump(mode='json') for e in repair.events)]
             if repair.succeeded:
-                chunks.extend(c for c in repair.data.chunks if not only_sources or c.doc_id in source_plan.required_docs)
+                repaired_chunks = [c for c in repair.data.chunks if not only_sources or c.doc_id in source_plan.required_docs]
+                chunks = [*repaired_chunks, *chunks] if enforce_whole_turn_budget else [*chunks, *repaired_chunks]
                 current['evidence_refs'] = list(dict.fromkeys([*current['evidence_refs'], *repair.source_refs]))
             else:
                 current['limitations'] = [*current['limitations'], '补充文档检索未完成；已保留首次检索的有效来源。']
         unique = {}
         for chunk in chunks:
             unique.setdefault(chunk.chunk_id, chunk)
+        if enforce_whole_turn_budget:
+            # Keep at least one excerpt per primary source, then fill with
+            # focused repairs before the original lower-priority passages.
+            selected = {}
+            for doc in primary:
+                chunk = next((c for c in unique.values() if c.doc_id == doc), None)
+                if chunk is not None and len(selected) < request.options.top_k:
+                    selected[chunk.chunk_id] = chunk
+            for chunk in unique.values():
+                if len(selected) >= request.options.top_k:
+                    break
+                selected.setdefault(chunk.chunk_id, chunk)
+            unique = selected
+            # Readiness and the public response must use the retained evidence,
+            # not discarded excerpts from earlier retrieval attempts.
+            for item in recorded:
+                if item.get('data'):
+                    item['data']['chunks'] = [c for c in item['data']['chunks'] if c['chunk_id'] in unique]
         if outcome.succeeded:
             merged = outcome.data.model_copy(update={'chunks': [c.model_copy(update={'retrieval_id':outcome.data.retrieval_id}) for c in unique.values()]})
             current['retrieval_outcome'] = {'status':'success', 'data':merged.model_dump(mode='json'), 'error':None}

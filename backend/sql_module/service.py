@@ -763,7 +763,9 @@ class NLQueryService:
                 response['error'] = result['error']
                 return response
             if use_controlled_plan:
-                contract = _output_contract(metric_ids, context)
+                # Scalar registered metrics such as customer_count have no
+                # grain plan but still expose one stable result column.
+                contract = metric_ids if metric_ids == ['customer_count'] else _output_contract(metric_ids, context)
             else:
                 contract = CATALOG_COLUMNS if metric_ids == ['track_attributes'] else metric_ids
             mapping = _contract_column_mapping(result, contract)
