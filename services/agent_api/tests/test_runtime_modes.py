@@ -39,6 +39,11 @@ class RuntimeModeTests(unittest.TestCase):
         self.assertEqual(settings.enabled_profiles, ("chinook-music",))
         self.assertEqual(settings.runtime_profile_ids, ("chinook-music",))
 
+    def test_from_env_rejects_invalid_legacy_mode(self):
+        with patch.dict(os.environ, {"AGENT_RUN_MODE": "", "AGENT_MODEL_MODE": "mystery"}, clear=False):
+            with self.assertRaises(ValueError):
+                Settings.from_env()
+
     def test_default_backend_never_initializes_adventureworks(self):
         calls: list[str] = []
 

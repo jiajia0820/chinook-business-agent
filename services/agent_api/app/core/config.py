@@ -61,7 +61,7 @@ class Settings:
             raw_run_mode = os.getenv("AGENT_RUN_MODE", "").strip().lower()
             if not raw_run_mode:
                 legacy_mode = os.getenv("AGENT_MODEL_MODE", "live").strip().lower()
-                raw_run_mode = "demo" if legacy_mode == "offline" else "live"
+                raw_run_mode = {"offline": "demo", "live": "live"}.get(legacy_mode, legacy_mode)
             return cls(cors_origins=origins or ("http://localhost:5173",),
                 backend_mode=os.getenv("AGENT_BACKEND_MODE", "offline_sql_d12").strip(),
                 run_mode=raw_run_mode,
