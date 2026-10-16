@@ -27,10 +27,10 @@ def unavailable(reason: str, *, retryable: bool = False) -> UnavailableAskServic
 async def create_default_backend(settings: Settings) -> CompositeBackend:
     from ..profiles import ProfileRegistry
 
-    profiles = ProfileRegistry.defaults().select(settings.enabled_profiles)
+    profiles = ProfileRegistry.defaults().select(settings.runtime_profile_ids)
     integrations = {}
     try:
-        for profile_id in settings.enabled_profiles:
+        for profile_id in settings.runtime_profile_ids:
             selected = profiles.select((profile_id,))
             if profile_id == "chinook-music":
                 integrations[profile_id] = await create_canonical_knowledge_integration(
@@ -39,14 +39,6 @@ async def create_default_backend(settings: Settings) -> CompositeBackend:
                     max_workers=settings.sql_workers,
                     sql_timeout_ms=settings.sql_timeout_ms,
                     rag_timeout_ms=settings.rag_timeout_ms,
-                    model_mode=settings.model_mode,
-                )
-            elif profile_id == "adventureworks":
-                integrations[profile_id] = await create_canonical_sql_integration(
-                    profiles=selected,
-                    profile_ids=(profile_id,),
-                    max_workers=settings.sql_workers,
-                    timeout_ms=settings.sql_timeout_ms,
                     model_mode=settings.model_mode,
                 )
             else:
@@ -105,17 +97,32 @@ class BackendLifecycle:
         try:
             async with asyncio.timeout(self.settings.startup_timeout_seconds):
                 self.integration = await self.factory(self.settings)
-            for profile_id in self.settings.enabled_profiles:
+            for profile_id in self.integration.profiles.ids():
                 profile = self.integration.profiles.get(profile_id)
                 if not profile.supports("sql"):
                     raise ValueError("enabled profile has no SQL capability")
-            delegate = self.integration.create_formal_graph_service()
+            from ..profiles import ProfileRegistry
+            all_profiles = ProfileRegistry.defaults()
+            active_ids = set(self.integration.profiles.ids())
+            try:
+                delegate = self.integration.create_formal_graph_service(
+                    unavailable_profile_ids=set(all_profiles.ids()) - active_ids,
+                )
+            except TypeError as exc:
+                # Small injected lifecycle fakes from compatibility tests may
+                # still expose the pre-catalog method signature.
+                if "unavailable_profile_ids" not in str(exc):
+                    raise
+                delegate = self.integration.create_formal_graph_service()
             self.service = ManagedAskService(delegate, self.settings.max_inflight_requests)
             self.app.state.ask_service = self.service
             self.app.state.backend_owner = self
-            self.app.state.profile_catalog = build_profile_catalog(self.integration.profiles, status="ready")
+            self.app.state.profile_catalog = build_profile_catalog(
+                all_profiles,
+                statuses={profile_id: "ready" if profile_id in active_ids else "unavailable" for profile_id in all_profiles.ids()},
+            )
             self.app.state.backend_state = "ready"
-            logger.info("offline_backend_ready mode=offline_sql_d12")
+            logger.info("preliminary_backend_ready run_mode=%s active_profiles=%s", self.settings.run_mode, ",".join(sorted(active_ids)))
         except asyncio.CancelledError:
             await self.close()
             raise
@@ -127,8 +134,11 @@ class BackendLifecycle:
             self.app.state.ask_service = unavailable(reason)
             try:
                 from ..profiles import ProfileRegistry
-                selected = ProfileRegistry.defaults().select(self.settings.enabled_profiles)
-                self.app.state.profile_catalog = build_profile_catalog(selected, status="unavailable")
+                selected = ProfileRegistry.defaults()
+                self.app.state.profile_catalog = build_profile_catalog(
+                    selected,
+                    statuses={profile_id: "unavailable" for profile_id in selected.ids()},
+                )
             except Exception:
                 self.app.state.profile_catalog = []
             self.app.state.backend_state = "failed"

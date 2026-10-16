@@ -225,7 +225,7 @@ class OfflineSqlIntegration:
         from ..services.graph_ask_service import GraphAskService
         return GraphAskService(self.profiles, self.runtime, execution_mode="offline_sql_integration")
 
-    def create_formal_graph_service(self):
+    def create_formal_graph_service(self, *, unavailable_profile_ids=frozenset()):
         """3C-4 opt-in; does not replace the default API or historical demo."""
         from ..response import FormalResponseComposer
         from ..services.graph_ask_service import GraphAskService

@@ -76,7 +76,7 @@ class AdventureWorksSupportTests(unittest.TestCase):
         import asyncio
         asyncio.run(run())
 
-    def test_multi_profile_factory_closes_started_integration_when_later_profile_fails(self):
+    def test_preliminary_factory_does_not_initialize_adventureworks(self):
         from services.agent_api.app.services.backend_lifecycle import create_default_backend
 
         class FakeIntegration:
@@ -93,14 +93,13 @@ class AdventureWorksSupportTests(unittest.TestCase):
             return started
 
         async def adventureworks_factory(**_kwargs):
-            raise RuntimeError("simulated AdventureWorks startup failure")
+            raise AssertionError("AdventureWorks is catalog-only in the preliminary backend")
 
         import asyncio
         with patch("services.agent_api.app.services.backend_lifecycle.create_canonical_knowledge_integration", chinook_factory), \
              patch("services.agent_api.app.services.backend_lifecycle.create_canonical_sql_integration", adventureworks_factory):
-            with self.assertRaises(RuntimeError):
-                asyncio.run(create_default_backend(Settings(enabled_profiles=("chinook-music", "adventureworks"))))
-        self.assertTrue(started.closed)
+            backend = asyncio.run(create_default_backend(Settings(enabled_profiles=("chinook-music", "adventureworks"))))
+        self.assertEqual(backend.profiles.ids(), ("chinook-music",))
 
     def test_sql_adapter_accepts_adventureworks_profile(self):
         profiles = ProfileRegistry([ProfileRegistry.defaults().get("adventureworks")])

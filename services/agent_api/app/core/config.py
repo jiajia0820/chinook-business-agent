@@ -13,8 +13,10 @@ class Settings:
     app_name: str = "Explainable Data Agent API"
     cors_origins: tuple[str, ...] = ("http://localhost:5173",)
     backend_mode: Literal["offline_sql_d12", "unavailable"] = "offline_sql_d12"
-    # 默认使用真实模型：缺少 LLM 配置时启动即失败并给出提示，而不是静默退回离线替身。
-    model_mode: Literal["offline", "live"] = "live"
+    # ``run_mode`` is the single public source of truth. ``model_mode`` stays
+    # as a compatibility alias for existing direct integration callers.
+    run_mode: Literal["demo", "live"] = "live"
+    model_mode: Literal["offline", "live"] | None = None
     enabled_profiles: tuple[str, ...] = ("chinook-music",)
     sql_workers: int = 2
     max_inflight_requests: int = 8
@@ -26,8 +28,16 @@ class Settings:
     def __post_init__(self):
         # Never include environment values in validation errors or logs.
         supported_profiles = {"chinook-music", "adventureworks"}
+        if self.model_mode is not None:
+            if self.model_mode not in {"offline", "live"}:
+                raise ValueError("unsupported model mode")
+            requested = "demo" if self.model_mode == "offline" else "live"
+            if self.run_mode != "live" and self.run_mode != requested:
+                raise ValueError("run mode and model mode disagree")
+            object.__setattr__(self, "run_mode", requested)
+        object.__setattr__(self, "model_mode", "offline" if self.run_mode == "demo" else "live")
         if (type(self.backend_mode) is not str or self.backend_mode not in {"offline_sql_d12", "unavailable"}
-                or self.model_mode not in {"offline", "live"}
+                or self.run_mode not in {"demo", "live"}
                 or not self.enabled_profiles
                 or any(profile not in supported_profiles for profile in self.enabled_profiles)
                 or len(self.enabled_profiles) != len(set(self.enabled_profiles))):
@@ -48,9 +58,13 @@ class Settings:
             origin.strip() for origin in raw_origins.split(",") if origin.strip()
         )
         try:
+            raw_run_mode = os.getenv("AGENT_RUN_MODE", "").strip().lower()
+            if not raw_run_mode:
+                legacy_mode = os.getenv("AGENT_MODEL_MODE", "live").strip().lower()
+                raw_run_mode = "demo" if legacy_mode == "offline" else "live"
             return cls(cors_origins=origins or ("http://localhost:5173",),
                 backend_mode=os.getenv("AGENT_BACKEND_MODE", "offline_sql_d12").strip(),
-                model_mode=os.getenv("AGENT_MODEL_MODE", "live").strip().lower(),
+                run_mode=raw_run_mode,
                 enabled_profiles=tuple(value.strip() for value in os.getenv("AGENT_ENABLED_PROFILES", "chinook-music").split(",") if value.strip()),
                 sql_workers=int(os.getenv("AGENT_SQL_WORKERS", "2")),
                 max_inflight_requests=int(os.getenv("AGENT_MAX_INFLIGHT_REQUESTS", "8")),
@@ -60,3 +74,8 @@ class Settings:
                 shutdown_grace_seconds=float(os.getenv("AGENT_SHUTDOWN_GRACE_SECONDS", "10")))
         except (ValueError, TypeError):
             raise ValueError("invalid server backend configuration") from None
+
+    @property
+    def runtime_profile_ids(self) -> tuple[str, ...]:
+        """Profiles allowed into the preliminary default backend."""
+        return ("chinook-music",)

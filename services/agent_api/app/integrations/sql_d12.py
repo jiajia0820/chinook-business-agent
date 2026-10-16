@@ -61,7 +61,7 @@ class OfflineKnowledgeIntegration:
         from ..services.graph_ask_service import GraphAskService
         return GraphAskService(self.profiles, self.runtime, evidence_resolver=UnavailableEvidenceResolver(), execution_mode="offline_sql_d12_integration")
 
-    def create_formal_graph_service(self):
+    def create_formal_graph_service(self, *, unavailable_profile_ids=frozenset()):
         """Compose against the same in-memory hash-verified D12 snapshot."""
         from ..evidence.models import UnavailableEvidenceResolver
         from ..response import FormalResponseComposer

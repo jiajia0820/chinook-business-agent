@@ -12,6 +12,7 @@ class HealthResponse(BaseModel):
 
     status: str
     service: str
+    run_mode: str | None = None
     model_mode: str | None = None
 
 
@@ -19,5 +20,6 @@ class HealthResponse(BaseModel):
 async def health(request: Request) -> HealthResponse:
     settings = getattr(request.app.state, "settings", None)
     return HealthResponse(status="ok", service="agent-api",
+                          run_mode=getattr(settings, "run_mode", None),
                           model_mode=getattr(settings, "model_mode", None))
 
