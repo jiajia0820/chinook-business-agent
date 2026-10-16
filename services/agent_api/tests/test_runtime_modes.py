@@ -72,10 +72,12 @@ class RuntimeModeTests(unittest.TestCase):
             owner = BackendLifecycle(app, Settings(), factory)
             await owner.start()
             catalog = {item["profile_id"]: item for item in app.state.profile_catalog}
+            ordered_ids = [item["profile_id"] for item in app.state.profile_catalog]
             await owner.close()
-            return catalog
+            return catalog, ordered_ids
 
-        catalog = asyncio.run(run())
+        catalog, ordered_ids = asyncio.run(run())
+        self.assertEqual(ordered_ids, ["chinook-music", "adventureworks"])
         self.assertEqual(catalog["chinook-music"]["status"], "ready")
         self.assertEqual(catalog["adventureworks"]["status"], "unavailable")
 

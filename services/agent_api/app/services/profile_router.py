@@ -17,6 +17,9 @@ def build_profile_catalog(
 ) -> list[dict[str, object]]:
     if status is None and statuses is None:
         raise ValueError("profile catalog needs a status or status map")
+    profile_ids = list(profiles.ids())
+    if statuses is not None:
+        profile_ids.sort(key=lambda profile_id: (statuses.get(profile_id, "unavailable") != "ready", profile_id))
     return [
         {
             "profile_id": profile.profile_id,
@@ -24,7 +27,7 @@ def build_profile_catalog(
             "capabilities": list(profile.capabilities),
             "status": statuses.get(profile.profile_id, "unavailable") if statuses is not None else status,
         }
-        for profile in (profiles.get(profile_id) for profile_id in profiles.ids())
+        for profile in (profiles.get(profile_id) for profile_id in profile_ids)
     ]
 
 
