@@ -29,27 +29,32 @@ async def create_default_backend(settings: Settings) -> CompositeBackend:
 
     profiles = ProfileRegistry.defaults().select(settings.enabled_profiles)
     integrations = {}
-    for profile_id in settings.enabled_profiles:
-        selected = profiles.select((profile_id,))
-        if profile_id == "chinook-music":
-            integrations[profile_id] = await create_canonical_knowledge_integration(
-                profiles=selected,
-                profile_ids=(profile_id,),
-                max_workers=settings.sql_workers,
-                sql_timeout_ms=settings.sql_timeout_ms,
-                rag_timeout_ms=settings.rag_timeout_ms,
-                model_mode=settings.model_mode,
-            )
-        elif profile_id == "adventureworks":
-            integrations[profile_id] = await create_canonical_sql_integration(
-                profiles=selected,
-                profile_ids=(profile_id,),
-                max_workers=settings.sql_workers,
-                timeout_ms=settings.sql_timeout_ms,
-                model_mode=settings.model_mode,
-            )
-        else:
-            raise ValueError("unsupported enabled profile")
+    try:
+        for profile_id in settings.enabled_profiles:
+            selected = profiles.select((profile_id,))
+            if profile_id == "chinook-music":
+                integrations[profile_id] = await create_canonical_knowledge_integration(
+                    profiles=selected,
+                    profile_ids=(profile_id,),
+                    max_workers=settings.sql_workers,
+                    sql_timeout_ms=settings.sql_timeout_ms,
+                    rag_timeout_ms=settings.rag_timeout_ms,
+                    model_mode=settings.model_mode,
+                )
+            elif profile_id == "adventureworks":
+                integrations[profile_id] = await create_canonical_sql_integration(
+                    profiles=selected,
+                    profile_ids=(profile_id,),
+                    max_workers=settings.sql_workers,
+                    timeout_ms=settings.sql_timeout_ms,
+                    model_mode=settings.model_mode,
+                )
+            else:
+                raise ValueError("unsupported enabled profile")
+    except Exception:
+        for integration in reversed(tuple(integrations.values())):
+            await integration.aclose(grace_seconds=settings.shutdown_grace_seconds)
+        raise
     return CompositeBackend(profiles, integrations)
 
 

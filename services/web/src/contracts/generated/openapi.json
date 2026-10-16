@@ -565,6 +565,44 @@
         "title": "MissingSlot",
         "type": "object"
       },
+      "ProfileOption": {
+        "additionalProperties": false,
+        "properties": {
+          "capabilities": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "title": "Capabilities",
+            "type": "array"
+          },
+          "display_name": {
+            "minLength": 1,
+            "title": "Display Name",
+            "type": "string"
+          },
+          "profile_id": {
+            "minLength": 1,
+            "title": "Profile Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "unavailable"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "profile_id",
+          "display_name",
+          "status"
+        ],
+        "title": "ProfileOption",
+        "type": "object"
+      },
       "Route": {
         "enum": [
           "general",
@@ -851,6 +889,31 @@
         "summary": "Ask",
         "tags": [
           "question-answering"
+        ]
+      }
+    },
+    "/api/v1/profiles": {
+      "get": {
+        "operationId": "profiles_api_v1_profiles_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProfileOption"
+                  },
+                  "title": "Response Profiles Api V1 Profiles Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Profiles",
+        "tags": [
+          "profiles"
         ]
       }
     },

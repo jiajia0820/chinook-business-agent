@@ -76,6 +76,32 @@ class AdventureWorksSupportTests(unittest.TestCase):
         import asyncio
         asyncio.run(run())
 
+    def test_multi_profile_factory_closes_started_integration_when_later_profile_fails(self):
+        from services.agent_api.app.services.backend_lifecycle import create_default_backend
+
+        class FakeIntegration:
+            def __init__(self):
+                self.closed = False
+
+            async def aclose(self, *, grace_seconds=10):
+                self.closed = True
+                return True
+
+        started = FakeIntegration()
+
+        async def chinook_factory(**_kwargs):
+            return started
+
+        async def adventureworks_factory(**_kwargs):
+            raise RuntimeError("simulated AdventureWorks startup failure")
+
+        import asyncio
+        with patch("services.agent_api.app.services.backend_lifecycle.create_canonical_knowledge_integration", chinook_factory), \
+             patch("services.agent_api.app.services.backend_lifecycle.create_canonical_sql_integration", adventureworks_factory):
+            with self.assertRaises(RuntimeError):
+                asyncio.run(create_default_backend(Settings(enabled_profiles=("chinook-music", "adventureworks"))))
+        self.assertTrue(started.closed)
+
     def test_sql_adapter_accepts_adventureworks_profile(self):
         profiles = ProfileRegistry([ProfileRegistry.defaults().get("adventureworks")])
 

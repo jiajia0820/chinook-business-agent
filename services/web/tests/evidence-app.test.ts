@@ -107,6 +107,11 @@ describe('4C evidence integration, using explicit test transport only', () => {
   });
   it('real client/validator accepts actual response evidence through explicitly stubbed fetch', async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      if (_url === '/api/v1/profiles') {
+        return jsonResponse([
+          { profile_id: 'chinook-music', display_name: 'Chinook + 非结构化知识库', capabilities: ['sql', 'rag', 'calculate'], status: 'ready' },
+        ]);
+      }
       const requestId = new Headers(init!.headers).get('X-Request-ID')!;
       const response = actualResponse('默认音频范围是什么？');
       response.request_id = requestId;
@@ -116,8 +121,8 @@ describe('4C evidence integration, using explicit test transport only', () => {
     await send(wrapper, '默认音频范围是什么？');
     expect(wrapper.find('[data-testid="document-evidence"]').exists()).toBe(true);
     expect(wrapper.find('[data-testid="calculation-record"]').exists()).toBe(false);
-    expect(fetcher).toHaveBeenCalledTimes(1);
-    expect(fetcher.mock.calls[0]?.[0]).toBe('/api/v1/ask');
-    expect(JSON.parse(fetcher.mock.calls[0]![1]!.body as string)).toEqual({ question: '默认音频范围是什么？', profile_id: 'chinook-music', options: { show_trace: true, max_rows: 50, top_k: 5 } });
+    const askCalls = fetcher.mock.calls.filter(([url]) => url === '/api/v1/ask');
+    expect(askCalls).toHaveLength(1);
+    expect(JSON.parse(askCalls[0]![1]!.body as string)).toEqual({ question: '默认音频范围是什么？', profile_id: 'chinook-music', options: { show_trace: true, max_rows: 50, top_k: 5 } });
   });
 });

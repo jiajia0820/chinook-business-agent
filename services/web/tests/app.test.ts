@@ -213,6 +213,11 @@ describe('4B page interactions in simulated DOM (not live browser E2E)', () => {
   });
   it('connects the real 4A client/validator to the page using an explicitly stubbed transport', async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async (_url, init) => {
+      if (_url === '/api/v1/profiles') {
+        return jsonResponse([
+          { profile_id: 'chinook-music', display_name: 'Chinook + 非结构化知识库', capabilities: ['sql', 'rag', 'calculate'], status: 'ready' },
+        ]);
+      }
       const payload = JSON.parse(init!.body as string) as AskRequest;
       const requestId = new Headers(init?.headers).get('X-Request-ID')!;
       const result = business('answered', payload.session_id ?? 'transport-test-session');
@@ -221,9 +226,11 @@ describe('4B page interactions in simulated DOM (not live browser E2E)', () => {
     });
     const wrapper = mount(App, { props: { client: createAskClient({ fetch: fetcher }) } });
     await send(wrapper);
-    expect(fetcher.mock.calls[0]?.[0]).toBe('/api/v1/ask');
+    const askCalls = fetcher.mock.calls.filter(([url]) => url === '/api/v1/ask');
+    expect(askCalls).toHaveLength(1);
     expect(wrapper.get(selector('answer')).text()).toContain('59');
     await send(wrapper, EXAMPLES[1]);
-    expect(JSON.parse(fetcher.mock.calls[1]![1]!.body as string)).toMatchObject({ session_id: 'transport-test-session' });
+    const secondAsk = fetcher.mock.calls.filter(([url]) => url === '/api/v1/ask')[1];
+    expect(JSON.parse(secondAsk![1]!.body as string)).toMatchObject({ session_id: 'transport-test-session' });
   });
 });

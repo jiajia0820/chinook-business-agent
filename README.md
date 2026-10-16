@@ -61,7 +61,7 @@ uv run uvicorn services.agent_api.app.main:app --host 127.0.0.1 --port 8000
 npm run dev
 ```
 
-浏览器打开 <http://localhost:5173>。启动前确认 `.env` 里 `AGENT_MODEL_MODE=live`，否则服务能起、网页能开，但走的是固定问答替身而不是真实模型。
+浏览器打开 <http://localhost:5173>。启动前确认 `.env` 里 `AGENT_MODEL_MODE=live`，否则服务能起、网页能开，但走的是固定问答替身而不是真实模型。要在页面选择 Chinook 和 AdventureWorks 两个数据集，配置 `AGENT_ENABLED_PROFILES=chinook-music,adventureworks` 并填写 `ADVENTUREWORKS_DATABASE_URL`。
 
 `data/knowledge/D01-D12` 与 `third_party/chinook_c/` 受哈希校验保护，直接编辑会导致后端启动失败，改动方式见环境指南第 5、6 节。
 
