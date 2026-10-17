@@ -244,5 +244,8 @@ def extract_query_obligations(
         requires_rank=requires_rank,
         requested_limit=limit,
         requires_multiple_rows=requires_multiple_rows,
-        requires_transaction_period=not rule_question,
+        # Customer record counts read the Customer catalog and do not need an
+        # invoice period. Keep the registered global-count path valid after a
+        # clarification turn.
+        requires_transaction_period=(not rule_question and set(metrics) != {"customer_count"}),
     )
