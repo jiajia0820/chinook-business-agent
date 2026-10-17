@@ -24,7 +24,7 @@ export const DEFAULT_DATASET_PROFILES: DatasetProfile[] = [
 
 export const PROFILE_EXAMPLES: Record<string, { examples: string[]; clarification: string }> = {
   'chinook-music': {
-    examples: ['客户数量是多少？', '美国客户数量是多少？', '有哪些音乐类型？', '2025年第三季度音频销售额是多少？', '销售额口径是什么？'],
+    examples: ['2025年第三季度音频销售额、销量、订单数和购买客户数分别是多少？', '美国客户数量是多少？', 'Rock和Rock And Roll在统计上是一个分类吗？', '2025年第三季度音频销售额是多少？', '销售额口径是什么？'],
     clarification: '第三季度 Rock 达标了吗？',
   },
   adventureworks: {

@@ -51,7 +51,7 @@ describe('4B page interactions in simulated DOM (not live browser E2E)', () => {
     await wrapper.get(selector('top-k')).setValue('2');
     await wrapper.get(selector('show-trace')).setValue(false);
     await send(wrapper, ' 客户数量是多少？ ');
-    expect(ask.mock.calls[0]?.[0]).toEqual({ question: EXAMPLES[0], profile_id: 'chinook-music', options: { max_rows: 3, top_k: 2, show_trace: false } });
+    expect(ask.mock.calls[0]?.[0]).toEqual({ question: '客户数量是多少？', profile_id: 'chinook-music', options: { max_rows: 3, top_k: 2, show_trace: false } });
     expect(wrapper.get(selector('answer')).text()).toContain('59');
     expect(wrapper.get(selector('last-request')).text()).toContain('SQL 上限 3');
     await send(wrapper, EXAMPLES[1]);

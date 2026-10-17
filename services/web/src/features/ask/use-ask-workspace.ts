@@ -7,8 +7,11 @@ import { DEFAULT_DATASET_PROFILES, type DatasetProfile } from './profiles';
 export const PROFILE_ID = import.meta.env.VITE_PROFILE_ID?.trim() || 'chinook-music';
 export const RESET_QUESTION = '取消当前问题';
 export const EXAMPLES = [
-  '客户数量是多少？', '美国客户数量是多少？', '有哪些音乐类型？',
-  '2025年第三季度音频销售额是多少？', '销售额口径是什么？',
+  '2025年第三季度音频销售额、销量、订单数和购买客户数分别是多少？',
+  '美国客户数量是多少？',
+  'Rock和Rock And Roll在统计上是一个分类吗？',
+  '2025年第三季度音频销售额是多少？',
+  '销售额口径是什么？',
 ];
 export const CLARIFICATION_EXAMPLE = '第三季度 Rock 达标了吗？';
 

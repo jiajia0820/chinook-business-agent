@@ -66,7 +66,7 @@ describe('C1 UI shell', () => {
     await wrapper.get('[data-testid="database-config-trigger"]').trigger('click');
     await wrapper.get('[data-testid="database-option-adventureworks"]').trigger('click');
     expect(wrapper.get('[data-testid="database-config-trigger"]').text()).toContain('Chinook');
-    expect(wrapper.get('[data-testid="example-0"]').text()).toContain('客户');
+    expect(wrapper.get('[data-testid="example-0"]').text()).toContain('音频销售额');
     expect(ask).not.toHaveBeenCalled();
   });
 
